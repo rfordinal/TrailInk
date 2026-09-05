@@ -661,7 +661,7 @@ gets a name.
 `displayBufferAsync()` plus `waitRefreshComplete()` already exist for the
 non-blocking path (`lib/hal/HalDisplay.cpp:88`), but nothing on the map uses
 them -- the only callers are `EpubReaderActivity` and `GrayscaleFrame`. Tracked
-as T-260 in the parent repo.
+as T-263 in the parent repo.
 
 ## What the ride measured
 

@@ -212,7 +212,7 @@ was at 3,922 mV and 75 % when the device died.
 **The device records `esp_reset_reason()` nowhere that survives a reboot**, so
 the last distinction -- brownout versus the rail going away -- is lost the moment
 it boots again, and a dead device usually gets booted before anyone thinks to
-look. Tracked as T-259 in the parent repo.
+look. Tracked as T-262 in the parent repo.
 
 ## Worked example
 
