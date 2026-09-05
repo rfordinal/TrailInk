@@ -2915,6 +2915,29 @@ void MapActivity::loop() {
     return;
   }
 
+  // The touch mode decides what chrome is on screen -- the hint boxes, or the
+  // padlock that stands in for them when the panel is locked -- and it changes
+  // from under this screen: the home key's tap toggles the lock in main.cpp's
+  // loop(), which cannot reach in here. Every other screen picks that up from
+  // the activityManager.requestUpdate() the toggle fires; this one paints from
+  // its own loop() rather than through Activity::render(RenderLock&&) (see
+  // renderCurrent()'s note), so that request never lands. Measured on hardware
+  // 2026-09-05: the lock took effect and the boxes stayed on the panel.
+  //
+  // Below the popup's early return on purpose. A menu open over the map owns
+  // the panel, and repainting the map under it would strand the popup's pixels;
+  // the check fires on the first frame after it closes instead.
+  if (drawnTouchMode_ != SETTINGS.touchMode) {
+    const bool firstFrame = drawnTouchMode_ == 0xFF;
+    drawnTouchMode_ = SETTINGS.touchMode;
+    if (!firstFrame) {
+      redrawDueMs_ = 0;
+      showBusy();  // the old chrome is still up; say the redraw started
+      renderCurrent();
+      return;
+    }
+  }
+
   freeink::PositionUpdate update;
   if (freeink::BlePositionServer::getInstance().getLatest(update)) {
     // showingPersistedFix_ is in the condition because onEnter() seeds

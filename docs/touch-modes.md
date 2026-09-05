@@ -220,6 +220,27 @@ ANYWHERE draws none either. So OFF draws a padlock where the band would be:
 `buttonHintsRect()` returns that strip while locked, so a caller repainting part
 of the panel still refreshes the padlock.
 
+### The map has to notice the change itself
+
+`toggleTouchLock()` asks for a repaint with `activityManager.requestUpdate()`,
+and that reaches every screen except one. `MapActivity` does not implement
+`Activity::render(RenderLock&&)` at all -- it paints from its own `loop()` on the
+main task (`MapActivity.h`, the note above `renderCurrent()`), so the render
+task's request never lands there.
+
+**Measured on hardware 2026-09-05:** tapping the home key on the map locked the
+panel for real -- touch went dead -- while the hint boxes stayed on screen and no
+padlock appeared. Functional change, no visual one.
+
+So `MapActivity::loop()` compares `drawnTouchMode_` against `SETTINGS.touchMode`
+and redraws when they differ. Two details in that check:
+
+- It sits **below** the option popup's early return. A menu open over the map
+  owns the panel, and repainting the map under it would strand the popup's
+  pixels; the check fires on the first frame after it closes instead.
+- `0xFF` means nothing has been painted yet, so entering the map settles the
+  value without spending a redraw on it.
+
 ## The X4 Pro trap
 
 The X4 Pro has a digitizer plus **two** hardware keys (`Left` on GPIO0, `Right`

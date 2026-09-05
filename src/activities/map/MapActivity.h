@@ -1230,6 +1230,12 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // -- so the transition into or out of "no clock" moves this value and
   // repaints, same as a minute rolling over does.
   int16_t drawnClockMinute_ = -1;
+  // The touch mode the chrome on screen was painted for. This screen has to
+  // poll it because it paints from its own loop() rather than through
+  // Activity::render(RenderLock&&), so the repaint the lock toggle asks for
+  // never reaches it -- see the check in loop(). 0xFF means "nothing painted
+  // yet", so the first frame after entering settles it without a redraw.
+  uint8_t drawnTouchMode_ = 0xFF;
   // Until when Observe's clock shows the exact minute. Set by any button press:
   // a rider who pressed something is looking at the screen, and the saving only
   // exists during the hours nobody is. 0 = never set, i.e. coarse.
