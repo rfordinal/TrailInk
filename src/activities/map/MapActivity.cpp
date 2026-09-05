@@ -549,7 +549,8 @@ constexpr StrId kMapModeIds[kMapRideModeCount] = {StrId::STR_RIDE, StrId::STR_HI
 
 }  // namespace
 
-void MapActivity::drawPositionMarker(int cx, int cy, uint8_t headingStep, MapRideMode mode) {
+void MapActivity::drawPositionMarker(int cx, int cy, uint8_t headingStep, MapRideMode mode,
+                                     MapFixTrust::MarkerStyle style) {
   // Sized for the rung on the panel right now -- MapViewport::ZoomStep::
   // markerScale8. markerRect() reads the same metrics, so the patch box the
   // move path saves always matches what this paints.
@@ -565,6 +566,79 @@ void MapActivity::drawPositionMarker(int cx, int cy, uint8_t headingStep, MapRid
   const int haloRadius = radius + m.haloMargin;
   renderer.fillRoundedRect(cx - haloRadius, cy - haloRadius, haloRadius * 2, haloRadius * 2, haloRadius, Color::White);
   renderer.drawRoundedRect(cx - radius, cy - radius, m.ring, m.ring, m.ringWidth, radius, true);
+
+  if (style.ringBroken) {
+    // Draw the ring whole, then punch it. Cheaper and far shorter than an arc
+    // primitive: GfxRenderer::drawArc only draws axis-aligned quarter circles
+    // (see drawCompassArc() below), so a dashed circle would otherwise need
+    // chord sampling and per-frame trig. The halo under the ring is already
+    // white, so a white square here restores background rather than painting a
+    // hole into the map.
+    //
+    // Positions come off kMarkerHeadingDir, every other entry: eight points on
+    // the ring, no trig, and the same table the heading glyph indexes.
+    const int gap = m.ringGap;
+    for (int i = 0; i < 16; i += 16 / kMarkerRingGapCount) {
+      const HeadingVec& at = kMarkerHeadingDir[i];
+      const int gx = cx + at.dx * radius / 8;
+      const int gy = cy + at.dy * radius / 8;
+      renderer.fillRect(gx - gap / 2, gy - gap / 2, gap, gap, false);  // false is white
+    }
+  }
+
+  if (style.head == MapFixTrust::MarkerStyle::Head::None) {
+    // Nothing believable about the heading, so nothing is drawn about it. The
+    // ring still says where; the centre says nothing.
+    //
+    // Hike would otherwise be the loudest liar here: its glyph falls back to
+    // step 0 when no heading is known, which draws a hand pointing north at a
+    // device that is simply sitting still. The sleep marker has made exactly
+    // this argument since 2026-08-19 -- a heading with nothing behind it is a
+    // claim dressed as an observation (MapMarkerMetrics.h).
+    //
+    // Hike keeps its dot, because the dot is position, not direction. Cycle and
+    // Ride have no separate position glyph, so for them the ring and halo are
+    // the whole marker -- which is correct and is what a bare ring means.
+    if (mode == MapRideMode::Hike) {
+      renderer.fillRoundedRect(cx - m.hikeDot / 2, cy - m.hikeDot / 2, m.hikeDot, m.hikeDot, m.hikeDot / 2,
+                               Color::Black);
+    }
+    return;
+  }
+
+  if (style.head == MapFixTrust::MarkerStyle::Head::Wedge) {
+    // One shape for all three modes, deliberately: a wedge is a statement about
+    // how much is known, and that must not read differently depending on which
+    // ride mode is selected.
+    //
+    // **Plus and minus one heading step, which is 22.5 degrees, not 11.25.**
+    // The render has 16 steps and nothing finer, so a glyph aimed at exactly
+    // one step already claims +-11.25 -- that claim *is* Head::Glyph. A wedge
+    // narrower than one full step would say the same thing in a vaguer-looking
+    // way, which is worse than either.
+    //
+    // Outlined, never filled. The panel is 1-bit with no alpha, so a filled
+    // wedge is a solid black fan over the map exactly where the rider is trying
+    // to read what is around them.
+    const int stepIdx = headingStep < 16 ? headingStep : 0;
+    const HeadingVec& left = kMarkerHeadingDir[(stepIdx + 15) % 16];
+    const HeadingVec& right = kMarkerHeadingDir[(stepIdx + 1) % 16];
+    const int reach = m.hikeHandReach;
+    const int lx = cx + left.dx * reach / 8;
+    const int ly = cy + left.dy * reach / 8;
+    const int rx = cx + right.dx * reach / 8;
+    const int ry = cy + right.dy * reach / 8;
+    // Two edges and the chord that closes them: without the chord the pair
+    // reads as two separate strokes rather than one region.
+    renderer.drawLine(cx, cy, lx, ly, 1, true);
+    renderer.drawLine(cx, cy, rx, ry, 1, true);
+    renderer.drawLine(lx, ly, rx, ry, 1, true);
+    if (mode == MapRideMode::Hike) {
+      renderer.fillRoundedRect(cx - m.hikeDot / 2, cy - m.hikeDot / 2, m.hikeDot, m.hikeDot, m.hikeDot / 2,
+                               Color::Black);
+    }
+    return;
+  }
 
   if (mode == MapRideMode::Hike) {
     // Position over direction, but not direction *nowhere*: a dot for where the
@@ -2579,6 +2653,12 @@ void MapActivity::loop() {
               static_cast<unsigned>(update.seq), static_cast<unsigned>(update.heading),
               static_cast<unsigned>(update.speedKmh), static_cast<unsigned long>(update.utc),
               static_cast<unsigned>(update.accuracyM), altStr);
+      // Resolved before the fix is applied, so the redraw that applyFix()
+      // may trigger already draws this fix's own claim rather than the
+      // previous one's.
+      trust_.pos = MapFixTrust::posTrustFor(update.accuracyM, trustState_);
+      trust_.dir = MapFixTrust::dirTrustFromWireCode(
+          static_cast<uint8_t>((update.flags & MapFixTrust::kDirTrustFlagMask) >> MapFixTrust::kDirTrustFlagShift));
       applyFix(update.lat, update.lon, update.heading, update.seq);
       // Debounced into the same save this fires for zoom/marker/mode --
       // CLAUDE.md rule 8 rules out a per-fix SD write just as much as a
@@ -2611,6 +2691,16 @@ void MapActivity::loop() {
       if (consoleState_.hasAltitude()) {
         lastAltitudeM_ = consoleState_.altitudeM();
         hasAltitudeReading_ = true;
+      }
+      // Same two claims a BLE fix carries, through the same arithmetic, so a
+      // `pos ... acc 40 dirq 2` on the bench produces the exact marker a bad
+      // fix over BLE would -- including the hysteresis latch, which is the part
+      // a hand-drawn mock could not show.
+      if (consoleState_.hasAccuracy()) {
+        trust_.pos = MapFixTrust::posTrustFor(consoleState_.accuracyM(), trustState_);
+      }
+      if (consoleState_.hasDirQuality()) {
+        trust_.dir = MapFixTrust::dirTrustFromWireCode(consoleState_.dirQuality());
       }
       if (moved) {
         // A `pos` goes through the same follow decision as a BLE fix: a metre
@@ -5106,7 +5196,7 @@ void MapActivity::moveMarker(int16_t sx, int16_t sy, uint8_t headingStep) {
 
   // Relative to the frame's heading, not the raw fix: the map is track-up, so
   // "up" on this frame means anchorHeading_ (MapActivity.h).
-  drawPositionMarker(sx, sy, MapFollow::relativeHeadingStep(headingStep, anchorHeading_), mode_);
+  drawPositionMarker(sx, sy, MapFollow::relativeHeadingStep(headingStep, anchorHeading_), mode_, markerStyle());
 
   int newX, newY, newW, newH;
   markerRect(sx, sy, newX, newY, newW, newH);
@@ -5818,7 +5908,7 @@ void MapActivity::renderViewport(int32_t latE7, int32_t lonE7, uint8_t headingSt
   // Relative heading 0: this frame is drawn track-up for this very fix, so the
   // arrow points straight up by construction.
   if (screenMode_ != MapScreenMode::Observe) {
-    drawPositionMarker(markerDrawnX_, markerDrawnY_, 0, mode_);
+    drawPositionMarker(markerDrawnX_, markerDrawnY_, 0, mode_, markerStyle());
   } else {
     // The anchor still gets no marker (see above), but the rider's real last
     // fix does, in the sleep style -- same shape, same "this is where you
