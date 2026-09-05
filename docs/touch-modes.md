@@ -146,8 +146,7 @@ The short version, because it is the thing that keeps getting confused:
   "IO48", physically bottom-left) is one switch with several names. Tap =
   Confirm, hold 600 ms = frontlight. Unchanged by any of this.
 - **The capacitive home key** is a *separate, fifth* input. It is not a GPIO at
-  all: the GT911 reports it in its own status byte, bit 0x10. It was dead on this
-  board until `BoardConfig::LILYGO_T5_PRO_GT911` got `hasHomeKey = true`.
+  all: the GT911 reports it in its own status byte, bit 0x10.
 
 The home key carries the two gestures:
 
@@ -157,11 +156,13 @@ The home key carries the two gestures:
   on a physical hold because gloves defeat the digitizer and the light is what a
   rider reaches for with gloves on.
 
-`[open]` **Whether this panel physically carries the key electrode is not
-known.** The flag is set on the strength of the controller, not the panel: a
-GT911 reports its keys in the same status byte on any board, and reading a key
-that is not there costs nothing because the bit never sets. If this board has no
-electrode, both gestures simply never fire, and that is the measurement.
+**`TouchConfig::hasHomeKey` gates nothing, and this cost a session.** It reads
+like the flag that turns the key on -- it is `false` for this board -- but
+`InputManager::serviceTouch()` reads the status bit unconditionally and the flag
+appears nowhere in `InputManager` at all. So the key has always worked here.
+**Measured on hardware 2026-09-05** by the maintainer: holding it turns the
+frontlight on. A session that read the flag and concluded the key was dead was
+wrong about the board and wrong about which switch the rider was pressing.
 
 Four details worth knowing:
 
@@ -231,11 +232,11 @@ anything about a finger on glass.
 6. **X4 regression.** The bottom band and the side boxes must be pixel-identical
    to before — the X4 arrays and metrics are untouched, so any difference is a
    bug in this change.
-7. **Does the T5 S3 Pro's capacitive home key report at all?** This is the open
-   question, and one flash answers it. A tap should make the boxes vanish, leave
-   a padlock at the bottom, and kill the glass; the next tap should bring the
-   boxes back in the mode that was on before. Nothing happening at all means the
-   panel has no key electrode.
+7. **The T5 S3 Pro's capacitive home key.** A tap should make the boxes vanish,
+   leave a padlock at the bottom, and kill the glass; the next tap should bring
+   the boxes back in the mode that was on before. The key itself is known to
+   report (the hold was measured 2026-09-05), so a tap doing nothing means the
+   tap event or the toggle is wrong, not the hardware.
 8. **A hold on the home key must still toggle the frontlight and never also
    lock.** And the user button (bottom-left, S3) must still be Confirm on a tap
    and the frontlight on a hold — that switch is not part of this change.

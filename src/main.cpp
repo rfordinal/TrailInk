@@ -120,11 +120,13 @@ void toggleFrontlight(const char* source) {
 // it anywhere in the schematic (GPIO48 is EP_CKV, the panel bus clock).
 //
 // **The capacitive home key is a fifth, separate input** and is not one of the
-// four above. It is reported by the GT911 itself (status bit 0x10), not by any
-// GPIO, and it was dead on this board until BoardConfig::LILYGO_T5_PRO_GT911 got
-// hasHomeKey = true. Whether the panel physically carries the key electrode is
-// [open] -- if it does not, the bit never sets and its gestures simply never
-// fire. Its jobs are handled in loop(), not here:
+// four above. It is not a GPIO at all: the GT911 reports it in its own status
+// byte, bit 0x10, and InputManager::serviceTouch() reads that bit on every board
+// **regardless of TouchConfig::hasHomeKey** -- that flag is consulted nowhere in
+// InputManager and gates nothing today, so do not go looking for it as the
+// switch that turns this key on. Confirmed working on this panel 2026-09-05
+// (holding it turns the frontlight on). Its jobs are handled in loop(), not
+// here:
 //
 //   home key tap  -> lock / unlock the touch panel (toggleTouchLock)
 //   home key hold -> toggle the frontlight (toggleFrontlight)
