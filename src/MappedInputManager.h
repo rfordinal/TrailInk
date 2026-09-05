@@ -125,6 +125,13 @@ class MappedInputManager {
   // Hint-box button edges for this frame: pressed and released last one frame,
   // down persists while the finger stays on the box.
   mutable uint32_t hintPumpedSeq = 0xFFFFFFFFu;
+  // When the finger landed on the box currently held. getHeldTime() reports the
+  // live duration from this, because HalGPIO's own answer describes the last
+  // HARDWARE press and nothing else -- with no button down it returns the length
+  // of the previous one, which is how a 600 ms frontlight hold left every later
+  // box tap looking like a half-second hold and firing ButtonNavigator's
+  // continuous step on top of its press step.
+  mutable unsigned long hintDownAtMs = 0;
   mutable uint8_t hintDownButton = kNoHintButton;
   mutable uint8_t hintPressedButton = kNoHintButton;
   mutable uint8_t hintReleasedButton = kNoHintButton;

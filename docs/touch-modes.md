@@ -71,6 +71,22 @@ In BUTTONS mode, `MappedInputManager::pumpHintTouch()` runs once per
 - lifted without producing a tap: the held state is cleared with no release
   event. Without this branch the button would stay held for good.
 
+**A tap on a box must not read as a hold.** `ButtonNavigator::onNext()` is
+`onPress` plus `onContinuous`, and the continuous step fires when the button
+`isPressed` and `getHeldTime()` is over 500 ms. The synthetic press holds
+`isPressed` for as long as the finger is on the box, and `HalGPIO::getHeldTime()`
+knows nothing about that: with no hardware button down,
+`InputManager::getHeldTime()` returns `buttonPressFinish - buttonPressStart`, the
+length of the **last hardware press**. So after a 600 ms frontlight hold on the
+user button, every later box tap looked like a half-second hold and moved the
+Home selection twice -- once from the press step, once from the continuous step.
+It stopped once some shorter hardware press replaced the stale value, which is
+why it read as intermittent.
+
+`MappedInputManager::getHeldTime()` now reports the live duration of the touch
+while a box is held (`hintDownAtMs`). A tap reads as a tap, and holding a box for
+half a second gives the same auto-repeat a hardware key does.
+
 Every hardware read in `mapButton()` goes through `rawButton()`, which ORs the
 synthetic state in before asking `HalGPIO`. That is why nothing downstream
 changed: the front-button remap (`frontButtonBack` and friends), the

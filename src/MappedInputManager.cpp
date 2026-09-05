@@ -199,6 +199,7 @@ void MappedInputManager::pumpHintTouch() const {
     if (hintBoxAt(px, py, hit)) {
       hintDownButton = hit;
       hintPressedButton = hit;
+      hintDownAtMs = millis();
     }
   }
 
@@ -458,6 +459,10 @@ bool MappedInputManager::wasAnyReleased() const { return gpio.wasAnyReleased(); 
 
 unsigned long MappedInputManager::getHeldTime() const {
   ensureHintTouchPumped();
+  // A finger on a hint box is the input being held right now, and it is the only
+  // thing that can answer for itself: HalGPIO tracks hardware presses only.
+  // Without this a tap reads as however long the last hardware press lasted.
+  if (hintDownButton != kNoHintButton) return millis() - hintDownAtMs;
   if (!gpio.wasAnyPressed() && !gpio.wasAnyReleased() && touchHeldOverrideValid &&
       millis() - touchHeldOverrideAt <= TOUCH_HELD_OVERRIDE_WINDOW_MS) {
     return touchHeldOverrideMs;
