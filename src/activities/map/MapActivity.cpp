@@ -5894,6 +5894,84 @@ void MapActivity::pollGnssFix() {
   if (!fix.valid) return;
   if (fix.quality == 0 || fix.quality == 6) return;
 
+  // **Two sanity gates, because quality alone let obvious nonsense through.**
+  //
+  // Measured on the Barcelona walk of 2026-09-05, 7467 fixes: in the second half
+  // the satellite count halved (16.5 to 6.9 on average) and HDOP went from 1.0
+  // to 5.3, and the marker jumped tens of metres. 266 fixes carried HDOP over 5
+  // and 95 over 10, several pinned at the receiver's 25.5 ceiling.
+  //
+  // **Neither gate knows or cares how the rider is travelling.** A first version
+  // capped speed per ride mode -- 30 km/h in Hike and so on -- and the
+  // maintainer killed it on the spot: a hiker gets on a bus, and that same walk
+  // had two metro rides in it. A mode is what the map is drawn for, not a
+  // promise about the next ten minutes, and a filter that assumes otherwise
+  // deletes the rider's position exactly when they are moving fastest.
+  //
+  // So both gates are self-contained. One asks whether the geometry can support
+  // any position at all; the other asks whether the fix agrees with itself.
+  {
+    // Geometry too poor for the position to mean anything, whatever it says.
+    constexpr float kMaxHdop = 20.0f;
+    const bool badGeometry = fix.hdop > kMaxHdop;
+
+    // **The fix against itself.** A fix carries a position and, separately, a
+    // Doppler speed. Where the position jumped implies a speed too, and on a
+    // sound fix the two roughly agree -- on a bus as much as on foot, which is
+    // the whole reason to compare them rather than to a ceiling. Multipath moves
+    // the position without moving the Doppler, so the two diverge and say so.
+    //
+    // Measured against the three worst jumps of that walk: 85 m in 1 s implies
+    // 306 km/h while the receiver reported 76.8, a factor of four -- rejected.
+    // 89 m in 5 s implies 64 against a reported 58, and 79 m in 5 s implies 57
+    // against 69. Those two agree with themselves, so they stand: the rider may
+    // genuinely have been on a bus, and this code cannot know that they were
+    // not. **Rejecting only what contradicts itself is the honest line.**
+    bool inconsistent = false;
+    const uint32_t nowMs = millis();
+    if (haveGnssAcceptedFix_) {
+      const uint32_t dtMs = nowMs - lastAcceptedFixMs_;
+      // Under a second there is no useful denominator, and over a minute the
+      // rider may have been underground -- a metro ride is a gap, not a jump.
+      if (dtMs >= 1000 && dtMs <= 60000) {
+        const double dLat = (fix.latitude - lastAcceptedLat_) * 111320.0;
+        const double dLon = (fix.longitude - lastAcceptedLon_) * 111320.0 * cos(fix.latitude * M_PI / 180.0);
+        const double metres = sqrt(dLat * dLat + dLon * dLon);
+        const double impliedKmh = metres / (dtMs / 1000.0) * 3.6;
+        // Both conditions, not either: a slow rider whose Doppler reads zero
+        // would otherwise trip this on every step. Only a large absolute jump
+        // that also outruns the reported speed several times over is a glitch.
+        inconsistent = impliedKmh > 40.0 && impliedKmh > fix.speedKmh * 3.0 + 20.0;
+        if (inconsistent) {
+          LOG_DBG(kLogTag, "gnss fix disagrees with itself: %.0f m in %lu ms implies %.0f km/h, receiver says %.1f",
+                  metres, static_cast<unsigned long>(dtMs), impliedKmh, static_cast<double>(fix.speedKmh));
+        }
+      }
+    }
+
+    if (badGeometry || inconsistent) {
+      // **Never reject forever.** A receiver settling into a bad state would
+      // otherwise freeze the marker silently, and a position that quietly stops
+      // updating is worse than one that wanders: the rider cannot tell it from a
+      // device that is simply still. After a short run the next fix is taken
+      // whatever it says, so the error stays visible instead of hidden.
+      if (++gnssRejectedRun_ <= kGnssMaxRejectedRun) {
+        LOG_DBG(kLogTag, "gnss fix rejected (%s): hdop %.1f, speed %.1f km/h, sats %u, run %u",
+                badGeometry ? "geometry" : "self-contradiction", static_cast<double>(fix.hdop),
+                static_cast<double>(fix.speedKmh), static_cast<unsigned>(fix.satsUsed),
+                static_cast<unsigned>(gnssRejectedRun_));
+        return;
+      }
+      LOG_INF(kLogTag, "gnss: %u fixes rejected in a row, taking this one anyway",
+              static_cast<unsigned>(gnssRejectedRun_));
+    }
+    gnssRejectedRun_ = 0;
+    lastAcceptedLat_ = fix.latitude;
+    lastAcceptedLon_ = fix.longitude;
+    lastAcceptedFixMs_ = nowMs;
+    haveGnssAcceptedFix_ = true;
+  }
+
   // Which sample this is. The driver's "something changed" answer is poll()'s
   // return value and main.cpp already consumed it, so the change instant stands
   // in for a sequence number: it is constant between changes and moves on every
