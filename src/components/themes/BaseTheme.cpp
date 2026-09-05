@@ -12,6 +12,7 @@
 #include <string>
 
 #include "HintGeometry.h"
+#include "components/icons/touch_lock_icon.h"
 #include "I18n.h"
 #include "RecentBooksStore.h"
 #include "TouchPolicy.h"
@@ -237,6 +238,7 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   if (btn3FontId == 0) btn3FontId = fontId;
   if (btn4FontId == 0) btn4FontId = fontId;
   if (!TouchPolicy::hintsVisible()) {
+    drawTouchLockIndicator(renderer);
     return;
   }
   rememberFrontLabels(btn1, btn2, btn3, btn4);
@@ -271,7 +273,9 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
 }
 
 Rect BaseTheme::buttonHintsRect(const GfxRenderer& renderer) const {
-  if (!TouchPolicy::hintsVisible()) return Rect{0, 0, 0, 0};  // drawButtonHints() draws nothing then
+  // Not empty when the panel is locked: the padlock strip lives in the same band
+  // and a caller repainting around it has to refresh that too.
+  if (!TouchPolicy::hintsVisible() && !TouchPolicy::lockIndicator()) return Rect{0, 0, 0, 0};
   // Full width: the four boxes are one band as far as anything trying to stay out
   // of their way is concerned. Height and offset are drawButtonHints()' own.
   const int height = BaseMetrics::values.buttonHintsHeight;
@@ -392,6 +396,24 @@ bool BaseTheme::frontBoxActive(const int index) const {
 }
 
 bool BaseTheme::sideBoxActive(const int index) const { return index >= 0 && index <= 1 && sideLabelDrawn[index]; }
+
+void BaseTheme::drawTouchLockIndicator(GfxRenderer& renderer) const {
+  if (!TouchPolicy::lockIndicator()) return;
+
+  const GfxRenderer::Orientation origOrientation = renderer.getOrientation();
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+
+  const int stripHeight = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  const int stripTop = renderer.getScreenHeight() - stripHeight;
+  const int iconX = (renderer.getScreenWidth() - icon_touchLock.w) / 2;
+  const int iconY = stripTop + (stripHeight - icon_touchLock.h) / 2;
+  // White backing: the strip is reserved, but a map or a rendered page can still
+  // have painted into it before this runs.
+  renderer.fillRect(iconX - 6, stripTop, icon_touchLock.w + 12, stripHeight, false);
+  renderer.drawMono1bpp(icon_touchLock.bits, iconX, iconY, icon_touchLock.w, icon_touchLock.h, true);
+
+  renderer.setOrientation(origOrientation);
+}
 
 bool BaseTheme::frontHintBox(const int index, const int portraitWidth, const int portraitHeight, Rect& out) const {
   if (!TouchPolicy::hintsVisible() || !frontBoxActive(index)) return false;

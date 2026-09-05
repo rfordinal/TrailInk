@@ -43,4 +43,26 @@ inline bool touchActive() { return panelPresent() && mode() != CrossPointSetting
 // with no keys under them the labels would name keys that are not there.
 inline bool hintsVisible() { return !panelPresent() || mode() == CrossPointSettings::TOUCH_BUTTONS_ONLY; }
 
+// Where the capacitive home key's tap goes on this board.
+//
+// On the LilyGo T5 S3 Pro it is the touch lock: the user button already gives
+// every screen a Confirm, and nothing else on that board can stop the glass
+// reacting. Everywhere else the tap stays Confirm, which is what a key labelled
+// Home is expected to do (MappedInputManager::wasHomeKeyConfirm()).
+//
+// A board constant rather than a setting, because it decides what a physical key
+// means and the answer differs by hardware, not by preference.
+inline constexpr bool homeKeyTapLocksTouch() {
+#if FREEINK_DEVICE_LILYGO
+  return true;
+#else
+  return false;
+#endif
+}
+
+// Whether to draw the lock glyph instead of the hint boxes. The boxes vanishing
+// is the signal that touch is off, but on their own they cannot distinguish OFF
+// from ANYWHERE, which also draws none.
+inline bool lockIndicator() { return panelPresent() && mode() == CrossPointSettings::TOUCH_DISABLED; }
+
 }  // namespace TouchPolicy

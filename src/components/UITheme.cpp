@@ -60,7 +60,9 @@ const ThemeMetrics& UITheme::getMetrics() const {
   // the touch mode can change from the Settings screen, so the cached copy is
   // refreshed when the answer differs instead of copying the struct per call.
   const bool hints = TouchPolicy::hintsVisible();
-  if (!metricsValid || hints != metricsForHints) {
+  const bool lock = !hints && TouchPolicy::lockIndicator();
+  const uint8_t chrome = hints ? 1 : (lock ? 2 : 0);
+  if (!metricsValid || chrome != metricsChrome) {
     adjustedMetrics = *currentMetrics;
     if (hints) {
       // Every theme's hint metrics are written against the X4's 480px-wide
@@ -71,10 +73,14 @@ const ThemeMetrics& UITheme::getMetrics() const {
       // dimension, the side boxes' width the wider one.
       adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetricY(adjustedMetrics.buttonHintsHeight);
       adjustedMetrics.sideButtonHintsWidth = HintGeometry::scaleMetric(adjustedMetrics.sideButtonHintsWidth);
+    } else if (lock) {
+      // Room for the padlock and nothing else. Reserved so the glyph never lands
+      // on top of a list row or a map.
+      adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetricY(HintGeometry::kTouchLockStripHeight);
     } else {
       adjustedMetrics.buttonHintsHeight = 0;
     }
-    metricsForHints = hints;
+    metricsChrome = chrome;
     metricsValid = true;
   }
   return adjustedMetrics;

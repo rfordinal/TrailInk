@@ -43,7 +43,8 @@ class UITheme {
   std::unique_ptr<BaseTheme> currentTheme;
   mutable ThemeMetrics adjustedMetrics;
   mutable bool metricsValid = false;
-  mutable bool metricsForHints = false;
+  // 0 = no chrome at the bottom, 1 = the hint boxes, 2 = the touch-lock strip.
+  mutable uint8_t metricsChrome = 0xFF;
 };
 
 // Helper macro to access current theme

@@ -18,6 +18,11 @@ namespace HintGeometry {
 constexpr int kRefWidth = 480;
 constexpr int kRefHeight = 800;
 
+// The strip that replaces the hint band when touch is locked: just the padlock
+// glyph with room above and below. Reserved rather than drawn over live content,
+// so no screen has to know the indicator exists.
+constexpr int kTouchLockStripHeight = 26;
+
 inline int scaleX(int v, int screenWidth) { return v * screenWidth / kRefWidth; }
 inline int scaleY(int v, int screenHeight) { return v * screenHeight / kRefHeight; }
 

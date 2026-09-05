@@ -131,6 +131,78 @@ Boards and what they get:
 panel's native landscape size), which is how `HintGeometry` answers without a
 renderer — `ThemeMetrics` is a singleton with nothing to ask.
 
+## The T5 S3 Pro: the capacitive home key locks and unlocks the panel
+
+**The button map for this board is in `src/main.cpp`, above `userButtonHook()`,
+and the hardware page is the parent repo's `docs/devices/lilygo-t5-s3-pro.md`,
+"The four physical buttons".** Read one of them before touching any of this:
+three sessions in a row mis-identified which switch is which, because the
+silkscreen, the schematic and the firmware each call the same switch something
+different.
+
+The short version, because it is the thing that keeps getting confused:
+
+- **The user button** (schematic S3, net `BUTTON`, PCA9535 pin IO1_0, silkscreen
+  "IO48", physically bottom-left) is one switch with several names. Tap =
+  Confirm, hold 600 ms = frontlight. Unchanged by any of this.
+- **The capacitive home key** is a *separate, fifth* input. It is not a GPIO at
+  all: the GT911 reports it in its own status byte, bit 0x10. It was dead on this
+  board until `BoardConfig::LILYGO_T5_PRO_GT911` got `hasHomeKey = true`.
+
+The home key carries the two gestures:
+
+- **tap** — lock or unlock touch: `TOUCH_DISABLED` from whatever mode was on,
+  and back to that same mode on the next tap.
+- **hold** — toggle the frontlight. Already wired before this work, and it stays
+  on a physical hold because gloves defeat the digitizer and the light is what a
+  rider reaches for with gloves on.
+
+`[open]` **Whether this panel physically carries the key electrode is not
+known.** The flag is set on the strength of the controller, not the panel: a
+GT911 reports its keys in the same status byte on any board, and reading a key
+that is not there costs nothing because the bit never sets. If this board has no
+electrode, both gestures simply never fire, and that is the measurement.
+
+Four details worth knowing:
+
+- **The tap does not also select.** `TouchPolicy::homeKeyTapLocksTouch()` is true
+  on this board, and `MappedInputManager::wasHomeKeyConfirm()` returns false when
+  it is — otherwise one tap would both lock the panel and activate whatever the
+  cursor was on. Every other board keeps the key's tap as Confirm, which is what
+  a key labelled Home is expected to do.
+- **A hold never also toggles the lock.** The SDK reports the tap only on release
+  and only when the hold threshold was not crossed
+  (`InputManager::serviceTouch`).
+- **The mode to return to is remembered in RAM only.** A device that boots
+  already locked has nothing to restore, so the return value starts at
+  `TOUCH_BUTTONS_ONLY`, the mode this board is useful in.
+- **The lock is persisted, one SD write per tap.** The same reasoning the
+  frontlight hold carries: a handful of writes a ride, not one per interaction.
+
+A toggle repaints the screen (`activityManager.requestUpdate()`), because the
+chrome at the bottom changes with the mode. That is a full refresh per tap on
+e-ink.
+
+## The padlock: how a locked panel is told apart from a live one
+
+Boxes on screen mean the boxes are live, but their absence is ambiguous —
+ANYWHERE draws none either. So OFF draws a padlock where the band would be:
+
+- `TouchPolicy::lockIndicator()` is the one test.
+- `UITheme::getMetrics()` reserves a strip for it instead of the hint band
+  (`HintGeometry::kTouchLockStripHeight`, 26 px on an X4-sized panel, scaled on a
+  bigger one). Reserved rather than drawn over live content, so no screen has to
+  know the indicator exists.
+- `BaseTheme::drawTouchLockIndicator()` paints it, called from every theme's
+  `drawButtonHints()` on the path where that draws no boxes. That is why it
+  reaches home, settings, the reader and the map without any of them changing.
+- The glyph is Lucide `lock` at 20 px through
+  `scripts/gen_touch_lock_icon.py` (the icon rule in the parent repo's
+  `CLAUDE.md`), drawn with `drawMono1bpp()`.
+
+`buttonHintsRect()` returns that strip while locked, so a caller repainting part
+of the panel still refreshes the padlock.
+
 ## The X4 Pro trap
 
 The X4 Pro has a digitizer plus **two** hardware keys (`Left` on GPIO0, `Right`
@@ -159,3 +231,12 @@ anything about a finger on glass.
 6. **X4 regression.** The bottom band and the side boxes must be pixel-identical
    to before — the X4 arrays and metrics are untouched, so any difference is a
    bug in this change.
+7. **Does the T5 S3 Pro's capacitive home key report at all?** This is the open
+   question, and one flash answers it. A tap should make the boxes vanish, leave
+   a padlock at the bottom, and kill the glass; the next tap should bring the
+   boxes back in the mode that was on before. Nothing happening at all means the
+   panel has no key electrode.
+8. **A hold on the home key must still toggle the frontlight and never also
+   lock.** And the user button (bottom-left, S3) must still be Confirm on a tap
+   and the frontlight on a hold — that switch is not part of this change.
+9. **Boot while locked, then tap:** it should come up in Buttons only.

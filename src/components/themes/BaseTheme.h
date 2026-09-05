@@ -256,6 +256,11 @@ class BaseTheme {
   // passed in rather than looked up: the drawing takes them from the renderer, so
   // the hit test must come from the same place or a tap can miss a box that is
   // plainly on screen.
+  // The padlock that stands in for the boxes when touch is locked. Every theme's
+  // drawButtonHints() calls this on the path where it draws no boxes, so the
+  // indicator reaches every screen that has hints without any of them knowing.
+  // A no-op unless the panel is locked.
+  void drawTouchLockIndicator(GfxRenderer& renderer) const;
   virtual bool frontHintBox(int index, int portraitWidth, int portraitHeight, Rect& out) const;
   virtual bool sideHintBox(int index, int portraitWidth, int portraitHeight, Rect& out) const;
 

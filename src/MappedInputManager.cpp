@@ -430,7 +430,13 @@ bool MappedInputManager::wasHomeGesture() const {
 // same key carry the frontlight hold in main.cpp without ever selecting on the
 // way there. Boards with no home key never see this: the SDK leaves the event
 // false.
-bool MappedInputManager::wasHomeKeyConfirm() const { return gpio.wasHomeKeyTapped(); }
+bool MappedInputManager::wasHomeKeyConfirm() const {
+  // On a board where the key's tap is the touch lock, it must not also select --
+  // one tap would otherwise both lock the panel and activate whatever was under
+  // the cursor. main.cpp owns that gesture there.
+  if (TouchPolicy::homeKeyTapLocksTouch()) return false;
+  return gpio.wasHomeKeyTapped();
+}
 
 bool MappedInputManager::wasPressed(const Button button) const {
   if (button == Button::Back && wasBackGesture()) return true;
