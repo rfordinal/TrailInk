@@ -164,13 +164,35 @@ The short version, because it is the thing that keeps getting confused:
 - **The capacitive home key** is a *separate, fifth* input. It is not a GPIO at
   all: the GT911 reports it in its own status byte, bit 0x10.
 
-The home key carries the two gestures:
+The home key carries three gestures:
 
-- **tap** — lock or unlock touch: `TOUCH_DISABLED` from whatever mode was on,
-  and back to that same mode on the next tap.
+- **tap** — Confirm (Select), fired once the double-tap window has passed.
+- **double tap** — lock or unlock touch: `TOUCH_DISABLED` from whatever mode was
+  on, and back to that same mode on the next double tap.
 - **hold** — toggle the frontlight. Already wired before this work, and it stays
   on a physical hold because gloves defeat the digitizer and the light is what a
   rider reaches for with gloves on.
+
+**The single tap has to wait, and that is the price of the double tap.**
+`MappedInputManager::pumpHomeKey()` holds the first tap for
+`HOME_KEY_DOUBLE_TAP_WINDOW_MS` (300 ms) and then decides: no second tap means
+Confirm, a second tap means the lock and the held Confirm is dropped. Firing
+Confirm on arrival cannot work — it would activate whatever the cursor was on
+before the second tap could mean the lock instead, and a select cannot be taken
+back. 300 ms is small against a panel refresh measured in whole seconds.
+
+Three details in that machine:
+
+- **A hold cancels a pending tap.** The SDK suppresses the hold's own release tap
+  (`InputManager::serviceTouch`), so without this a tap-then-hold would light the
+  frontlight and then still select when the window ran out.
+- **The window is timed off the per-frame input pump**, the same one the hint
+  boxes use, so it resolves on whatever query the activity makes rather than
+  needing a tick of its own. An activity that asked for no input at all would
+  hold the Confirm longer, and would also have nothing to do with it.
+- **Only a board whose key carries the double tap pays the latency.**
+  `TouchPolicy::homeKeyDoubleTapLocksTouch()` is false everywhere else, and there
+  the tap is Confirm the instant it lands.
 
 **`TouchConfig::hasHomeKey` gates nothing, and this cost a session.** It reads
 like the flag that turns the key on -- it is `false` for this board -- but
@@ -182,14 +204,10 @@ wrong about the board and wrong about which switch the rider was pressing.
 
 Four details worth knowing:
 
-- **The tap does not also select.** `TouchPolicy::homeKeyTapLocksTouch()` is true
-  on this board, and `MappedInputManager::wasHomeKeyConfirm()` returns false when
-  it is — otherwise one tap would both lock the panel and activate whatever the
-  cursor was on. Every other board keeps the key's tap as Confirm, which is what
-  a key labelled Home is expected to do.
-- **A hold never also toggles the lock.** The SDK reports the tap only on release
-  and only when the hold threshold was not crossed
-  (`InputManager::serviceTouch`).
+- **A hold never also toggles the lock or selects.** The SDK reports the tap only
+  on release and only when the hold threshold was not crossed
+  (`InputManager::serviceTouch`), and `pumpHomeKey()` drops any pending tap when
+  the hold fires.
 - **The mode to return to is remembered in RAM only.** A device that boots
   already locked has nothing to restore, so the return value starts at
   `TOUCH_BUTTONS_ONLY`, the mode this board is useful in.
@@ -274,7 +292,9 @@ anything about a finger on glass.
    the boxes back in the mode that was on before. The key itself is known to
    report (the hold was measured 2026-09-05), so a tap doing nothing means the
    tap event or the toggle is wrong, not the hardware.
-8. **A hold on the home key must still toggle the frontlight and never also
-   lock.** And the user button (bottom-left, S3) must still be Confirm on a tap
-   and the frontlight on a hold — that switch is not part of this change.
+8. **The three home-key gestures must not bleed into each other.** A single tap
+   selects (after a beat) and never locks. A double tap locks and never selects.
+   A hold lights the frontlight and does neither. And the user button
+   (bottom-left, S3) must still be Confirm on a tap and the frontlight on a hold
+   — that switch is not part of this change.
 9. **Boot while locked, then tap:** it should come up in Buttons only.

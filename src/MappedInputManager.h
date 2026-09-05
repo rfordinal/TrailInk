@@ -66,6 +66,10 @@ class MappedInputManager {
   // short tap. Reported as Confirm by wasPressed()/wasReleased(); exposed so a
   // caller that needs to tell the two apart still can.
   bool wasHomeKeyConfirm() const;
+  // True on the frame a double tap on the capacitive home key resolves. Only on
+  // a board where that gesture means something (TouchPolicy::homeKeyDoubleTapLocksTouch());
+  // elsewhere the key has no double tap and this is always false.
+  bool wasHomeKeyDoubleTap() const;
   bool wasMenuGesture() const;
   bool wasAnyPressed() const;
   bool wasAnyReleased() const;
@@ -105,6 +109,10 @@ class MappedInputManager {
   // the frame tick is a bare gpio.update() in loop() (main.cpp) that never passes
   // through this class -- hooking update() alone left the boxes drawn and dead.
   void ensureHintTouchPumped() const;
+  // Resolve this frame's home-key gesture. Runs from the same per-frame pump as
+  // the hint boxes, so the pending single tap is timed out by whatever query the
+  // activity makes rather than by a tick of its own.
+  void pumpHomeKey() const;
   void pumpHintTouch() const;
   bool hintBoxAt(int px, int py, uint8_t& hwButton) const;
   // Normalized touch to *portrait* logical coordinates. The renderer's own
@@ -132,6 +140,17 @@ class MappedInputManager {
   // box tap looking like a half-second hold and firing ButtonNavigator's
   // continuous step on top of its press step.
   mutable unsigned long hintDownAtMs = 0;
+
+  // The home key's single tap cannot fire Confirm the moment it lands: a second
+  // tap inside the window means the rider asked for the touch lock instead, and
+  // selecting first would have activated whatever the cursor was on before
+  // locking the panel. So the tap is held, and resolves either way.
+  //
+  // Only on a board whose home key carries the double tap at all -- elsewhere
+  // the tap is Confirm the instant it arrives, with no window and no latency.
+  mutable unsigned long homeTapPendingSince = 0;  // 0 = no tap waiting
+  mutable bool homeConfirmResolved = false;       // this frame: the single tap won
+  mutable bool homeDoubleTapResolved = false;     // this frame: the second tap won
   mutable uint8_t hintDownButton = kNoHintButton;
   mutable uint8_t hintPressedButton = kNoHintButton;
   mutable uint8_t hintReleasedButton = kNoHintButton;

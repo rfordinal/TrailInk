@@ -43,16 +43,17 @@ inline bool touchActive() { return panelPresent() && mode() != CrossPointSetting
 // with no keys under them the labels would name keys that are not there.
 inline bool hintsVisible() { return !panelPresent() || mode() == CrossPointSettings::TOUCH_BUTTONS_ONLY; }
 
-// Where the capacitive home key's tap goes on this board.
+// Whether the capacitive home key carries a double tap, and what it means.
 //
-// On the LilyGo T5 S3 Pro it is the touch lock: the user button already gives
-// every screen a Confirm, and nothing else on that board can stop the glass
-// reacting. Everywhere else the tap stays Confirm, which is what a key labelled
-// Home is expected to do (MappedInputManager::wasHomeKeyConfirm()).
+// On the LilyGo T5 S3 Pro a double tap is the touch lock -- nothing else on that
+// board can stop the glass reacting. The single tap stays Confirm there, which
+// costs it the double-tap window in latency (MappedInputManager::pumpHomeKey()).
+// Everywhere else the key has no double tap and its single tap is Confirm the
+// instant it lands.
 //
 // A board constant rather than a setting, because it decides what a physical key
 // means and the answer differs by hardware, not by preference.
-inline constexpr bool homeKeyTapLocksTouch() {
+inline constexpr bool homeKeyDoubleTapLocksTouch() {
 #if FREEINK_DEVICE_LILYGO
   return true;
 #else

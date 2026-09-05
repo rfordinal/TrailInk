@@ -128,14 +128,16 @@ void toggleFrontlight(const char* source) {
 // (holding it turns the frontlight on). Its jobs are handled in loop(), not
 // here:
 //
-//   home key tap  -> lock / unlock the touch panel (toggleTouchLock)
-//   home key hold -> toggle the frontlight (toggleFrontlight)
+//   home key tap        -> Confirm (Select), after the double-tap window
+//   home key double tap -> lock / unlock the touch panel (toggleTouchLock)
+//   home key hold       -> toggle the frontlight (toggleFrontlight)
 //
 // Why the light hangs off a physical hold and not a touch control: gloves defeat
 // the capacitive panel, and the light is exactly what a rider reaches for with
-// gloves on. Why the home key's tap locks rather than selects: the user button
-// already gives every screen a Confirm, and nothing else can stop the glass
-// reacting to a bag, a palm or rain.
+// gloves on. Why the lock hangs off a double tap: nothing else on this board can
+// stop the glass reacting to a bag, a palm or rain, and the single tap was worth
+// keeping as Select. The cost is that Select through this key waits out the
+// double-tap window -- a single tap cannot be known to be single until then.
 namespace {
 constexpr unsigned long USER_BUTTON_HOLD_MS = 600;
 
@@ -1064,12 +1066,11 @@ void loop() {
     toggleFrontlight("Home key hold");
   }
 #if FREEINK_DEVICE_LILYGO
-  // The other half of the same key: a tap locks or unlocks the panel. The SDK
-  // reports the tap only on release and only when the hold threshold was not
-  // crossed (InputManager::serviceTouch), so a hold never also toggles the lock.
-  // TouchPolicy::homeKeyTapLocksTouch() keeps the same tap from ALSO arriving as
-  // Confirm through MappedInputManager.
-  if (gpio.wasHomeKeyTapped()) {
+  // The third gesture on the same key: a double tap locks or unlocks the panel.
+  // Resolved in MappedInputManager, which holds the first tap for the double-tap
+  // window and decides between Confirm and this -- a tap that had already
+  // selected could not be taken back once the second tap arrived.
+  if (mappedInputManager.wasHomeKeyDoubleTap()) {
     toggleTouchLock();
   }
 #endif

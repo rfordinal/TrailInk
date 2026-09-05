@@ -122,6 +122,11 @@ constexpr float BOTTOM_EDGE_BACK_GESTURE_FRAC_Y = 0.14f;
 constexpr float TOP_EDGE_MENU_GESTURE_FRAC_Y = 0.14f;
 constexpr unsigned long TOUCH_DOWN_SELECT_DELAY_MS = 90;
 constexpr unsigned long TOUCH_HELD_OVERRIDE_WINDOW_MS = 250;
+// How long the home key's single tap waits to find out whether a second one is
+// coming. Short enough that Confirm through this key does not feel laggy against
+// a panel refresh measured in whole seconds, long enough for a deliberate double
+// tap by a rider wearing gloves.
+constexpr unsigned long HOME_KEY_DOUBLE_TAP_WINDOW_MS = 300;
 }  // namespace
 
 bool MappedInputManager::hasTouch() const { return gpio.hasTouch(); }
@@ -136,6 +141,48 @@ void MappedInputManager::ensureHintTouchPumped() const {
   if (seq == hintPumpedSeq) return;
   hintPumpedSeq = seq;
   pumpHintTouch();
+  pumpHomeKey();
+}
+
+void MappedInputManager::pumpHomeKey() const {
+  homeConfirmResolved = false;
+  homeDoubleTapResolved = false;
+  if (!TouchPolicy::homeKeyDoubleTapLocksTouch()) {
+    homeTapPendingSince = 0;
+    return;
+  }
+
+  // A hold ends any pending tap. The SDK suppresses the hold's own release tap
+  // (InputManager::serviceTouch), so without this a tap-then-hold would light the
+  // frontlight and then still select once the window ran out.
+  if (gpio.wasHomeKeyLongPressed()) {
+    homeTapPendingSince = 0;
+    return;
+  }
+
+  if (gpio.wasHomeKeyTapped()) {
+    if (homeTapPendingSince != 0) {
+      // Second tap inside the window: the lock is what was asked for, and the
+      // held Confirm is dropped rather than fired first.
+      homeTapPendingSince = 0;
+      homeDoubleTapResolved = true;
+    } else {
+      homeTapPendingSince = millis();
+      // millis() can be 0 for one tick after boot, and 0 is this field's "no tap
+      // waiting". One tick later is close enough and keeps the sentinel honest.
+      if (homeTapPendingSince == 0) homeTapPendingSince = 1;
+    }
+    return;
+  }
+
+  // Nothing arrived: the window decides. Timed off whatever query the activity
+  // makes this frame, which is every loop in practice -- an activity that asked
+  // for no input at all would hold the Confirm a little longer, and would also
+  // have nothing to do with it.
+  if (homeTapPendingSince != 0 && millis() - homeTapPendingSince >= HOME_KEY_DOUBLE_TAP_WINDOW_MS) {
+    homeTapPendingSince = 0;
+    homeConfirmResolved = true;
+  }
 }
 
 void MappedInputManager::tapToPortrait(const float nx, const float ny, int& x, int& y) const {
@@ -432,11 +479,18 @@ bool MappedInputManager::wasHomeGesture() const {
 // way there. Boards with no home key never see this: the SDK leaves the event
 // false.
 bool MappedInputManager::wasHomeKeyConfirm() const {
-  // On a board where the key's tap is the touch lock, it must not also select --
-  // one tap would otherwise both lock the panel and activate whatever was under
-  // the cursor. main.cpp owns that gesture there.
-  if (TouchPolicy::homeKeyTapLocksTouch()) return false;
+  ensureHintTouchPumped();
+  // Where the key also carries a double tap, Confirm is the *resolved* single
+  // tap -- held for the window, then fired only if no second tap came. Firing on
+  // arrival would have selected whatever the cursor was on before the double tap
+  // could mean the lock instead.
+  if (TouchPolicy::homeKeyDoubleTapLocksTouch()) return homeConfirmResolved;
   return gpio.wasHomeKeyTapped();
+}
+
+bool MappedInputManager::wasHomeKeyDoubleTap() const {
+  ensureHintTouchPumped();
+  return homeDoubleTapResolved;
 }
 
 bool MappedInputManager::wasPressed(const Button button) const {
