@@ -1648,7 +1648,56 @@ continuous SD reads with CRC verification while full and partial refreshes loop,
 rail up, run twice -- `LORA_RST` floating, then held low. Anything less repeats
 the non-overlapping path.
 
+## The first fixes after a cold start carry a UTC that is wrong
+
+**Measured 2026-09-05**, on one 4 h 36 min walk logged to `gnss.csv` on a T5 S3
+Pro, build `0.2.0-t5s3pro`.
+
+`utc - uptime_s` is the boot epoch. It is a constant, and any change in it is
+the receiver's clock moving under us. Across 7,669 rows it moved exactly once:
+
+```
+uptime   669.9 s   utc 14:49:02   base = 1788619073
+uptime  1873.9 s   utc 15:09:47   base = 1788619073
+uptime  2217.5 s   utc 16:41:08   base = 1788624170   <- +5097.4 s, single step
+uptime 16554.6 s   utc 20:38:45   base = 1788624170
+```
+
+One step, **+5097.4 s -- 85 minutes** -- across a 343.6 s logging gap at uptime
+1873.9 s. After it the base holds to within +/-1 s for the remaining four hours.
+
+**The later value is the true one.** It puts that boot's death at 20:39:26 UTC,
+which matches an independent clock: the laptop's `journalctl` timestamps when
+the device was recovered twenty minutes later. So the earlier base is the wrong
+one, and **roughly the first twenty minutes of a cold-start track is stamped 85
+minutes early**.
+
+Why this matters more than an ordinary bug: the wrong time is *stable and
+plausible*. It does not jitter, it does not read as garbage, and every consumer
+downstream -- a ride export, a track merge, a tile freshness check, anything that
+sorts by time -- takes it at face value. Nothing can spot it from inside a single
+row. It is only visible by holding `utc` against `uptime_ms` across the run, and
+that is the check to run on any track before trusting its early timestamps.
+
+**Not settled: what seeds the wrong time.** The shape fits a warm-start time
+injection being reported back until real GPS time is decoded off the
+constellation, which would make it ours rather than the receiver's. Nobody has
+looked. See "Open".
+
+Two things from the same file that are **not** defects, recorded so nobody
+rediscovers them as bugs: a 7,564 s gap in `gnss.csv` at uptime 5255.5 s, and
+`tracked` falling to 0 in the last minute of the run. Both are the receiver
+correctly reporting no sky -- the maintainer was sitting in a restaurant, and
+then walked into a hotel. `power.csv` over the same spans reads `tracked` 1-2
+with `q` 0, which agrees.
+
 ## Open
+
+- **What seeds the wrong UTC on the first fixes?** The 85-minute step above is
+  measured; the mechanism is not. Check whether an AID-INI style warm-start
+  injection hands the receiver a time it then reports back until it decodes real
+  GPS time. If it is ours, it is fixable here; if it is the L76K's, consumers
+  have to wait for the step before trusting a timestamp.
 
 - ~~Is the rail on by board default, or was it latched by an earlier session?~~
   -- **settled 2026-09-01**: an uncleared expander latch, proven by `CMD:GNSS
