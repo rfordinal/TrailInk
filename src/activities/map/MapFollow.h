@@ -162,6 +162,18 @@ struct Request {
   // both are per-rung numbers since the ladder grew to seven rungs.
   int16_t minMovePx = kMinMovePx;
   int16_t keepInMarginPx = kKeepInMarginPx;
+  // The marker's own shape changed with this fix -- the ring broke or healed,
+  // or the heading glyph became a wedge or vanished (MapFixTrust::MarkerStyle).
+  //
+  // Without this a quality change is invisible whenever the rider is not
+  // moving, which is exactly when it matters: a parked rider whose heading has
+  // gone stale, or whose fix has degraded in a street canyon, produces fixes
+  // that land under the move floor and Skip. The marker would keep claiming
+  // what it claimed before, indefinitely, while MapActivity's own state said
+  // otherwise.
+  //
+  // Found in the simulator 2026-09-05, before any of this reached a panel.
+  bool markerStyleChanged = false;
   // The two heading thresholds, per request, defaulting to the constants above.
   //
   // Same pattern and the same reason as `partialMoveBudget`: a caller that has
@@ -235,6 +247,9 @@ enum class Reason : uint8_t {
   Budget,
   // The fix moved less than minMovePx on both axes -- Skip.
   BelowMoveFloor,
+  // Below the move floor, but the marker has to be repainted anyway because
+  // what it is allowed to claim changed (Request::markerStyleChanged).
+  TrustChanged,
   // None of the above: the marker moves inside the frame that is up.
   Moved,
 };

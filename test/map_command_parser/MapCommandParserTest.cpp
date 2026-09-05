@@ -98,6 +98,57 @@ TEST(MapCommandParser, PosOptionalTailBare) {
   EXPECT_EQ(cmd.speedKmh, 30);
 }
 
+TEST(MapCommandParser, PosCarriesTheTwoFixQualityClaims) {
+  const MapCommand cmd = parseMapCommand("pos 48.4372 17.0186 heading 4 acc 40 dirq 2");
+  ASSERT_EQ(cmd.type, MapCommandType::Pos);
+  EXPECT_EQ(cmd.heading, 4);
+  EXPECT_TRUE(cmd.hasAccuracy);
+  EXPECT_EQ(cmd.accuracyM, 40);
+  EXPECT_TRUE(cmd.hasDirQuality);
+  EXPECT_EQ(cmd.dirQuality, 2);
+
+  // Absent is absent, not zero: zero accuracy is the "unstated" sentinel and
+  // the caller has to be able to tell "said nothing" from "said 0".
+  const MapCommand bare = parseMapCommand("pos 48.4372 17.0186");
+  EXPECT_FALSE(bare.hasAccuracy);
+  EXPECT_FALSE(bare.hasDirQuality);
+
+  // Both are keyword-only. A bare tail value is still heading then speed, so a
+  // stray number cannot silently become an accuracy.
+  const MapCommand bareTail = parseMapCommand("pos 1 2 4 30");
+  EXPECT_FALSE(bareTail.hasAccuracy);
+  EXPECT_EQ(bareTail.heading, 4);
+  EXPECT_EQ(bareTail.speedKmh, 30);
+}
+
+TEST(MapCommandParser, PosRejectsQualityValuesTheWireCouldNotCarry) {
+  // Accuracy crosses BLE as a saturating byte, and dirq is two bits.
+  EXPECT_EQ(parseMapCommand("pos 1 2 acc 255").accuracyM, 255);
+  EXPECT_EQ(parseMapCommand("pos 1 2 acc 256").error, MapCommandError::OutOfRange);
+  EXPECT_EQ(parseMapCommand("pos 1 2 dirq 3").dirQuality, 3);
+  EXPECT_EQ(parseMapCommand("pos 1 2 dirq 4").error, MapCommandError::OutOfRange);
+  // Given twice is a mistake, not a last-one-wins.
+  EXPECT_EQ(parseMapCommand("pos 1 2 acc 5 acc 6").error, MapCommandError::BadArity);
+  EXPECT_EQ(parseMapCommand("pos 1 2 dirq 1 dirq 2").error, MapCommandError::BadArity);
+  // A keyword with no value behind it.
+  EXPECT_EQ(parseMapCommand("pos 1 2 acc").error, MapCommandError::BadArity);
+}
+
+TEST(MapCommandParser, PosStillFitsWhenEveryOptionalIsGiven) {
+  // The longest legal line, which is what kMaxTokens is sized for. One token
+  // more must be rejected rather than truncated away.
+  const MapCommand full = parseMapCommand("pos 48.4372 17.0186 heading 4 speed 30 alt 220 acc 12 dirq 1");
+  ASSERT_EQ(full.type, MapCommandType::Pos);
+  EXPECT_EQ(full.heading, 4);
+  EXPECT_EQ(full.speedKmh, 30);
+  EXPECT_EQ(full.altitudeM, 220);
+  EXPECT_EQ(full.accuracyM, 12);
+  EXPECT_EQ(full.dirQuality, 1);
+
+  EXPECT_NE(parseMapCommand("pos 48.4372 17.0186 heading 4 speed 30 alt 220 acc 12 dirq 1 9").error,
+            MapCommandError::None);
+}
+
 TEST(MapCommandParser, PosOptionalTailKeyworded) {
   const MapCommand cmd = parseMapCommand("pos 48.4372 17.0186 heading 4 speed 30");
   ASSERT_EQ(cmd.type, MapCommandType::Pos);
@@ -904,8 +955,7 @@ TEST(MapCommandConsole, InfoReportsTheChunkPayloadTheContractStates) {
     mtu = c.mtu;
     state.setLinkMtuProvider(+[]() -> uint16_t { return mtu; });
     feedLine(console, out, "info");
-    EXPECT_NE(std::find(out.lines.begin(), out.lines.end(), c.expected), out.lines.end())
-        << "at MTU " << c.mtu;
+    EXPECT_NE(std::find(out.lines.begin(), out.lines.end(), c.expected), out.lines.end()) << "at MTU " << c.mtu;
   }
 }
 

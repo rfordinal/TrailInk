@@ -150,8 +150,21 @@ so the fix is the one step in between, not a change to a rung already
 confirmed.
 
 Strokes do not scale with the shape: the ring is 3 px at full size and 2 px
-below it, because 2 px is the thinnest line worth having on this panel at arm's
-length. `markerScaled()` clamps every length to at least 1 for the same reason.
+below it. **That is a choice nobody has judged on a panel, not a limit.**
+
+This paragraph used to say 2 px was "the thinnest line worth having on this
+panel at arm's length". Nothing ever measured that, and the map itself is the
+counter-evidence: the road style floors a visible class at **1 px**
+(`map-style.md`), tertiary and unclassified roads draw as 1 px hairlines, and a
+1 px line across a bend of the Morava was found on the panel on 2026-08-08. If
+1 px were under the panel's floor, half the road network would be invisible.
+The claim most likely slid in from `toneWayInterior`'s real 2 px floor, which is
+about dither fill and not about strokes.
+
+Corrected 2026-09-05. T-259 puts 1, 2 and 3 px rings side by side on the glass;
+a thinner ring at the coarse rungs would put less ink over the map exactly where
+the marker starts hiding what it points at. `markerScaled()` clamps every length
+to at least 1, which is a real bound: a stroke that rounds to 0 stops drawing.
 
 What it does **not** buy is a cheaper refresh. **Measured** on the X4
 2026-08-05: a windowed refresh costs the same ~500 ms whatever its area

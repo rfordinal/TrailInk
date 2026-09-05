@@ -25,6 +25,8 @@ const char* reasonName(Reason reason) {
       return "keep-in";
     case Reason::Budget:
       return "budget";
+    case Reason::TrustChanged:
+      return "trust";
     case Reason::BelowMoveFloor:
       return "below the move floor";
     case Reason::Moved:
@@ -71,6 +73,14 @@ Action decide(const Request& request, Reason& outReason) {
   const int absDx = dx < 0 ? -dx : dx;
   const int absDy = dy < 0 ? -dy : dy;
   if (absDx < request.minMovePx && absDy < request.minMovePx) {
+    // Checked inside the floor branch rather than before it, so a fix that
+    // moves far enough is unaffected: it already repaints the marker and picks
+    // up the new shape on the way. This only rescues the fix that would
+    // otherwise have changed nothing on the panel.
+    if (request.markerStyleChanged) {
+      outReason = Reason::TrustChanged;
+      return Action::MoveMarker;
+    }
     outReason = Reason::BelowMoveFloor;
     return Action::Skip;
   }

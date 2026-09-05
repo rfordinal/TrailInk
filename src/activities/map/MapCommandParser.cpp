@@ -4,10 +4,11 @@
 
 namespace {
 
-// Longest legal line is `pos <lat> <lon> heading <n> speed <n> alt <n>` -- 9
-// tokens. One spare so a 10th token is seen and rejected rather than
+// Longest legal line is
+// `pos <lat> <lon> heading <n> speed <n> alt <n> acc <n> dirq <n>` -- 13
+// tokens. One spare so a 14th token is seen and rejected rather than
 // truncated away.
-constexpr size_t kMaxTokens = 10;
+constexpr size_t kMaxTokens = 14;
 
 constexpr int32_t kLatMaxE7 = 900000000;
 constexpr int32_t kLonMaxE7 = 1800000000;
@@ -18,6 +19,11 @@ constexpr uint32_t kMaxHeading = 15;
 constexpr uint32_t kMaxZoom = MapViewport::kZoomStepCount - 1;
 constexpr uint32_t kMaxMarker = MapViewport::kMarkerStepCount - 1;
 constexpr uint32_t kMaxSpeedKmh = 65535;
+// Accuracy crosses BLE as a saturating byte (BlePositionServer.h), so the
+// console cannot ask for a value a real fix could never deliver.
+constexpr uint32_t kMaxAccuracyM = 255;
+// The heading-quality code, same 0-3 range as the packet's flags bits 2-3.
+constexpr uint32_t kMaxDirQuality = 3;
 constexpr uint32_t kMaxMissingOffset = 65535;
 // How large a batch the phone may announce. A 40 km box around a whole city is
 // 77 tiles (Barcelona, measured off the CDN index 2026-09-02 --
@@ -185,6 +191,8 @@ MapCommand parsePos(const Tokens& tokens) {
     bool wantHeading = false;
     bool wantSpeed = false;
     bool wantAltitude = false;
+    bool wantAccuracy = false;
+    bool wantDirQuality = false;
     if (tokens.t[i] == "heading") {
       wantHeading = true;
       ++i;
@@ -193,6 +201,12 @@ MapCommand parsePos(const Tokens& tokens) {
       ++i;
     } else if (tokens.t[i] == "alt") {
       wantAltitude = true;
+      ++i;
+    } else if (tokens.t[i] == "acc") {
+      wantAccuracy = true;
+      ++i;
+    } else if (tokens.t[i] == "dirq") {
+      wantDirQuality = true;
       ++i;
     } else if (!cmd.hasHeading) {
       wantHeading = true;
@@ -206,6 +220,8 @@ MapCommand parsePos(const Tokens& tokens) {
     if (wantHeading && cmd.hasHeading) return fail(MapCommandError::BadArity);  // given twice
     if (wantSpeed && cmd.hasSpeed) return fail(MapCommandError::BadArity);
     if (wantAltitude && cmd.hasAltitude) return fail(MapCommandError::BadArity);
+    if (wantAccuracy && cmd.hasAccuracy) return fail(MapCommandError::BadArity);
+    if (wantDirQuality && cmd.hasDirQuality) return fail(MapCommandError::BadArity);
 
     if (wantAltitude) {
       int32_t value = 0;
@@ -216,7 +232,18 @@ MapCommand parsePos(const Tokens& tokens) {
     } else {
       uint32_t value = 0;
       if (!parseUint(tokens.t[i], value)) return fail(MapCommandError::BadNumber);
-      if (wantHeading) {
+      if (wantAccuracy) {
+        // Capped at the wire's own range: accuracy crosses BLE as a saturating
+        // byte, so a console that could ask for more would be exercising a
+        // state no real fix can produce.
+        if (value > kMaxAccuracyM) return fail(MapCommandError::OutOfRange);
+        cmd.accuracyM = static_cast<uint16_t>(value);
+        cmd.hasAccuracy = true;
+      } else if (wantDirQuality) {
+        if (value > kMaxDirQuality) return fail(MapCommandError::OutOfRange);
+        cmd.dirQuality = static_cast<uint8_t>(value);
+        cmd.hasDirQuality = true;
+      } else if (wantHeading) {
         if (value > kMaxHeading) return fail(MapCommandError::OutOfRange);
         cmd.heading = static_cast<uint8_t>(value);
         cmd.hasHeading = true;
