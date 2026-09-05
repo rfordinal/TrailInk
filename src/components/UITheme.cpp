@@ -86,6 +86,8 @@ const ThemeMetrics& UITheme::getMetrics() const {
   return adjustedMetrics;
 }
 
+int UITheme::chromeBandHeight() const { return HintGeometry::scaleMetricY(currentMetrics->buttonHintsHeight); }
+
 int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
                                      bool hasSubtitle, int extraReservedHeight) {
   const ThemeMetrics metrics = UITheme::getInstance().getMetrics();

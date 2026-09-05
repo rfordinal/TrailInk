@@ -251,13 +251,45 @@ panel for real -- touch went dead -- while the hint boxes stayed on screen and n
 padlock appeared. Functional change, no visual one.
 
 So `MapActivity::loop()` compares `drawnTouchMode_` against `SETTINGS.touchMode`
-and redraws when they differ. Two details in that check:
+and swaps the chrome when they differ. Two details in that check:
 
 - It sits **below** the option popup's early return. A menu open over the map
   owns the panel, and repainting the map under it would strand the popup's
   pixels; the check fires on the first frame after it closes instead.
 - `0xFF` means nothing has been painted yet, so entering the map settles the
   value without spending a redraw on it.
+
+### The map swaps the chrome, it does not re-render
+
+Re-rendering the whole map to take two strips of chrome off it costs tiles off
+the card and a full-panel refresh, for a change that touches nothing else. So
+`MapActivity` snapshots the panel under the chrome on every full frame and swaps
+it later, the way the option popup already saves the map under an open dialog:
+
+- `captureRegion()` / `restoreRegion()` are the reusable form of
+  `captureMenuBackdrop()` / `restoreMenuBackdrop()`. **Restore keeps the
+  snapshot** -- its bits are still a clean picture of the map under that
+  rectangle, so the next swap needs no new capture.
+- `swapChrome()` restores the map, calls `drawMapButtonHints()` (which draws the
+  boxes, the padlock, or nothing, per mode) and refreshes **two small windows**.
+  Never one window spanning both: `displayBufferWindow()` allocates a buffer per
+  window inside the driver, and a full-panel window aborted the device on a map
+  screen (measured 2026-08-17).
+- **Two rectangles, never their union.** The bottom band and the side boxes are
+  far apart; one rect covering both would be 540 x 546 on a T5 S3 Pro, about
+  37 kB, against roughly 4 kB for the pair.
+- **The band is snapshotted at `UITheme::chromeBandHeight()`**, the tallest
+  chrome any mode draws, not at the current mode's height. The boxes are taller
+  than the padlock strip, so a snapshot sized for the padlock would leave a
+  sliver of stale box pixels above it -- and e-ink holds that indefinitely.
+- The snapshot obeys the same heap reserve the menu backdrop does. If there is no
+  room, or no full frame has been drawn yet, `swapChrome()` returns false and the
+  caller falls back to the full render.
+
+One consequence, on purpose: the map keeps the layout it was rendered with. The
+reserved band differs between modes, so after a swap the map's own content still
+sits where the old mode put it until the next full frame. Swapping chrome is not
+a relayout.
 
 ## The X4 Pro trap
 

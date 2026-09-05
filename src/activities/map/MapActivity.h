@@ -553,6 +553,25 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // ~26 KB it needs at the biggest dialog size is held only while the menu is
   // up; on OOM the capture simply fails and every close falls back to
   // renderCurrent(), the behaviour before this existed.
+  // A saved rectangle of the panel, so a change that only touches chrome can put
+  // the map back and refresh that rectangle instead of re-rendering the whole
+  // screen. The menu backdrop below does the same thing by hand; this pair is
+  // the reusable form of it.
+  struct RegionSnapshot {
+    std::unique_ptr<uint8_t[]> bits;
+    size_t size = 0;
+    Rect rect{0, 0, 0, 0};
+  };
+  // Overwrites whatever the snapshot held. False when there is no heap for it or
+  // the renderer refuses the read -- the caller then falls back to a full render.
+  bool captureRegion(RegionSnapshot& snap, Rect rect);
+  // Writes the snapshot back and KEEPS it: the bits are still a clean picture of
+  // the map under that rectangle, so the next chrome swap needs no new capture.
+  bool restoreRegion(const RegionSnapshot& snap) const;
+  // Swap the chrome for whatever the current touch mode wants -- the hint boxes,
+  // the padlock, or nothing -- using the snapshots rather than a re-render.
+  // False when it could not be done, and the caller re-renders.
+  bool swapChrome();
   bool captureMenuBackdrop();
   // Heap that must survive taking the backdrop. Everything that runs while the
   // menu is up -- BLE tile transfers, the console, a settings write -- draws
@@ -1236,6 +1255,12 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // never reaches it -- see the check in loop(). 0xFF means "nothing painted
   // yet", so the first frame after entering settles it without a redraw.
   uint8_t drawnTouchMode_ = 0xFF;
+  // The map under the chrome, taken on every full frame before the chrome covers
+  // it. Two rectangles, never their union: the bottom band and the side boxes
+  // are far apart, and one rect spanning both would be most of the panel (540 x
+  // 546 on a T5 S3 Pro, ~37 kB) against ~4 kB for the pair.
+  RegionSnapshot chromeFront_;
+  RegionSnapshot chromeSide_;
   // Until when Observe's clock shows the exact minute. Set by any button press:
   // a rider who pressed something is looking at the screen, and the saving only
   // exists during the hours nobody is. 0 = never set, i.e. coarse.

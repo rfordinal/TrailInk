@@ -2931,9 +2931,15 @@ void MapActivity::loop() {
     const bool firstFrame = drawnTouchMode_ == 0xFF;
     drawnTouchMode_ = SETTINGS.touchMode;
     if (!firstFrame) {
-      redrawDueMs_ = 0;
-      showBusy();  // the old chrome is still up; say the redraw started
-      renderCurrent();
+      // Two strips of chrome changed, not the map. swapChrome() puts the
+      // snapshotted map back and refreshes only those strips; the full render is
+      // the fallback for when there is no snapshot to work from (no full frame
+      // yet, or the heap refused one).
+      if (!swapChrome()) {
+        redrawDueMs_ = 0;
+        showBusy();  // the old chrome is still up; say the redraw started
+        renderCurrent();
+      }
       return;
     }
   }
@@ -3360,6 +3366,82 @@ void MapActivity::drawMapButtonHints() {
       break;
     }
   }
+}
+
+bool MapActivity::captureRegion(RegionSnapshot& snap, const Rect rect) {
+  snap.bits.reset();
+  snap.size = 0;
+  snap.rect = Rect{0, 0, 0, 0};
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  const size_t size = renderer.getRegionByteSize(rect.x, rect.y, rect.width, rect.height);
+  if (size == 0) return false;
+  // Same reserve the menu backdrop keeps, and for the same reason: a convenience
+  // must not be able to starve the work. Doing without it costs a full render on
+  // the next chrome change, which beats an allocation failure elsewhere.
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  if (size + kMenuBackdropHeapReserve > freeHeap) {
+    LOG_DBG(kLogTag, "region snapshot skipped: %u bytes, free heap %u", static_cast<unsigned>(size),
+            static_cast<unsigned>(freeHeap));
+    return false;
+  }
+  auto buffer = makeUniqueNoThrow<uint8_t[]>(size);
+  if (!buffer) {
+    LOG_ERR(kLogTag, "region snapshot unavailable: %u bytes, free heap %u", static_cast<unsigned>(size),
+            static_cast<unsigned>(freeHeap));
+    return false;
+  }
+  if (!renderer.copyRegionToBuffer(rect.x, rect.y, rect.width, rect.height, buffer.get(), size)) {
+    LOG_ERR(kLogTag, "region snapshot read rejected: %d,%d %dx%d", rect.x, rect.y, rect.width, rect.height);
+    return false;
+  }
+  snap.bits = std::move(buffer);
+  snap.size = size;
+  snap.rect = rect;
+  return true;
+}
+
+bool MapActivity::restoreRegion(const RegionSnapshot& snap) const {
+  if (!snap.bits) return false;
+  const Rect rect = snap.rect;
+  if (!renderer.copyBufferToRegion(rect.x, rect.y, rect.width, rect.height, snap.bits.get(), snap.size)) {
+    LOG_ERR(kLogTag, "region snapshot write rejected: %d,%d %dx%d", rect.x, rect.y, rect.width, rect.height);
+    return false;
+  }
+  return true;
+}
+
+bool MapActivity::swapChrome() {
+  // Nothing was snapshotted (the screen never drew a full frame, or the heap said
+  // no), so there is no map to put back and the caller has to re-render.
+  if (!chromeFront_.bits) return false;
+  const Rect front = chromeFront_.rect;
+  const Rect side = chromeSide_.rect;
+
+  if (!restoreRegion(chromeFront_)) return false;
+  // The side boxes exist only in the mode that draws them, so an absent snapshot
+  // here is normal rather than a failure.
+  if (chromeSide_.bits) restoreRegion(chromeSide_);
+
+  // Draws whatever the mode wants over the restored map: the boxes, or the
+  // padlock, or nothing at all. The snapshots are deliberately kept -- their
+  // bits are still a clean picture of the map under these rectangles, so the
+  // next swap needs no new capture.
+  drawMapButtonHints();
+
+  // Two small windows, never one big one -- displayBufferWindow() allocates a
+  // buffer per window inside the driver and a full-panel window aborted the
+  // device on a map screen (measured 2026-08-17, see restoreMenuBackdrop()).
+  if (!windowRefreshAffordable(front.width, front.height) ||
+      !renderer.displayBufferWindow(front.x, front.y, front.width, front.height)) {
+    LOG_ERR(kLogTag, "chrome swap window rejected: %d,%d %dx%d", front.x, front.y, front.width, front.height);
+    return false;
+  }
+  if (side.width > 0 && (!windowRefreshAffordable(side.width, side.height) ||
+                         !renderer.displayBufferWindow(side.x, side.y, side.width, side.height))) {
+    LOG_ERR(kLogTag, "chrome swap side window rejected: %d,%d %dx%d", side.x, side.y, side.width, side.height);
+    return false;
+  }
+  return true;
 }
 
 bool MapActivity::captureMenuBackdrop() {
@@ -6372,6 +6454,20 @@ void MapActivity::renderViewport(int32_t latE7, int32_t lonE7, uint8_t headingSt
                                source_->bytesRead(), source_->waysFiltered());
   consoleState_.setZoomInfo(zoomStep(), range.z, MapViewport::kZoomLadder[zoomStep()].mpp);
   sendViewportDiagonalIfChanged();
+
+  // Snapshot what the chrome is about to cover, before it covers it. That is
+  // what lets a later lock/unlock swap the boxes for the padlock with two small
+  // window refreshes instead of re-rendering the map -- tiles off the card and
+  // a full-panel refresh for a change that touches two strips of chrome.
+  //
+  // The band is taken at chromeBandHeight(), the tallest chrome any mode draws,
+  // NOT at the current mode's height: the boxes are taller than the padlock
+  // strip, so a snapshot sized for the padlock would leave a sliver of stale box
+  // pixels above it, and e-ink holds that indefinitely.
+  const int chromeBand = UITheme::getInstance().chromeBandHeight();
+  captureRegion(chromeFront_,
+                Rect{0, renderer.getScreenHeight() - chromeBand, renderer.getScreenWidth(), chromeBand});
+  captureRegion(chromeSide_, GUI.sideButtonHintsRect(renderer));
 
   // Composited last, over the map's own bottom-edge pixels rather than into
   // reserved space -- same idea as the debug window at the top of the screen
