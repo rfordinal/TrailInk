@@ -134,6 +134,26 @@ a fixed cost and area does not enter into it** (measured over two ride replays,
 `map-follow.md`). So the thing to minimise is the number of refreshes, never
 their size.
 
+### The T5 S3 Pro is not the X4, and the number is twice as big
+
+**T5 S3 Pro, windowed refresh: ~1,081 ms** `[measured, 2026-09-05]`. Every
+figure above is the X4's.
+
+Instrument: the device's own `PowerTelemetry` counters over one 4 h 36 min
+walk, read out of `power.csv` afterwards -- `panel_busy_ms` 2,944,634 over
+`ref_window` 2,608 window refreshes plus 29 whole-panel ones, so the whole-panel
+share is under 1 % of the total. Per-refresh cost held between **1,049 and
+1,101 ms** across seven segments of that walk, so it does not drift with time,
+with battery state or with the evening temperature.
+
+The X4's 500 ms figure stays as measured. These are different panels and the
+cost is device-specific -- do not carry either number to a third board without
+measuring it there.
+
+The consequence for the rider is in [`map-follow.md`](map-follow.md), "A
+windowed refresh blocks the loop": at this cost the map's main loop spends up to
+a quarter of its wall clock inside a blocking panel call.
+
 ## The map never asks for a clean after entry
 
 Everything above is about picking the right mode per frame. There is a separate
@@ -206,5 +226,7 @@ unknown until someone runs a slope with the rails dropped.
 Sequence numbers, promotion rules and which caller uses what: **read off the
 source**, cited above. The 500 ms and 1,684 ms figures: **measured on the X4**,
 conditions above, one run each for `HALF` -- `FAST` has two ride replays behind
-it. `FULL`'s cost is **open**; timing it needs one deliberate `FULL` frame with
+it. The T5 S3 Pro's 1,081 ms windowed figure: **measured on
+that board**, one walk, 2,608 refreshes behind it, and it is an average over the
+run rather than a single timed frame. `FULL`'s cost is **open**; timing it needs one deliberate `FULL` frame with
 the log open, and nothing in the tree wants one.
