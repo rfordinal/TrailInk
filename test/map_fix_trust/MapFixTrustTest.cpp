@@ -50,23 +50,6 @@ TEST(MapFixTrustPos, FirstStatedFixInsideTheBandStartsTrusted) {
   EXPECT_EQ(MapFixTrust::posTrustFor(20, state), Pos::Trusted);
 }
 
-TEST(MapFixTrustDir, StepsAreTheRendersOwnResolution) {
-  // One heading step is 22.5 degrees, so a sharp glyph already claims +-11.25.
-  EXPECT_EQ(MapFixTrust::dirTrustFromDegrees(0, true), Dir::Good);
-  EXPECT_EQ(MapFixTrust::dirTrustFromDegrees(22, true), Dir::Good);
-  EXPECT_EQ(MapFixTrust::dirTrustFromDegrees(23, true), Dir::Coarse);
-  EXPECT_EQ(MapFixTrust::dirTrustFromDegrees(67, true), Dir::Coarse);
-  EXPECT_EQ(MapFixTrust::dirTrustFromDegrees(68, true), Dir::Unknown);
-  EXPECT_EQ(MapFixTrust::dirTrustFromDegrees(360, true), Dir::Unknown);
-}
-
-TEST(MapFixTrustDir, NoFigureIsNotTheSameAsNoHeading) {
-  // Unstated draws today's glyph; Unknown draws nothing. Collapsing them would
-  // strip the heading off every phone that has not shipped the new flags yet.
-  EXPECT_EQ(MapFixTrust::dirTrustFromDegrees(0, false), Dir::Unstated);
-  EXPECT_NE(MapFixTrust::dirTrustFromDegrees(0, false), Dir::Unknown);
-}
-
 TEST(MapFixTrustWire, ZeroMeansUnstatedSoAnOldClientIsUnchanged) {
   // The whole back-compatibility argument is this one line: a phone that
   // writes no bits lands on Unstated, which draws the marker it always drew.

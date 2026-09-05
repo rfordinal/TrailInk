@@ -96,20 +96,20 @@ inline constexpr uint16_t kTrustedAtOrBelowM = 18;
 // is written down here rather than left as an accident of the encoder.
 inline constexpr uint16_t kAccuracyUnstated = 0;
 
-// ## The heading thresholds
+// ## There is no degrees-to-state mapping here, on purpose
 //
-// The render has 16 heading steps of 22.5 degrees (MapHeading), and that is the
-// finest thing it can draw. So:
+// The render has 16 heading steps of 22.5 degrees (MapHeading) and nothing
+// finer, which is why the wedge is one step either side and why **a sharp arrow
+// is already a claim of +-11.25 degrees** whether or not anybody decided to
+// make it. That arithmetic belongs to the drawing, not to this file.
 //
-//   - within one step, the glyph pointing at that step is honest       -> Good
-//   - within about three steps, only a neighbourhood is honest         -> Coarse
-//   - wider than that, there is nothing to draw                        -> Unknown
-//
-// Note what falls out of this: **a sharp arrow is already a claim of +-11.25
-// degrees**, whether or not anybody decided to make it. The wedge is not the
-// device becoming vaguer, it is the device stopping over-claiming.
-inline constexpr uint16_t kDirGoodMaxDeg = 22;    // one step
-inline constexpr uint16_t kDirCoarseMaxDeg = 67;  // three steps
+// A `dirTrustFromDegrees()` stood here until it was noticed that no source can
+// feed it. The phone does not send a bearing accuracy -- its heading is a
+// conclusion its own trend gate either reached or did not, so it produces Good
+// or Unknown and never a degree figure. A GNSS receiver reports a course and no
+// uncertainty for it, so its state comes from the speed gate
+// (MapGnssHeading::State::moving), also not from degrees. An API with no
+// possible caller is a guess about the future dressed as a contract.
 
 // Carried between fixes by the caller, exactly like MapGnssHeading::State: the
 // hysteresis needs to know which side of the band it was on. Only position has
@@ -126,11 +126,6 @@ struct State {
 // resolves to Pos::Unstated and never latches, so a source that reports
 // accuracy on some fixes and not others does not drag the ring back and forth.
 Pos posTrustFor(uint16_t accuracyM, State& state);
-
-// The glyph's verdict, from a bearing accuracy in degrees. `stated` false means
-// the source has no figure, which is Dir::Unstated rather than Dir::Unknown --
-// see the Pos::Unstated note above for why those must stay apart.
-Dir dirTrustFromDegrees(uint16_t degrees, bool stated);
 
 // ## The wire
 //

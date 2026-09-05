@@ -14,7 +14,7 @@ channel.
 | position, trusted | whole ring |
 | position, loose | ring broken into 8 arcs |
 | heading, good | today's hand (hike) or arrow (cycle/ride) |
-| heading, coarse | outlined wedge, one heading step either side |
+| heading, coarse | outlined wedge, one heading step either side. Device receiver only -- the phone cannot honestly produce this state, see below |
 | heading, unknown | nothing |
 
 The two are independent. A loose position with a good heading draws a broken
@@ -172,27 +172,50 @@ directions. Heading quality goes in two spare flag bits instead:
 `accuracy` was already crossing the link and being thrown away after a log line.
 It is now the first real consumer of that byte.
 
-## The phone does not send a bearing accuracy, on purpose
+## The phone sends two states, the device's own receiver sends three
 
-Android has `Location.getBearingAccuracyDegrees()` and the app must **not** use
-it here. The heading the app sends is not the fix's bearing at all -- it is the
-trend across a window of recent positions (`HeadingTrend`), because the phone
-rides in a backpack and its own orientation says nothing about direction of
-travel. A bearing accuracy describes a number the app does not send.
+**The phone never sends `coarse`, and that is correct rather than a gap.**
 
-The right figure is the trend's own **spread**: the worst leg-to-leg
-disagreement against the overall trend, which `HeadingTrend` already computes
-and used to discard. Within one heading step it is `good`, wider it is
-`coarse`.
+Its heading is not a reading, it is a **conclusion**. `HeadingTrend` returns one
+only when a window of recent fixes covered real ground and its legs agreed with
+the overall trend; anything less returns nothing. So a heading that exists on
+the phone has already passed the phone's own test and has earned the sharp
+arrow. There is no half-believed heading for it to report, and sending `coarse`
+would be inventing a doubt the app does not hold.
 
-Staleness is the other half. When the window stops being a confident trend the
-app keeps the last bearing rather than snapping to north -- correct, but it used
-to be silent, so the device redrew the same sharp arrow whether the trend was
-fresh or minutes old. Now it decays: `good` or `coarse` while fresh, `coarse`
-after 10 s, `unknown` after 45 s. **Both timers are first cuts and neither has
-been judged on a ride.** They exist to stop two failures at once -- an arrow
-still pointing somewhere long after the rider stopped, and an arrow that
-vanishes at every traffic light, each change costing a ~500 ms refresh.
+An earlier cut of this had the phone grade its own trend by spread -- tight
+means `good`, loose means `coarse`. That was wrong twice over: the spread is
+already gated at 45 degrees before a trend is returned at all, so grading it
+again second-guesses a decision the app has made, and it put a state on the
+wire that the source cannot honestly distinguish.
+
+`coarse` belongs to the **device's own receiver**, where a course is an
+instantaneous NMEA reading rather than a conclusion and can genuinely be
+half-trusted.
+
+Android's `Location.getBearingAccuracyDegrees()` is also unused here, for a
+different reason: the heading the phone sends is not the fix's bearing at all
+(the phone rides in a backpack), so that figure describes a number the app does
+not send.
+
+### Staleness is the phone's only real question
+
+When the window stops being a confident trend the app keeps the last bearing
+rather than snapping to north. Right while the rider is briefly stopped, wrong
+once they have been standing a while -- at that point there is effectively no
+heading. `STALE_HEADING_MS` is where one becomes the other, currently **90 s**,
+a first cut that has **not been judged on a ride**. It sits between an arrow
+still pointing somewhere long after the rider parked and an arrow that vanishes
+at every traffic light, each change costing a ~500 ms refresh. The trend itself
+disappears within about 5 s of stopping, so the timer runs from "stopped
+moving", not from "stopped sending".
+
+**The decay needs its own send reason to work at all.** Every other trigger in
+the phone's send policy is driven by movement, and a parked phone sends nothing
+until the hourly keepalive -- so the device would hold the last arrow for up to
+an hour after the timer expired. `SendPolicy.Reason.HEADING_LOST` sends that one
+packet. It fires at most once per stop, waits out the send floor like everything
+else, and loses to `moved`, which carries the same new state anyway.
 
 ## GNSS: what this can and cannot catch
 
@@ -232,7 +255,7 @@ miss it, and the missing heading will catch it.
   the coarse rungs, and whether a hike marker with no heading is confusable
   with the sleep marker (same ring-plus-dot shape, half the size). Those are
   panel questions and go through `style_watch.py` or the simulator.
-- **Not verified on a ride:** the phone's two staleness timers, and the whole
+- **Not verified on a ride:** the phone's 90 s staleness timer, and the whole
   GNSS accuracy mapping, which does not exist yet.
 
 ## Bench recipe

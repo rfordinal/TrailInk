@@ -26,13 +26,6 @@ Pos posTrustFor(uint16_t accuracyM, State& state) {
   return state.pos;
 }
 
-Dir dirTrustFromDegrees(uint16_t degrees, bool stated) {
-  if (!stated) return Dir::Unstated;
-  if (degrees <= kDirGoodMaxDeg) return Dir::Good;
-  if (degrees <= kDirCoarseMaxDeg) return Dir::Coarse;
-  return Dir::Unknown;
-}
-
 Dir dirTrustFromWireCode(uint8_t code) {
   switch (code & 0x03) {
     case 1:
