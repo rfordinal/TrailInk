@@ -175,11 +175,47 @@ The home key carries three gestures:
 
 **The single tap has to wait, and that is the price of the double tap.**
 `MappedInputManager::pumpHomeKey()` holds the first tap for
-`HOME_KEY_DOUBLE_TAP_WINDOW_MS` (300 ms) and then decides: no second tap means
+`HOME_KEY_DOUBLE_TAP_WINDOW_MS` (500 ms) and then decides: no second tap means
 Confirm, a second tap means the lock and the held Confirm is dropped. Firing
 Confirm on arrival cannot work — it would activate whatever the cursor was on
 before the second tap could mean the lock instead, and a select cannot be taken
-back. 300 ms is small against a panel refresh measured in whole seconds.
+back. Half a second is still small against a panel refresh measured in whole
+seconds.
+
+### The key produces more events than the rider makes gestures
+
+**Measured on hardware 2026-09-05.** One double tap on the Home screen locked the
+panel, opened the map, *and* lit the frontlight once the map finished rendering.
+All three gestures, from one gesture. The cause is in how the GT911's key is
+read, and it cannot be fixed from this repo:
+
+`InputManager::pollGt911()` takes the key's **press/release edges only from a
+fresh touch frame** (the `status & 0x80` gate) but runs the **hold timer from a
+latched down-state above that gate**. That split is deliberate -- a motionless
+hold stops producing frames, so a gated timer would never cross the threshold --
+but it means a *missed release edge* leaves the key latched down, and the hold
+then fires from a press that was already spent as a tap. A map render blocks the
+main loop for seconds, so the stale hold surfaced the moment polling resumed.
+
+The same coarse sampling explains the rest: a deliberate double tap regularly
+landed outside a 300 ms window, and one physical double tap has produced **three**
+tap events, the third of which started a fresh single-tap window and selected.
+
+Three filters in `pumpHomeKey()`, all of them our side of a noisy source:
+
+- **The window is 500 ms**, not 300. The second tap is seen later than the finger
+  made it.
+- **A refractory window of 500 ms after any resolved gesture.** A tap arriving
+  inside it is the tail of a gesture already answered, not a new one.
+- **A hold is believed only while no tap has been made of the current press**
+  (`homeTapConsumedSinceDown`, cleared on each press edge). That is what rejects
+  the stale hold.
+
+Residual risk, stated rather than hidden: if the SDK ever missed a *press* edge
+while this layer had consumed a tap, a genuine hold would be rejected. The press
+edge is what starts the SDK's own hold timer, so a hold cannot fire without one
+having been seen there -- but this layer only sees it if something queries input
+that frame.
 
 Three details in that machine:
 

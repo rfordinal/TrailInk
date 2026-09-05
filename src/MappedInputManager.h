@@ -70,6 +70,9 @@ class MappedInputManager {
   // a board where that gesture means something (TouchPolicy::homeKeyDoubleTapLocksTouch());
   // elsewhere the key has no double tap and this is always false.
   bool wasHomeKeyDoubleTap() const;
+  // The home key's hold, filtered. Not gpio.wasHomeKeyLongPressed() directly:
+  // that event can arrive from a press this layer has already resolved as a tap.
+  bool wasHomeKeyLongPress() const;
   bool wasMenuGesture() const;
   bool wasAnyPressed() const;
   bool wasAnyReleased() const;
@@ -151,6 +154,16 @@ class MappedInputManager {
   mutable unsigned long homeTapPendingSince = 0;  // 0 = no tap waiting
   mutable bool homeConfirmResolved = false;       // this frame: the single tap won
   mutable bool homeDoubleTapResolved = false;     // this frame: the second tap won
+  mutable bool homeLongResolved = false;          // this frame: a hold this layer believes in
+  // Ignore further taps until this time. One physical double tap has produced
+  // three tap events on hardware, and the third one started a fresh single-tap
+  // window that then selected -- a lock and an activation from one gesture.
+  mutable unsigned long homeRefractoryUntil = 0;
+  // Whether a tap has already been made of the press the key is currently
+  // holding. The SDK fires its hold from a latched down-state that survives a
+  // missed release edge, so a hold can arrive seconds after the gesture it
+  // belongs to was already spent -- see pumpHomeKey().
+  mutable bool homeTapConsumedSinceDown = false;
   mutable uint8_t hintDownButton = kNoHintButton;
   mutable uint8_t hintPressedButton = kNoHintButton;
   mutable uint8_t hintReleasedButton = kNoHintButton;

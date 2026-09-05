@@ -123,10 +123,16 @@ constexpr float TOP_EDGE_MENU_GESTURE_FRAC_Y = 0.14f;
 constexpr unsigned long TOUCH_DOWN_SELECT_DELAY_MS = 90;
 constexpr unsigned long TOUCH_HELD_OVERRIDE_WINDOW_MS = 250;
 // How long the home key's single tap waits to find out whether a second one is
-// coming. Short enough that Confirm through this key does not feel laggy against
-// a panel refresh measured in whole seconds, long enough for a deliberate double
-// tap by a rider wearing gloves.
-constexpr unsigned long HOME_KEY_DOUBLE_TAP_WINDOW_MS = 300;
+// coming. 300 ms was too short on hardware: a deliberate double tap regularly
+// landed outside it and read as two separate selects. The GT911 reports this key
+// only on a fresh touch frame (InputManager::pollGt911, the 0x80 gate), so the
+// second tap is seen later than the finger made it.
+constexpr unsigned long HOME_KEY_DOUBLE_TAP_WINDOW_MS = 500;
+// After a gesture resolves, ignore the key for this long. One physical double
+// tap has produced three tap events on hardware, and without this the third
+// started a fresh single-tap window that then selected -- the rider got a lock
+// and an activation from one gesture.
+constexpr unsigned long HOME_KEY_REFRACTORY_MS = 500;
 }  // namespace
 
 bool MappedInputManager::hasTouch() const { return gpio.hasTouch(); }
@@ -147,27 +153,54 @@ void MappedInputManager::ensureHintTouchPumped() const {
 void MappedInputManager::pumpHomeKey() const {
   homeConfirmResolved = false;
   homeDoubleTapResolved = false;
+  homeLongResolved = false;
+
+  const unsigned long now = millis();
+
+  // A press edge means a new hold has begun, so whatever was made of the last
+  // one no longer applies.
+  if (gpio.wasHomeKeyPressed()) homeTapConsumedSinceDown = false;
+
   if (!TouchPolicy::homeKeyDoubleTapLocksTouch()) {
     homeTapPendingSince = 0;
+    homeLongResolved = gpio.wasHomeKeyLongPressed();
     return;
   }
 
-  // A hold ends any pending tap. The SDK suppresses the hold's own release tap
-  // (InputManager::serviceTouch), so without this a tap-then-hold would light the
-  // frontlight and then still select once the window ran out.
+  // The hold, filtered. The SDK fires it from a latched down-state read BEFORE
+  // its fresh-frame gate (InputManager::pollGt911), on purpose -- a motionless
+  // hold stops producing frames, so the timer could not run otherwise. The cost
+  // is that a MISSED release edge leaves that state latched, and the hold then
+  // fires from a press this layer already turned into a tap. Measured on
+  // hardware: one double tap locked the panel, selected, and then lit the
+  // frontlight seconds later when a map render let polling resume.
+  //
+  // So a hold is only believed while no tap has been made of the current press.
   if (gpio.wasHomeKeyLongPressed()) {
     homeTapPendingSince = 0;
+    if (!homeTapConsumedSinceDown) {
+      homeLongResolved = true;
+      homeRefractoryUntil = now + HOME_KEY_REFRACTORY_MS;
+    }
     return;
   }
 
   if (gpio.wasHomeKeyTapped()) {
+    homeTapConsumedSinceDown = true;
+    // Inside the refractory window this is the tail of a gesture already
+    // resolved, not a new one.
+    if (homeRefractoryUntil != 0 && static_cast<long>(now - homeRefractoryUntil) < 0) {
+      homeTapPendingSince = 0;
+      return;
+    }
     if (homeTapPendingSince != 0) {
       // Second tap inside the window: the lock is what was asked for, and the
       // held Confirm is dropped rather than fired first.
       homeTapPendingSince = 0;
       homeDoubleTapResolved = true;
+      homeRefractoryUntil = now + HOME_KEY_REFRACTORY_MS;
     } else {
-      homeTapPendingSince = millis();
+      homeTapPendingSince = now;
       // millis() can be 0 for one tick after boot, and 0 is this field's "no tap
       // waiting". One tick later is close enough and keeps the sentinel honest.
       if (homeTapPendingSince == 0) homeTapPendingSince = 1;
@@ -179,9 +212,10 @@ void MappedInputManager::pumpHomeKey() const {
   // makes this frame, which is every loop in practice -- an activity that asked
   // for no input at all would hold the Confirm a little longer, and would also
   // have nothing to do with it.
-  if (homeTapPendingSince != 0 && millis() - homeTapPendingSince >= HOME_KEY_DOUBLE_TAP_WINDOW_MS) {
+  if (homeTapPendingSince != 0 && now - homeTapPendingSince >= HOME_KEY_DOUBLE_TAP_WINDOW_MS) {
     homeTapPendingSince = 0;
     homeConfirmResolved = true;
+    homeRefractoryUntil = now + HOME_KEY_REFRACTORY_MS;
   }
 }
 
@@ -491,6 +525,11 @@ bool MappedInputManager::wasHomeKeyConfirm() const {
 bool MappedInputManager::wasHomeKeyDoubleTap() const {
   ensureHintTouchPumped();
   return homeDoubleTapResolved;
+}
+
+bool MappedInputManager::wasHomeKeyLongPress() const {
+  ensureHintTouchPumped();
+  return homeLongResolved;
 }
 
 bool MappedInputManager::wasPressed(const Button button) const {

@@ -1062,7 +1062,12 @@ void loop() {
   // every screen has it, and before activityManager.loop() so the screen on top
   // cannot consume it first. The SDK suppresses the key's tap once the hold
   // fires (InputManager::serviceTouch), so a hold never also selects.
-  if (gpio.wasHomeKeyLongPressed()) {
+  // Through MappedInputManager, not gpio: the SDK's hold fires from a latched
+  // down-state that survives a missed release edge, so the raw event can arrive
+  // from a press already spent as a tap. That is how one double tap on Home
+  // locked the panel, opened the map, and lit the frontlight when the map
+  // finished rendering (measured 2026-09-05).
+  if (mappedInputManager.wasHomeKeyLongPress()) {
     toggleFrontlight("Home key hold");
   }
 #if FREEINK_DEVICE_LILYGO
