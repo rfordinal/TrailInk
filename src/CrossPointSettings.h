@@ -204,8 +204,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // touchable -- the rest of the glass is dead, so the panel can be held,
   // wiped or rained on without the UI moving. OFF is hardware buttons only.
   //
-  // BUTTONS and OFF both draw the boxes, because on a board with no keys under
-  // the glass the boxes are the only thing naming what the input does.
+  // Only BUTTONS draws the boxes. Their presence is the whole indication of
+  // which mode is on, which matters on a board whose only other feedback would
+  // be tapping something and watching for nothing to happen.
   enum TOUCH_MODE { TOUCH_ANYWHERE = 0, TOUCH_BUTTONS_ONLY = 1, TOUCH_DISABLED = 2, TOUCH_MODE_COUNT };
 
   enum QUICK_RESUME_SLEEP_SCREEN {

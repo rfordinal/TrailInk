@@ -26,14 +26,16 @@ row otherwise.
 |---|---|---|
 | `TOUCH_ANYWHERE` (0, default) | no | everything: list rows, swipes, edge gestures, map drag |
 | `TOUCH_BUTTONS_ONLY` (1) | yes | only the six boxes, each acting as its hardware button |
-| `TOUCH_DISABLED` (2) | yes | nothing, and touch stops counting as user activity |
+| `TOUCH_DISABLED` (2) | no | nothing, and touch stops counting as user activity |
 
 Default is `TOUCH_ANYWHERE`, so a device that was already in use behaves exactly
 as it did before the setting existed.
 
-Both non-default modes draw the boxes. On a board with no keys under the glass
-the box *is* the button, so hiding it would leave the mode unusable; on an X4 the
-box labels the key beneath it, which is what it always did.
+**Only BUTTONS draws the boxes, and that is the indication of which mode is on.**
+Drawing them in OFF too would put six buttons on the glass that do nothing, and
+on a board with no keys under them the labels would name keys that are not there.
+A board with no digitizer draws them always: there the box labels the physical
+key beneath it, which is what it always did.
 
 ## Where the decision lives
 

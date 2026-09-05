@@ -34,8 +34,13 @@ inline bool touchHintBoxes() { return panelPresent() && mode() == CrossPointSett
 inline bool touchActive() { return panelPresent() && mode() != CrossPointSettings::TOUCH_DISABLED; }
 
 // Whether the six hint boxes are drawn, and whether the layout must reserve
-// room for them. True on every board without a digitizer (an X4 labels its
-// physical keys this way) and on a touch board in BUTTONS or OFF.
-inline bool hintsVisible() { return !panelPresent() || mode() != CrossPointSettings::TOUCH_ANYWHERE; }
+// room for them. Always true on a board without a digitizer -- an X4 labels its
+// physical keys this way and has no touch policy to speak of.
+//
+// On a touch board only BUTTONS draws them, and that is the whole feedback for
+// which mode is on: boxes on screen means the boxes are live. Drawing them in
+// OFF as well would put six buttons on the glass that do nothing, and on a board
+// with no keys under them the labels would name keys that are not there.
+inline bool hintsVisible() { return !panelPresent() || mode() == CrossPointSettings::TOUCH_BUTTONS_ONLY; }
 
 }  // namespace TouchPolicy
