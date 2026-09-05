@@ -991,6 +991,15 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // that has not had a fix yet, both look like they always did.
   MapFixTrust::Trust trust_{};
   MapFixTrust::State trustState_{};
+  // What the marker on the panel is actually claiming right now, recorded where
+  // it is painted -- the same pattern as markerBoxDrawn_ and for the same
+  // reason: the answer has to come from the frame, not from live state that may
+  // have moved on since.
+  //
+  // A fix that lands under the move floor Skips and never touches the panel, so
+  // without this a parked rider whose heading went stale or whose fix degraded
+  // would keep the old marker forever.
+  MapFixTrust::MarkerStyle markerStyleDrawn_{};
   // With a route loaded, the frame's "up" is the route's own direction and stays
   // that way for every reset -- docs/route-navigation.md, "The decision". Taken
   // from MapRouteFit, which measures the route's point set per heading and breaks

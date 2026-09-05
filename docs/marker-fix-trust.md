@@ -238,23 +238,91 @@ even then it will be optimistic. **`[open]` -- it needs a ride under real sky.**
 Which means the honest summary for a bad indoor fix is: the broken ring will
 miss it, and the missing heading will catch it.
 
+## A quality change alone has to repaint, and it did not
+
+Found in the simulator 2026-09-05, before any of this reached a panel.
+
+`MapFollow::decide()` answers `Skip` for a fix that lands under the move floor,
+and `Skip` does not touch the panel. So a rider standing still -- whose heading
+has gone stale, or whose fix has just degraded in a street canyon -- produced
+fixes that updated `trust_` and changed nothing on screen. The marker kept
+claiming what it claimed before, for as long as they stood there. Which is
+exactly the case this whole feature exists for.
+
+`Request::markerStyleChanged` fixes it: checked **inside** the move-floor
+branch, so a fix that moves far enough is untouched (it already repaints and
+picks up the new shape on the way) and a re-anchor is never downgraded to a
+marker move. Only the fix that would have changed nothing is rescued, and it
+gets its own reason, `TrustChanged`, so the log says why the panel moved.
+
+`markerStyleDrawn_` records what the marker on the panel is claiming, recorded
+where it is painted -- the same pattern as `markerBoxDrawn_` and for the same
+reason: the answer has to come from the frame, not from live state that may
+have moved on since.
+
+This is the device-side twin of the phone's `HEADING_LOST` send reason. Both
+are the same mistake caught twice: **the feature is about a rider who is not
+moving, and every existing path is driven by movement.**
+
+## What the simulator showed
+
+`docs/images/marker-fix-trust/` holds the frames, 1:1, 80x80 crops of the
+marker out of real 480x800 renders. Hike mode, Trnava, the local CDN mirror.
+
+- `states-rung2-1to1.png` -- rung 2, ring 54 px. Five states left to right:
+  whole+hand, broken+hand, broken+wedge, broken+none, whole+none. **All five
+  are distinct and the broken ring reads as broken.**
+- `states-rung6-1to1.png` -- rung 6, ring 33 px. whole+hand, broken+hand,
+  broken+wedge, broken+none.
+- `trust-change-repaint-1to1.png` -- two real BLE packets at the **same
+  position**, the second with heading quality dropped to unknown. The second
+  would have been a `Skip` before the fix above; the arrow is gone in the
+  second frame.
+
+Ink measured between those frames, which is what pins down that each shape is
+actually being drawn rather than merely believed:
+
+| difference | rung 2 | rung 6 |
+|---|---|---|
+| eight ring gaps | 157 px | 109 px |
+| the hike hand | 73 px | 44 px |
+| the wedge, against no heading at all | 43 px | **25 px** |
+
+**The wedge at rung 6 is the weak one.** Its reach there is 14 px against a
+dot radius of 5, so nine pixels of line per edge, and 25 px of ink total. It is
+present and it differs, and whether it *reads* as a region rather than as a
+smudge is a question for the glass.
+
+An earlier run appeared to show the wedge not drawing at all -- `broken+wedge`
+came out pixel-identical to `broken+none`. It was a measurement artifact, not a
+bug: a console `pos` reply that nobody is listening for stalls the redraw for
+3 seconds (`[BLEPOS] reply unconfirmed after 3000 ms`), so every timed
+screenshot had captured the *previous* command's state. One simulator run per
+state removes the coupling. Worth knowing before trusting any timed capture on
+this path.
+
 ## What is verified and what is not
 
 - **Verified on the host:** the arithmetic and every state transition,
   `test/map_fix_trust` (10 tests), plus the packing on the phone side.
 - **Verified by compiler:** the wedge and the ring gaps stay inside the patch
   box (`markerHandFitsAtEveryRung`, `static_assert`).
+- **Verified in the simulator 2026-09-05:** every state renders and all of them
+  are distinct, at rung 2 and rung 6; a trust change on a stationary fix
+  repaints. See the section above.
 - **No host preview can show any of this.** `test/map_preview` and the webapp's
   `firmware` panel draw `MapRenderer::drawMarker()`, a deliberately mode-less
   puck for callers with no hike/cycle/ride distinction -- `MapActivity` does not
   call it, and `drawPositionMarker()` is not reachable from any host tool. So
   the shapes need the simulator or the device; there is no two-second preview
   loop for them the way there is for the map style.
-- **Not verified on a panel:** every shape. Whether the eight gaps read as a
-  broken ring rather than a damaged one, whether the outlined wedge reads at
-  the coarse rungs, and whether a hike marker with no heading is confusable
-  with the sleep marker (same ring-plus-dot shape, half the size). Those are
-  panel questions and go through `style_watch.py` or the simulator.
+- **Not verified on a panel:** how the shapes *read*. The simulator proves they
+  are drawn and distinct; it cannot answer whether the eight gaps read as a
+  broken ring rather than a damaged one, whether the wedge reads as a region at
+  rung 6 (25 px of ink), or whether a hike marker with no heading is confusable
+  with the sleep marker -- same ring-plus-dot shape, half the size. E-ink
+  contrast and viewing distance decide all three, and an SDL window decides
+  none of them.
 - **Not verified on a ride:** the phone's 90 s staleness timer, and the whole
   GNSS accuracy mapping, which does not exist yet.
 

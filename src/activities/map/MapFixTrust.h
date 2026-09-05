@@ -158,6 +158,12 @@ struct MarkerStyle {
     None,   // no heading mark at all
   };
   Head head = Head::Glyph;
+
+  // So a caller can ask "is the marker on the panel still claiming what this
+  // fix claims". MapActivity needs exactly that to know whether a fix under the
+  // move floor still has to repaint (MapFollow::Request::markerStyleChanged).
+  bool operator==(const MarkerStyle& other) const { return ringBroken == other.ringBroken && head == other.head; }
+  bool operator!=(const MarkerStyle& other) const { return !(*this == other); }
 };
 
 MarkerStyle styleFor(Trust trust);

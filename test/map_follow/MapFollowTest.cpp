@@ -23,6 +23,42 @@ MapFollow::Request baseRequest() {
   return request;
 }
 
+TEST(MapFollowTrust, AStyleChangeRescuesAFixThatWouldOtherwiseSkip) {
+  // The rider is parked: the fix lands on the marker, well under the move
+  // floor. Normally that is a Skip and the panel is not touched.
+  MapFollow::Request request = baseRequest();
+  MapFollow::Reason reason = MapFollow::Reason::None;
+  EXPECT_EQ(MapFollow::decide(request, reason), MapFollow::Action::Skip);
+  EXPECT_EQ(reason, MapFollow::Reason::BelowMoveFloor);
+
+  // Same fix, but the marker may no longer claim what it is drawing -- the
+  // heading went stale, or the fix degraded in a street canyon. Repaint it, or
+  // the marker keeps the old claim for as long as the rider stands still,
+  // which is exactly when the change matters.
+  request.markerStyleChanged = true;
+  EXPECT_EQ(MapFollow::decide(request, reason), MapFollow::Action::MoveMarker);
+  EXPECT_EQ(reason, MapFollow::Reason::TrustChanged);
+}
+
+TEST(MapFollowTrust, AStyleChangeDoesNotOverrideARealReason) {
+  // A fix that moves far enough already repaints and picks the new shape up on
+  // the way, so the flag must not steal its reason...
+  MapFollow::Request request = baseRequest();
+  request.markerStyleChanged = true;
+  request.fixX = static_cast<int16_t>(request.drawnX + 60);
+  MapFollow::Reason reason = MapFollow::Reason::None;
+  EXPECT_EQ(MapFollow::decide(request, reason), MapFollow::Action::MoveMarker);
+  EXPECT_EQ(reason, MapFollow::Reason::Moved);
+
+  // ...and it must never downgrade a re-anchor to a marker move. A spent
+  // ghosting budget still needs a clean frame.
+  MapFollow::Request budget = baseRequest();
+  budget.markerStyleChanged = true;
+  budget.partialMoves = budget.partialMoveBudget;
+  EXPECT_EQ(MapFollow::decide(budget, reason), MapFollow::Action::ReAnchor);
+  EXPECT_EQ(reason, MapFollow::Reason::Budget);
+}
+
 TEST(MapFollowHeading, DriftWraps) {
   EXPECT_EQ(MapFollow::headingDriftSteps(0, 0), 0);
   EXPECT_EQ(MapFollow::headingDriftSteps(1, 0), 1);

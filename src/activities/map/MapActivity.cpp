@@ -559,6 +559,7 @@ void MapActivity::drawPositionMarker(int cx, int cy, uint8_t headingStep, MapRid
   // moment the marker is painted, so markerRect() erases exactly what was drawn
   // even if the rung changed in between.
   markerBoxDrawn_ = static_cast<int16_t>(m.box);
+  markerStyleDrawn_ = style;
   const int radius = m.ring / 2;
   // White halo first: the ring is only a 2px stroke, so without this the
   // map lines it sits over would show straight through its interior, and a
@@ -5319,6 +5320,10 @@ void MapActivity::applyFix(int32_t latE7, int32_t lonE7, uint8_t headingStep, ui
   // what a pixel is worth in ground metres, and how big the marker is, are the
   // two things that change down the ladder (MapViewport::ZoomStep::minMovePx,
   // MarkerMetrics::ring).
+  // The marker on the panel against what this fix would draw. Compared here
+  // rather than inside decide(), which is pure arithmetic and has no business
+  // knowing what a MarkerStyle is.
+  request.markerStyleChanged = markerStyle() != markerStyleDrawn_;
   request.minMovePx = static_cast<int16_t>(MapViewport::zoomStepAt(zoomStep()).minMovePx);
   request.keepInMarginPx = static_cast<int16_t>(markerMetrics().ring + MapFollow::kKeepInSlackPx);
 

@@ -357,6 +357,16 @@ The question is "where does this fix fall in the picture already up". Then
 | `MoveMarker` | Restore the patch, redraw the marker, windowed refresh | one small waveform |
 | `ReAnchor` | Full `renderViewport()` | tiles + full frame + full waveform |
 
+**One exception to `Skip`, added 2026-09-05.** A fix under the move floor still
+repaints when `Request::markerStyleChanged` is set, with reason `TrustChanged`.
+The marker now says how much it knows about the fix
+(`marker-fix-trust.md`) and a rider standing still is exactly when that changes:
+their heading goes stale, or their fix degrades in a street canyon. Every other
+path here is driven by movement, so without this the marker would keep the old
+claim for as long as they stood there. The check sits **inside** the move-floor
+branch, so a fix that moves far enough keeps its own reason and a re-anchor is
+never downgraded.
+
 The checks, in order (order is load-bearing -- see below):
 
 1. **Heading drift ≥ 4 steps (90°), and at least 2 partial moves since the last
