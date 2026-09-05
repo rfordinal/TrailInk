@@ -67,7 +67,9 @@ const ThemeMetrics& UITheme::getMetrics() const {
       // portrait screen. On a bigger panel an unscaled 40px band is a 4mm tap
       // target at ~234 PPI -- too small for a finger, and on these boards the
       // boxes are the only buttons there are.
-      adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetric(adjustedMetrics.buttonHintsHeight);
+      // Each along its own axis: the band's height follows the taller screen
+      // dimension, the side boxes' width the wider one.
+      adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetricY(adjustedMetrics.buttonHintsHeight);
       adjustedMetrics.sideButtonHintsWidth = HintGeometry::scaleMetric(adjustedMetrics.sideButtonHintsWidth);
     } else {
       adjustedMetrics.buttonHintsHeight = 0;
