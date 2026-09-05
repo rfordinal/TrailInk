@@ -196,6 +196,19 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
 
   enum TOUCH_READER_CONTROLS { TOUCH_READER_OFF = 0, TOUCH_READER_ON = 1, TOUCH_READER_CONTROLS_COUNT };
 
+  // What a touch panel is allowed to do. Only offered on boards that have one.
+  //
+  // ANYWHERE is what a touch board did before this setting existed: no hint
+  // boxes are drawn and every list row, gesture and swipe is live. BUTTONS
+  // draws the same six hint boxes an X4 draws and makes *only* those boxes
+  // touchable -- the rest of the glass is dead, so the panel can be held,
+  // wiped or rained on without the UI moving. OFF is hardware buttons only.
+  //
+  // Only BUTTONS draws the boxes. Their presence is the whole indication of
+  // which mode is on, which matters on a board whose only other feedback would
+  // be tapping something and watching for nothing to happen.
+  enum TOUCH_MODE { TOUCH_ANYWHERE = 0, TOUCH_BUTTONS_ONLY = 1, TOUCH_DISABLED = 2, TOUCH_MODE_COUNT };
+
   enum QUICK_RESUME_SLEEP_SCREEN {
     QUICK_RESUME_NEVER = 0,
     QUICK_RESUME_AFTER_TIMEOUT = 1,
@@ -444,6 +457,9 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t tiltPageTurn = TILT_OFF;
   // Touch screen reader zones/gestures on boards with a touch controller.
   uint8_t touchReaderControls = TOUCH_READER_ON;
+  // Touch policy on boards with a touch controller (TOUCH_MODE). Defaults to
+  // ANYWHERE so an existing device behaves exactly as it did before the setting.
+  uint8_t touchMode = TOUCH_ANYWHERE;
   // Language setting (Language enum index, default 0 = EN)
   uint8_t language = 0;
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.

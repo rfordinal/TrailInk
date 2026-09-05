@@ -379,6 +379,11 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
                           {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS),
+        // Touch policy. Dropped below on a board with no digitizer, where it
+        // would offer a choice between three identical behaviours.
+        SettingInfo::Enum(StrId::STR_TOUCH_MODE, &CrossPointSettings::touchMode,
+                          {StrId::STR_TOUCH_MODE_ANYWHERE, StrId::STR_TOUCH_MODE_BUTTONS, StrId::STR_STATE_OFF},
+                          "touchMode", StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
                             "frontButtonFollowOrientation", StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
@@ -516,7 +521,9 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
   std::vector<SettingInfo> v = baseList;
   if (!BoardConfig::hasTouch()) {
     v.erase(std::remove_if(v.begin(), v.end(),
-                           [](const SettingInfo& s) { return s.nameId == StrId::STR_TOUCH_READER_CONTROLS; }),
+                           [](const SettingInfo& s) {
+                             return s.nameId == StrId::STR_TOUCH_READER_CONTROLS || s.nameId == StrId::STR_TOUCH_MODE;
+                           }),
             v.end());
   }
   if (BoardConfig::hasTouch()) {

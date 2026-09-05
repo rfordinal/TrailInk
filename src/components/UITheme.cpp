@@ -9,8 +9,10 @@
 #include <memory>
 
 #include "MappedInputManager.h"
+#include "TouchPolicy.h"
 #include "RecentBooksStore.h"
 #include "components/themes/BaseTheme.h"
+#include "components/themes/HintGeometry.h"
 #include "components/themes/lyra/Lyra3CoversTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/roundedraff/RoundedRaffTheme.h"
@@ -54,15 +56,25 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
 }
 
 const ThemeMetrics& UITheme::getMetrics() const {
-  // hasTouch() can flip once touch init completes after static construction, so the
-  // cached copy is refreshed when the flag differs instead of copying the struct per call.
-  const bool touch = gpio.hasTouch();
-  if (!metricsValid || touch != metricsForTouch) {
+  // hasTouch() can flip once touch init completes after static construction, and
+  // the touch mode can change from the Settings screen, so the cached copy is
+  // refreshed when the answer differs instead of copying the struct per call.
+  const bool hints = TouchPolicy::hintsVisible();
+  if (!metricsValid || hints != metricsForHints) {
     adjustedMetrics = *currentMetrics;
-    if (touch) {
+    if (hints) {
+      // Every theme's hint metrics are written against the X4's 480px-wide
+      // portrait screen. On a bigger panel an unscaled 40px band is a 4mm tap
+      // target at ~234 PPI -- too small for a finger, and on these boards the
+      // boxes are the only buttons there are.
+      // Each along its own axis: the band's height follows the taller screen
+      // dimension, the side boxes' width the wider one.
+      adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetricY(adjustedMetrics.buttonHintsHeight);
+      adjustedMetrics.sideButtonHintsWidth = HintGeometry::scaleMetric(adjustedMetrics.sideButtonHintsWidth);
+    } else {
       adjustedMetrics.buttonHintsHeight = 0;
     }
-    metricsForTouch = touch;
+    metricsForHints = hints;
     metricsValid = true;
   }
   return adjustedMetrics;
