@@ -128,6 +128,13 @@ bool MappedInputManager::hasTouch() const { return gpio.hasTouch(); }
 
 void MappedInputManager::update() const {
   gpio.update();
+  ensureHintTouchPumped();
+}
+
+void MappedInputManager::ensureHintTouchPumped() const {
+  const uint32_t seq = gpio.updateSequence();
+  if (seq == hintPumpedSeq) return;
+  hintPumpedSeq = seq;
   pumpHintTouch();
 }
 
@@ -145,6 +152,9 @@ void MappedInputManager::tapToPortrait(const float nx, const float ny, int& x, i
 
 bool MappedInputManager::hintBoxAt(const int px, const int py, uint8_t& hwButton) const {
   const auto& theme = UITheme::getInstance().getTheme();
+  // Portrait logical size: the renderer's short side is the portrait width.
+  const int portraitWidth = renderer.getDisplayHeight();
+  const int portraitHeight = renderer.getDisplayWidth();
   const auto inside = [px, py](const Rect& r) {
     return px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height;
   };
@@ -156,13 +166,13 @@ bool MappedInputManager::hintBoxAt(const int px, const int py, uint8_t& hwButton
                     HalGPIO::BTN_RIGHT == 3,
                 "hint box order must match the front button indices");
   for (int i = 0; i < 4; i++) {
-    if (theme.frontHintBox(i, box) && inside(box)) {
+    if (theme.frontHintBox(i, portraitWidth, portraitHeight, box) && inside(box)) {
       hwButton = static_cast<uint8_t>(i);
       return true;
     }
   }
   for (int i = 0; i < 2; i++) {
-    if (theme.sideHintBox(i, box) && inside(box)) {
+    if (theme.sideHintBox(i, portraitWidth, portraitHeight, box) && inside(box)) {
       hwButton = (i == 0) ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN;
       return true;
     }
@@ -218,6 +228,7 @@ bool MappedInputManager::hintButton(const uint8_t index, bool (HalGPIO::*fn)(uin
 }
 
 bool MappedInputManager::rawButton(const uint8_t index, bool (HalGPIO::*fn)(uint8_t) const) const {
+  ensureHintTouchPumped();
   return hintButton(index, fn) || (gpio.*fn)(index);
 }
 
@@ -426,6 +437,7 @@ bool MappedInputManager::wasAnyPressed() const { return gpio.wasAnyPressed(); }
 bool MappedInputManager::wasAnyReleased() const { return gpio.wasAnyReleased(); }
 
 unsigned long MappedInputManager::getHeldTime() const {
+  ensureHintTouchPumped();
   if (!gpio.wasAnyPressed() && !gpio.wasAnyReleased() && touchHeldOverrideValid &&
       millis() - touchHeldOverrideAt <= TOUCH_HELD_OVERRIDE_WINDOW_MS) {
     return touchHeldOverrideMs;

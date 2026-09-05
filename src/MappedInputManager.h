@@ -96,6 +96,11 @@ class MappedInputManager {
   bool rawButton(uint8_t index, bool (HalGPIO::*fn)(uint8_t) const) const;
   bool hintButton(uint8_t index, bool (HalGPIO::*fn)(uint8_t) const) const;
   // Turn this frame's touch into hint-box button edges. No-op outside BUTTONS mode.
+  //
+  // Driven lazily off HalGPIO's frame counter rather than from update(), because
+  // the frame tick is a bare gpio.update() in loop() (main.cpp) that never passes
+  // through this class -- hooking update() alone left the boxes drawn and dead.
+  void ensureHintTouchPumped() const;
   void pumpHintTouch() const;
   bool hintBoxAt(int px, int py, uint8_t& hwButton) const;
   // Normalized touch to *portrait* logical coordinates. The renderer's own
@@ -115,6 +120,7 @@ class MappedInputManager {
   static constexpr uint8_t kNoHintButton = 0xFF;
   // Hint-box button edges for this frame: pressed and released last one frame,
   // down persists while the finger stays on the box.
+  mutable uint32_t hintPumpedSeq = 0xFFFFFFFFu;
   mutable uint8_t hintDownButton = kNoHintButton;
   mutable uint8_t hintPressedButton = kNoHintButton;
   mutable uint8_t hintReleasedButton = kNoHintButton;

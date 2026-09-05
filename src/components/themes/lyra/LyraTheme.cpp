@@ -406,19 +406,20 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   renderer.setOrientation(orig_orientation);
 }
 
-bool LyraTheme::frontHintBox(const int index, Rect& out) const {
+bool LyraTheme::frontHintBox(const int index, const int portraitWidth, const int portraitHeight, Rect& out) const {
   if (!TouchPolicy::hintsVisible() || !frontBoxActive(index)) return false;
   int positions[4] = {0, 0, 0, 0};
-  const int width = HintGeometry::frontRow(HintGeometry::portraitWidth(), kX4FrontPositions, kX3FrontPositions,
-                                           kFrontBoxWidth, positions);
+  const int width =
+      HintGeometry::frontRow(portraitWidth, kX4FrontPositions, kX3FrontPositions, kFrontBoxWidth, positions);
   const int height = UITheme::getInstance().getMetrics().buttonHintsHeight;
-  out = Rect{positions[index], HintGeometry::portraitHeight() - height, width, height};
+  out = Rect{positions[index], portraitHeight - height, width, height};
   return true;
 }
 
-bool LyraTheme::sideHintBox(const int index, Rect& out) const {
+bool LyraTheme::sideHintBox(const int index, const int portraitWidth, const int portraitHeight, Rect& out) const {
+  (void)portraitHeight;
   if (!TouchPolicy::hintsVisible() || !sideBoxActive(index)) return false;
-  const int screenWidth = HintGeometry::portraitWidth();
+  const int screenWidth = portraitWidth;
   const int width = UITheme::getInstance().getMetrics().sideButtonHintsWidth;
   const int height = HintGeometry::scaleMetricY(kSideBoxHeight);
   if (gpio.deviceIsX3()) {

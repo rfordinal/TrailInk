@@ -252,8 +252,12 @@ class BaseTheme {
   // The rect returned is the rect painted. A hit area that is not the box the
   // user can see is a lie they aim at, so both come from the same numbers --
   // which is also why every theme that moves its boxes must override these.
-  virtual bool frontHintBox(int index, Rect& out) const;
-  virtual bool sideHintBox(int index, Rect& out) const;
+  // portraitWidth/portraitHeight are the panel in portrait logical coordinates,
+  // passed in rather than looked up: the drawing takes them from the renderer, so
+  // the hit test must come from the same place or a tap can miss a box that is
+  // plainly on screen.
+  virtual bool frontHintBox(int index, int portraitWidth, int portraitHeight, Rect& out) const;
+  virtual bool sideHintBox(int index, int portraitWidth, int portraitHeight, Rect& out) const;
 
  protected:
   // The hint boxes are drawn per screen paint with the labels that screen wants,

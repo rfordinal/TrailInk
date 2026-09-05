@@ -378,11 +378,12 @@ inline HintBand hintBand(const int pageWidth, const int pageHeight) {
 }
 }  // namespace
 
-bool RoundedRaffTheme::frontHintBox(const int index, Rect& out) const {
+bool RoundedRaffTheme::frontHintBox(const int index, const int portraitWidth, const int portraitHeight,
+                                   Rect& out) const {
   if (!TouchPolicy::hintsVisible() || !frontBoxActive(index)) return false;
   // Four labels sit at the outer and inner edges of two groups, so a group
   // splits in half: 0/1 are the left group, 2/3 the right one.
-  const HintBand band = hintBand(HintGeometry::portraitWidth(), HintGeometry::portraitHeight());
+  const HintBand band = hintBand(portraitWidth, portraitHeight);
   const int halfWidth = band.groupWidth / 2;
   const int groupX = (index < 2) ? band.leftX : band.rightX;
   out = Rect{groupX + (index % 2) * halfWidth, band.y, halfWidth, band.height};
