@@ -628,6 +628,41 @@ cheaper redraws gets the sign wrong.
 
 [`route-navigation.md`](route-navigation.md) has the measurement in context.
 
+## A windowed refresh blocks the loop, and that is what the rider feels
+
+`HalDisplay::displayWindow()` is synchronous (`lib/hal/HalDisplay.cpp:118-124`): the
+call returns when the panel is done. So on the T5 S3 Pro, where a windowed
+refresh costs ~1,081 ms ([`refresh-modes.md`](refresh-modes.md)), **every marker
+move takes the main loop out of service for about a second.**
+
+Measured over one 4 h 36 min walk, 2026-09-05, from the device's own
+`power.csv`:
+
+| span (uptime s) | loops/s | loop busy % | windows/s | ms per window |
+|---|---|---|---|---|
+| 67 - 667 | 14.88 | 25.7 | 0.177 | 1049 |
+| 3075 - 6083 | 14.11 | 29.5 | 0.174 | 1094 |
+| 6083 - 9085 | 16.15 | 19.3 | 0.099 | 1081 |
+| 12088 - 15092 | 13.60 | 32.0 | 0.201 | 1091 |
+| 15092 - 16596 | 12.60 | 37.0 | 0.228 | 1101 |
+
+Window rate ran between **0.099 and 0.228 per second** depending on how much the
+rider actually moved, which put the loop inside a blocking panel call for **11 %
+to 25 % of wall clock**. Buttons are not serviced during that window.
+
+The maintainer reported a long press on Home for the frontlight reacting slower
+and slower over that walk `[reported, 2026-09-05]`, and the loop rate did fall,
+from 14.9 to 12.6 iterations per second. **Neither is degradation.** Per-refresh
+cost is flat across the whole run; the loop simply spends more of each second
+blocked because the refresh rate went up. Anything that looks like the device
+getting tired over hours should be checked against the per-event cost before it
+gets a name.
+
+`displayBufferAsync()` plus `waitRefreshComplete()` already exist for the
+non-blocking path (`lib/hal/HalDisplay.cpp:88`), but nothing on the map uses
+them -- the only callers are `EpubReaderActivity` and `GrayscaleFrame`. Tracked
+as T-260 in the parent repo.
+
 ## What the ride measured
 
 Replay of `trailink-gps-20260804-152206.jsonl` (Bratislava, 5.7 x 3.6 km,
