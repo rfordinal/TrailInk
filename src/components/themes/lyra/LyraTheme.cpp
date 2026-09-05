@@ -29,6 +29,8 @@
 #include "components/icons/text24.h"
 #include "components/icons/transfer.h"
 #include "components/icons/wifi.h"
+#include "TouchPolicy.h"
+#include "components/themes/HintGeometry.h"
 #include "fontIds.h"
 
 // Internal constants
@@ -36,6 +38,15 @@ namespace {
 constexpr int hPaddingInSelection = 8;
 constexpr int cornerRadius = 6;
 constexpr int topHintButtonY = 345;
+// Front hint boxes in X4 portrait pixels; a panel with no keys under the glass
+// gets them scaled (HintGeometry). Shared by the drawing and by frontHintBox().
+constexpr int kFrontBoxWidth = 80;
+constexpr int kX4FrontPositions[4] = {58, 146, 254, 342};
+// X3 has wider screen in portrait (528 vs 480), use more spacing
+constexpr int kX3FrontPositions[4] = {65, 157, 291, 383};
+constexpr int kSideBoxHeight = 78;
+constexpr int kSideBoxGap = 5;
+constexpr int kSideBoxX3Y = 155;  // X3: one box per side, higher up
 constexpr int maxListValueWidth = 200;
 constexpr int mainMenuIconSize = 32;
 constexpr int listIconSize = 24;
@@ -354,23 +365,22 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   if (fontId == 0) fontId = SMALL_FONT_ID;
   if (btn3FontId == 0) btn3FontId = fontId;
   if (btn4FontId == 0) btn4FontId = fontId;
-  if (gpio.hasTouch()) {
+  if (!TouchPolicy::hintsVisible()) {
     return;
   }
+  rememberFrontLabels(btn1, btn2, btn3, btn4);
 
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
   const int pageHeight = renderer.getScreenHeight();
-  constexpr int buttonWidth = 80;
-  constexpr int smallButtonHeight = 15;
-  constexpr int buttonHeight = LyraMetrics::values.buttonHintsHeight;
-  constexpr int buttonY = LyraMetrics::values.buttonHintsHeight;  // Distance from bottom
-  constexpr int textYOffset = 7;                                  // Distance from top of button to text baseline
-  // X3 has wider screen in portrait (528 vs 480), use more spacing
-  constexpr int x4ButtonPositions[] = {58, 146, 254, 342};
-  constexpr int x3ButtonPositions[] = {65, 157, 291, 383};
-  const int* buttonPositions = gpio.deviceIsX3() ? x3ButtonPositions : x4ButtonPositions;
+  const int smallButtonHeight = HintGeometry::scaleMetricY(15);
+  const int buttonHeight = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  const int buttonY = buttonHeight;                      // Distance from bottom
+  const int textYOffset = HintGeometry::scaleMetric(7);  // Distance from top of button to text baseline
+  int buttonPositions[4] = {0, 0, 0, 0};
+  const int buttonWidth = HintGeometry::frontRow(renderer.getScreenWidth(), kX4FrontPositions, kX3FrontPositions,
+                                                 kFrontBoxWidth, buttonPositions);
   const char* labels[] = {btn1, btn2, btn3, btn4};
   const int fontIds[] = {fontId, fontId, btn3FontId, btn4FontId};
 
@@ -396,20 +406,47 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   renderer.setOrientation(orig_orientation);
 }
 
+bool LyraTheme::frontHintBox(const int index, Rect& out) const {
+  if (!TouchPolicy::hintsVisible() || !frontBoxActive(index)) return false;
+  int positions[4] = {0, 0, 0, 0};
+  const int width = HintGeometry::frontRow(HintGeometry::portraitWidth(), kX4FrontPositions, kX3FrontPositions,
+                                           kFrontBoxWidth, positions);
+  const int height = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  out = Rect{positions[index], HintGeometry::portraitHeight() - height, width, height};
+  return true;
+}
+
+bool LyraTheme::sideHintBox(const int index, Rect& out) const {
+  if (!TouchPolicy::hintsVisible() || !sideBoxActive(index)) return false;
+  const int screenWidth = HintGeometry::portraitWidth();
+  const int width = UITheme::getInstance().getMetrics().sideButtonHintsWidth;
+  const int height = HintGeometry::scaleMetricY(kSideBoxHeight);
+  if (gpio.deviceIsX3()) {
+    // X3 puts one box per side rather than stacking them: top = left edge.
+    out = Rect{(index == 0) ? 0 : screenWidth - width, kSideBoxX3Y, width, height};
+    return true;
+  }
+  out = Rect{screenWidth - width, HintGeometry::scaleMetricY(topHintButtonY) + index * (height + kSideBoxGap), width,
+             height};
+  return true;
+}
+
 void LyraTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn,
                                     int fontId) const {
-  if (gpio.hasTouch()) {
+  if (!TouchPolicy::hintsVisible()) {
     return;
   }
+  rememberSideLabels(topBtn, bottomBtn);
 
   const int screenWidth = renderer.getScreenWidth();
-  constexpr int buttonWidth = LyraMetrics::values.sideButtonHintsWidth;  // Width on screen (height when rotated)
-  constexpr int buttonHeight = 78;                                       // Height on screen (width when rotated)
+  const int buttonWidth =
+      UITheme::getInstance().getMetrics().sideButtonHintsWidth;      // Width on screen (height when rotated)
+  const int buttonHeight = HintGeometry::scaleMetricY(kSideBoxHeight);  // Height on screen (width when rotated)
   constexpr int buttonMargin = 0;
 
   if (gpio.deviceIsX3()) {
     // X3 layout: Up on left side, Down on right side, positioned higher
-    constexpr int x3ButtonY = 155;
+    constexpr int x3ButtonY = kSideBoxX3Y;
 
     if (topBtn != nullptr && topBtn[0] != '\0') {
       renderer.drawRoundedRect(buttonMargin, x3ButtonY, buttonWidth, buttonHeight, 1, cornerRadius, false, true, false,
@@ -429,28 +466,29 @@ void LyraTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
     // X4 layout: Both buttons stacked on right side
     const char* labels[] = {topBtn, bottomBtn};
     const int x = screenWidth - buttonWidth;
+    const int topY = HintGeometry::scaleMetricY(topHintButtonY);
 
     // White backing first, same pairing drawButtonHints() uses just above
     // (fillRoundedRect then drawRoundedRect) -- this call draws no fill of
     // its own otherwise, so a caller over live content (a map, a rendered
     // page) shows through it.
     if (topBtn != nullptr && topBtn[0] != '\0') {
-      renderer.fillRoundedRect(x, topHintButtonY, buttonWidth, buttonHeight, cornerRadius, true, false, true, false,
+      renderer.fillRoundedRect(x, topY, buttonWidth, buttonHeight, cornerRadius, true, false, true, false,
                                Color::White);
-      renderer.drawRoundedRect(x, topHintButtonY, buttonWidth, buttonHeight, 1, cornerRadius, true, false, true, false,
+      renderer.drawRoundedRect(x, topY, buttonWidth, buttonHeight, 1, cornerRadius, true, false, true, false,
                                true);
     }
 
     if (bottomBtn != nullptr && bottomBtn[0] != '\0') {
-      renderer.fillRoundedRect(x, topHintButtonY + buttonHeight + 5, buttonWidth, buttonHeight, cornerRadius, true,
+      renderer.fillRoundedRect(x, topY + buttonHeight + kSideBoxGap, buttonWidth, buttonHeight, cornerRadius, true,
                                false, true, false, Color::White);
-      renderer.drawRoundedRect(x, topHintButtonY + buttonHeight + 5, buttonWidth, buttonHeight, 1, cornerRadius, true,
+      renderer.drawRoundedRect(x, topY + buttonHeight + kSideBoxGap, buttonWidth, buttonHeight, 1, cornerRadius, true,
                                false, true, false, true);
     }
 
     for (int i = 0; i < 2; i++) {
       if (labels[i] != nullptr && labels[i][0] != '\0') {
-        const int y = topHintButtonY + (i * buttonHeight) + 5;
+        const int y = topY + (i * buttonHeight) + kSideBoxGap;
         const int textWidth = renderer.getTextWidth(fontId, labels[i]);
         renderer.drawTextRotated90CW(fontId, x, y + (buttonHeight + textWidth) / 2, labels[i]);
       }

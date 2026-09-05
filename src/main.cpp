@@ -22,6 +22,7 @@
 #include <cstring>
 
 #include "CrossPointSettings.h"
+#include "TouchPolicy.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
@@ -843,8 +844,11 @@ void loop() {
   // changed.
   static unsigned long lastActivityTime = millis();   // -> auto-sleep timeout
   static unsigned long lastFullClockTime = millis();  // -> CPU throttle
-  const bool userInput =
-      gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity();
+  // Touch counts as activity only while touch is allowed to do anything. With
+  // it switched off the glass is dead input, so a pocket or a palm on it must
+  // not hold the device awake.
+  const bool userInput = gpio.wasAnyPressed() || gpio.wasAnyReleased() ||
+                         (TouchPolicy::touchActive() && gpio.wasTouchActivity()) || halTiltSensor.hadActivity();
   if (userInput || activityManager.preventAutoSleep()) {
     lastActivityTime = millis();
   }
