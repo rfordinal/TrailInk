@@ -26,8 +26,9 @@ namespace freeink {
 //   [12..13] tz_offset  int16,  minutes east of UTC
 //   [14]     heading    0-15, a MapHeading value
 //   [15]     seq        rolling counter; the device redraws when it changes
-//   [16]     flags      bit0 = off-route warning, bit1 = altitude present
-//   [17]     accuracy   metres, saturating
+//   [16]     flags      bit0 = off-route warning, bit1 = altitude present,
+//                        bits 2-3 = heading quality (see below)
+//   [17]     accuracy   metres, saturating; 0 = the sender has no figure
 //   [18]     speed      km/h, saturating
 //   [19..20] altitude   int16, metres above sea level; valid only if flags
 //                        bit1 is set. No fix has "altitude zero" as a
@@ -42,12 +43,37 @@ namespace freeink {
 // truncated or padded version of the new one.
 //
 // `utc` and `tz_offset` drive the map header's clock, via localTimeNow() --
-// see docs/map-header-status.md, "The clock". `accuracy` is wired and stored
-// and nothing draws it -- see docs/architecture-plan.md, "Time is mandatory in
-// the payload".
+// see docs/map-header-status.md, "The clock".
 // `speed` is auto zoom's input and auto zoom is a later phase. `altitude` is
 // hike mode's future input, same reasoning: wired now so the packet stops
 // changing, not drawn or acted on yet.
+//
+// ## What the two quality fields mean, and why neither grew a byte
+//
+// `accuracy` and flags bits 2-3 are the position marker's two claims -- how
+// much the ring may say about *where*, and how much the centre glyph may say
+// about *which way*. MapFixTrust.h turns both into a shape;
+// docs/marker-fix-trust.md is the whole design.
+//
+// The packet is a fixed 21 bytes and a write of any other length is dropped, so
+// a new byte would break every client at once, in both directions. Heading
+// quality therefore lives in two spare flag bits:
+//
+//   bits 2-3:  0 = unstated   -- the sender does not report heading quality
+//              1 = good       -- within one heading step (22.5 degrees)
+//              2 = coarse     -- within about three steps
+//              3 = unknown    -- nothing believable; the device draws no heading
+//
+// **Zero means unstated, not bad, and that is the whole compatibility
+// argument**: a phone built before these bits existed writes zeros and keeps
+// getting exactly the marker it has always produced. The same rule applies to
+// `accuracy`, where 0 has always meant "no figure" -- Android reports no
+// accuracy on some fixes and PositionPacket.build() writes 0 for a NaN. Zero
+// metres is physically impossible, so the sentinel costs no real value; it is
+// stated here rather than left as an accident of the encoder.
+//
+// A device receiving `unstated` must not draw an alarm. A client that knows
+// nothing about quality is not a client reporting a fault.
 struct PositionUpdate {
   int32_t lat = 0;
   int32_t lon = 0;
@@ -56,7 +82,7 @@ struct PositionUpdate {
   uint8_t heading = 0;  // 0-15
   uint8_t seq = 0;
   uint8_t flags = 0;
-  uint8_t accuracyM = 0;
+  uint8_t accuracyM = 0;  // 0 = unstated (MapFixTrust::kAccuracyUnstated)
   uint8_t speedKmh = 0;
   int16_t altitudeM = 0;     // valid only if hasAltitude
   bool hasAltitude = false;  // from flags bit1

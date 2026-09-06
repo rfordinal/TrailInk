@@ -159,6 +159,61 @@ anything that might crash again.
 An ordinary `write-flash 0x10000 app.bin` does not touch `0xFF0000` and is
 safe. `esptool erase-flash` destroys the dump.
 
+## A coredump can be stale, and it will not say so
+
+The partition keeps the last panic from **any** build. A dump left by a firmware
+you flashed over is still sitting there, and decoding it against today's ELF
+produces plausible nonsense rather than an error.
+
+Check the hash before decoding anything:
+
+```
+strings coredump.bin | grep -A1 ESP_CORE_DUMP_INFO   # 9 hex chars: the ELF that crashed
+sha256sum firmware.elf | cut -c1-9                   # a candidate ELF
+```
+
+The note holds the first `CONFIG_APP_RETRIEVE_LEN_ELF_SHA` (9) characters of the
+sha256 **of the ELF file itself**. Verified 2026-09-05 against the archived
+2026-09-03 pair in `docs/crashes/2026-09-03-t5s3-tilesync/`, where both sides
+read `e4342c4c3`.
+
+The running build's own hash reads straight off flash, no serial console and no
+firmware cooperation needed:
+
+```
+esptool --port /dev/ttyACM0 read-flash 0x10000 0x200 appdesc.bin
+```
+
+In that 512 bytes, `esp_app_desc_t` starts at `0x20`: version at `0x30`, project
+name at `0x50`, build time at `0x70`, build date at `0x80`, idf version at
+`0x90`, and `app_elf_sha256` at `0xB0`.
+
+On 2026-09-05 flash said `d9bd3312...` and the coredump said `15463f308...`.
+That is how a four-hour-old death was shown to have written no coredump at all,
+before an hour went into decoding the wrong crash.
+
+**The matching ELF is often already gone.** None of the ELFs on the laptop
+matched `15463f308`, because the worktree that built it had been rebuilt since.
+Do not rebuild the commit to get one back: see the warning above.
+
+## No coredump and no report is itself evidence
+
+`CONFIG_ESP_TASK_WDT_PANIC=y` with a 5 s timeout, and `CONFIG_ESP_INT_WDT=y` at
+300 ms (`sdkconfig.default:1707-1712`), send a hung task or a blocked interrupt
+through the panic handler -- which writes a coredump. So when a device dies and
+**neither** file exists afterwards, a hang is ruled out. What remains is a reset
+that bypasses the panic handler entirely: brownout (`CONFIG_BROWNOUT_DET=y`,
+level 7, `sdkconfig.default:2947-2961`) or the rail simply going away.
+
+Note what the brownout detector watches: the **3.3 V rail**, not the cell. A
+healthy gauge reading does not contradict a brownout. On 2026-09-05 the battery
+was at 3,922 mV and 75 % when the device died.
+
+**The device records `esp_reset_reason()` nowhere that survives a reboot**, so
+the last distinction -- brownout versus the rail going away -- is lost the moment
+it boots again, and a dead device usually gets booted before anyone thinks to
+look. Tracked as T-262 in the parent repo.
+
 ## Worked example
 
 [`ble-deinit-crash.md`](ble-deinit-crash.md) is the first crash solved this
