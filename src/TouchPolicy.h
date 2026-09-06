@@ -17,11 +17,22 @@ namespace TouchPolicy {
 
 inline bool panelPresent() { return gpio.hasTouch(); }
 
+// The mode in force, which is not the same thing as the stored preference: the
+// lock is a separate flag and it wins while it is set. Anything asking "what may
+// touch do right now" wants this; only the Settings row reads SETTINGS.touchMode.
 inline CrossPointSettings::TOUCH_MODE mode() {
+  if (SETTINGS.touchLocked != 0) return CrossPointSettings::TOUCH_DISABLED;
   const uint8_t stored = SETTINGS.touchMode;
-  if (stored >= CrossPointSettings::TOUCH_MODE_COUNT) return CrossPointSettings::TOUCH_ANYWHERE;
+  // DISABLED included: it is never a legal stored value, so a settings file
+  // carrying it (an older build wrote one) falls back rather than locking a
+  // device whose owner cannot unlock it from the screen.
+  if (stored >= CrossPointSettings::TOUCH_DISABLED) return CrossPointSettings::TOUCH_ANYWHERE;
   return static_cast<CrossPointSettings::TOUCH_MODE>(stored);
 }
+
+// True while the panel is locked. Toggled by the gesture that owns the lock on
+// this board; nothing else may set it, and Settings does not offer it.
+inline bool locked() { return panelPresent() && SETTINGS.touchLocked != 0; }
 
 // The whole screen is live: list rows, swipes, edge gestures, map panning.
 inline bool touchAnywhere() { return panelPresent() && mode() == CrossPointSettings::TOUCH_ANYWHERE; }

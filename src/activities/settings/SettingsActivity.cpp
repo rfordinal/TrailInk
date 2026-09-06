@@ -510,7 +510,14 @@ void SettingsActivity::render(RenderLock&&) {
           valueText = value ? tr(STR_STATE_ON) : tr(STR_STATE_OFF);
         } else if (setting.type == SettingType::ENUM && setting.valuePtr != nullptr) {
           const uint8_t value = SETTINGS.*(setting.valuePtr);
-          valueText = I18N.get(setting.enumValues[value]);
+          // Bounds-checked, like the valueGetter path two branches down already
+          // is. A stored value can outlive the list that offered it: an older
+          // build's settings.json, or a value a gesture sets that this row does
+          // not list (touchMode's DISABLED). Reading past the vector for a label
+          // is not worth the row.
+          if (value < setting.enumValues.size()) {
+            valueText = I18N.get(setting.enumValues[value]);
+          }
         } else if (setting.type == SettingType::ENUM && setting.valueGetter) {
           const uint8_t value = setting.valueGetter();
           if (!setting.enumStringValues.empty() && value < setting.enumStringValues.size()) {
