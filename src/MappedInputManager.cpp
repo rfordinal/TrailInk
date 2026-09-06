@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include "CrossPointSettings.h"
+#include "TouchPolicy.h"
 #include "components/UITheme.h"
 
 bool MappedInputManager::isNavDirectionSwapped() const {
@@ -55,32 +56,32 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
   switch (button) {
     case Button::Back:
       // Logical Back maps to user-configured front button.
-      return (gpio.*fn)(SETTINGS.frontButtonBack);
+      return rawButton(SETTINGS.frontButtonBack, fn);
     case Button::Confirm:
       // Logical Confirm maps to user-configured front button.
-      return (gpio.*fn)(SETTINGS.frontButtonConfirm);
+      return rawButton(SETTINGS.frontButtonConfirm, fn);
     case Button::Left:
       // Logical Left maps to user-configured front button.
-      return (gpio.*fn)(SETTINGS.frontButtonLeft);
+      return rawButton(SETTINGS.frontButtonLeft, fn);
     case Button::Right:
       // Logical Right maps to user-configured front button.
-      return (gpio.*fn)(SETTINGS.frontButtonRight);
+      return rawButton(SETTINGS.frontButtonRight, fn);
     case Button::Up:
       // Side buttons remain fixed for Up/Down.
-      return (gpio.*fn)(HalGPIO::BTN_UP);
+      return rawButton(HalGPIO::BTN_UP, fn);
     case Button::Down:
       // Side buttons remain fixed for Up/Down.
-      return (gpio.*fn)(HalGPIO::BTN_DOWN);
+      return rawButton(HalGPIO::BTN_DOWN, fn);
     case Button::Power:
       // Power button bypasses remapping.
-      return (gpio.*fn)(HalGPIO::BTN_POWER);
+      return rawButton(HalGPIO::BTN_POWER, fn);
     case Button::PageBack:
       // Reader page navigation uses side buttons and can be swapped via settings.
       switch (sideLayout) {
         case CrossPointSettings::PREV_NEXT:
-          return (gpio.*fn)(HalGPIO::BTN_UP);
+          return rawButton(HalGPIO::BTN_UP, fn);
         case CrossPointSettings::NEXT_PREV:
-          return (gpio.*fn)(HalGPIO::BTN_DOWN);
+          return rawButton(HalGPIO::BTN_DOWN, fn);
         case CrossPointSettings::SIDE_BUTTONS_DISABLED:
         default:
           return false;
@@ -89,9 +90,9 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
       // Reader page navigation uses side buttons and can be swapped via settings.
       switch (sideLayout) {
         case CrossPointSettings::PREV_NEXT:
-          return (gpio.*fn)(HalGPIO::BTN_DOWN);
+          return rawButton(HalGPIO::BTN_DOWN, fn);
         case CrossPointSettings::NEXT_PREV:
-          return (gpio.*fn)(HalGPIO::BTN_UP);
+          return rawButton(HalGPIO::BTN_UP, fn);
         case CrossPointSettings::SIDE_BUTTONS_DISABLED:
         default:
           return false;
@@ -125,6 +126,112 @@ constexpr unsigned long TOUCH_HELD_OVERRIDE_WINDOW_MS = 250;
 
 bool MappedInputManager::hasTouch() const { return gpio.hasTouch(); }
 
+void MappedInputManager::update() const {
+  gpio.update();
+  ensureHintTouchPumped();
+}
+
+void MappedInputManager::ensureHintTouchPumped() const {
+  const uint32_t seq = gpio.updateSequence();
+  if (seq == hintPumpedSeq) return;
+  hintPumpedSeq = seq;
+  pumpHintTouch();
+}
+
+void MappedInputManager::tapToPortrait(const float nx, const float ny, int& x, int& y) const {
+  const int panelWidth = renderer.getDisplayWidth();
+  const int panelHeight = renderer.getDisplayHeight();
+  int physicalX = static_cast<int>(nx * panelWidth);
+  int physicalY = static_cast<int>(ny * panelHeight);
+  physicalX = std::min(std::max(physicalX, 0), panelWidth - 1);
+  physicalY = std::min(std::max(physicalY, 0), panelHeight - 1);
+  // Same transform GfxRenderer applies for Orientation::Portrait.
+  x = panelHeight - 1 - physicalY;
+  y = physicalX;
+}
+
+bool MappedInputManager::hintBoxAt(const int px, const int py, uint8_t& hwButton) const {
+  const auto& theme = UITheme::getInstance().getTheme();
+  // Portrait logical size: the renderer's short side is the portrait width.
+  const int portraitWidth = renderer.getDisplayHeight();
+  const int portraitHeight = renderer.getDisplayWidth();
+  const auto inside = [px, py](const Rect& r) {
+    return px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height;
+  };
+  Rect box;
+  // Front box index is the hardware button index: both are Back, Confirm, Left,
+  // Right in that order, which is also the order the labels are handed to
+  // drawButtonHints() by mapFrontLabels().
+  static_assert(HalGPIO::BTN_BACK == 0 && HalGPIO::BTN_CONFIRM == 1 && HalGPIO::BTN_LEFT == 2 &&
+                    HalGPIO::BTN_RIGHT == 3,
+                "hint box order must match the front button indices");
+  for (int i = 0; i < 4; i++) {
+    if (theme.frontHintBox(i, portraitWidth, portraitHeight, box) && inside(box)) {
+      hwButton = static_cast<uint8_t>(i);
+      return true;
+    }
+  }
+  for (int i = 0; i < 2; i++) {
+    if (theme.sideHintBox(i, portraitWidth, portraitHeight, box) && inside(box)) {
+      hwButton = (i == 0) ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN;
+      return true;
+    }
+  }
+  return false;
+}
+
+void MappedInputManager::pumpHintTouch() const {
+  hintPressedButton = kNoHintButton;
+  hintReleasedButton = kNoHintButton;
+  if (!TouchPolicy::touchHintBoxes()) {
+    hintDownButton = kNoHintButton;
+    return;
+  }
+
+  float nx = 0.0f;
+  float ny = 0.0f;
+  int px = 0;
+  int py = 0;
+  uint8_t hit = kNoHintButton;
+
+  if (gpio.wasTouchDown(nx, ny)) {
+    tapToPortrait(nx, ny, px, py);
+    if (hintBoxAt(px, py, hit)) {
+      hintDownButton = hit;
+      hintPressedButton = hit;
+    }
+  }
+
+  if (gpio.wasTouchTap(nx, ny)) {
+    tapToPortrait(nx, ny, px, py);
+    // Release only counts on the box it started on, the way a physical button
+    // does not fire when the finger slides off it.
+    if (hintBoxAt(px, py, hit) && hit == hintDownButton) {
+      hintReleasedButton = hit;
+      // Feeds getHeldTime(), so a long press on a box behaves like a long press
+      // on the key it stands for.
+      rememberTouchHeldTime();
+    }
+    hintDownButton = kNoHintButton;
+  } else if (hintDownButton != kNoHintButton && !gpio.isTouchHeldAt(nx, ny)) {
+    // Lifted without producing a tap (dragged off, or moved past the tap slop).
+    // Without this the button would stay held for good.
+    hintDownButton = kNoHintButton;
+  }
+}
+
+bool MappedInputManager::hintButton(const uint8_t index, bool (HalGPIO::*fn)(uint8_t) const) const {
+  if (fn == &HalGPIO::wasPressed) return hintPressedButton == index;
+  if (fn == &HalGPIO::wasReleased) return hintReleasedButton == index;
+  if (fn == &HalGPIO::isPressed) return hintDownButton == index;
+  return false;
+}
+
+bool MappedInputManager::rawButton(const uint8_t index, bool (HalGPIO::*fn)(uint8_t) const) const {
+  ensureHintTouchPumped();
+  return hintButton(index, fn) || (gpio.*fn)(index);
+}
+
 void MappedInputManager::rememberTouchHeldTime() const {
   touchHeldOverrideValid = true;
   touchHeldOverrideMs = gpio.lastTouchHeldMs();
@@ -132,6 +239,7 @@ void MappedInputManager::rememberTouchHeldTime() const {
 }
 
 bool MappedInputManager::wasScreenTapped(int& x, int& y) const {
+  if (!TouchPolicy::touchAnywhere()) return false;
   float nx = 0.0f;
   float ny = 0.0f;
   if (!gpio.wasTouchTap(nx, ny)) return false;
@@ -141,6 +249,7 @@ bool MappedInputManager::wasScreenTapped(int& x, int& y) const {
 }
 
 bool MappedInputManager::wasScreenTouchDown(int& x, int& y) const {
+  if (!TouchPolicy::touchAnywhere()) return false;
   float nx = 0.0f;
   float ny = 0.0f;
   unsigned long heldMs = 0;
@@ -151,6 +260,7 @@ bool MappedInputManager::wasScreenTouchDown(int& x, int& y) const {
 }
 
 bool MappedInputManager::isScreenTouchHeld(int& x, int& y) const {
+  if (!TouchPolicy::touchAnywhere()) return false;
   // Live contact position while the finger is down (no tap-slop gate) — drag tracking.
   float nx = 0.0f;
   float ny = 0.0f;
@@ -241,6 +351,7 @@ MappedInputManager::RowTouch MappedInputManager::colTouch(int& col, const int le
 }
 
 bool MappedInputManager::decodeSwipe(int& sx, int& sy, int& ex, int& ey) const {
+  if (!TouchPolicy::touchAnywhere()) return false;
   float nxs = 0.0f;
   float nys = 0.0f;
   float nxe = 0.0f;
@@ -326,6 +437,7 @@ bool MappedInputManager::wasAnyPressed() const { return gpio.wasAnyPressed(); }
 bool MappedInputManager::wasAnyReleased() const { return gpio.wasAnyReleased(); }
 
 unsigned long MappedInputManager::getHeldTime() const {
+  ensureHintTouchPumped();
   if (!gpio.wasAnyPressed() && !gpio.wasAnyReleased() && touchHeldOverrideValid &&
       millis() - touchHeldOverrideAt <= TOUCH_HELD_OVERRIDE_WINDOW_MS) {
     return touchHeldOverrideMs;

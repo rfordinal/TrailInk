@@ -140,6 +140,7 @@ void HalGPIO::begin() {
 
 void HalGPIO::update() {
   inputMgr.update();
+  updateSeq++;
   const bool connected = isUsbConnected();
   usbStateChanged = (connected != lastUsbConnected);
   lastUsbConnected = connected;

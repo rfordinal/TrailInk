@@ -240,6 +240,17 @@ simulator aimed at a phone: an Android build of the firmware, so the UI runs
 with no reader in reach. The compile probe passed (206 of 208 files clean for
 aarch64); the app shell is not built yet.
 
+[`docs/input-gestures.md`](./docs/input-gestures.md) is how a tap, a double tap
+and a hold are recognised -- why that is spread across six places today, what the
+GT911's frame-latched key does to a gesture when the loop blocks, the failure
+inventory, and the layering that would replace it. A design analysis: the shape
+it proposes is not built.
+
+[`docs/touch-modes.md`](./docs/touch-modes.md) is what a touch panel is allowed
+to do -- the three modes (whole screen live, only the on-screen button boxes,
+touch off), how a tap on a box becomes a press of the hardware button it names,
+and how the six boxes are placed on a panel that is not an X4.
+
 [`docs/build-environments.md`](./docs/build-environments.md) is which of the five
 build environments can be published and which two are missing Bluetooth, plus the
 three flash offsets verified against a real device's own dump.

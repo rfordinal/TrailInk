@@ -45,6 +45,11 @@ class HalGPIO {
 
   bool lastUsbConnected = false;
   bool usbStateChanged = false;
+  // Which input frame the last update() produced. The frame tick is gpio.update()
+  // called straight from loop() (main.cpp), not through any wrapper, so a layer
+  // above that has to derive per-frame work from something rather than from being
+  // called. Wraps harmlessly: only equality against the last seen value is read.
+  uint32_t updateSeq = 0;
 
  public:
   enum class DeviceType : uint8_t { X4, X3 };
@@ -65,6 +70,8 @@ class HalGPIO {
 
   // Button input methods
   void update();
+  // Increments once per update(). See updateSeq.
+  uint32_t updateSequence() const { return updateSeq; }
   bool isPressed(uint8_t buttonIndex) const;
   bool wasPressed(uint8_t buttonIndex) const;
   bool wasAnyPressed() const;
