@@ -291,6 +291,13 @@ class MapConsoleState {
   // header line (MapActivity::drawHikeElevationLine()).
   bool hasAltitude() const { return hasAltitude_; }
   int16_t altitudeM() const { return altitudeM_; }
+  // The two fix-quality claims a `pos` may carry (MapFixTrust.h). Sticky like
+  // heading is: a later `pos` with no `acc` keeps the last one, so a bench run
+  // can set a state once and then walk a track through it.
+  bool hasAccuracy() const { return hasAccuracy_; }
+  uint16_t accuracyM() const { return accuracyM_; }
+  bool hasDirQuality() const { return hasDirQuality_; }
+  uint8_t dirQuality() const { return dirQuality_; }
 
   // Ladder steps and travel mode, as last set by a command or pushed back by
   // MapActivity. MapActivity reads these after a command lands and applies
@@ -475,6 +482,10 @@ class MapConsoleState {
   uint16_t speedKmh_ = 0;
   bool hasAltitude_ = false;
   int16_t altitudeM_ = 0;
+  bool hasAccuracy_ = false;
+  uint16_t accuracyM_ = 0;
+  bool hasDirQuality_ = false;
+  uint8_t dirQuality_ = 0;
   uint32_t seq_ = 0;
   uint32_t (*freeHeapProvider_)() = nullptr;
   uint16_t (*linkMtuProvider_)() = nullptr;

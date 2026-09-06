@@ -157,8 +157,19 @@ struct MapCommand {
   uint16_t speedKmh = 0;
   int16_t altitudeM = 0;  // Pos, optional; metres above sea level
   uint8_t heading = 0;    // 0-15, Heading and optional on Pos
-  uint8_t zoom = 0;       // 0-4
-  uint8_t marker = 0;     // 0-4
+  // Pos, optional: the two fix-quality claims the position marker draws
+  // (MapFixTrust.h). Keyword-only, like `alt` -- a bare number here would be
+  // indistinguishable from a mistyped heading or speed. `acc` is metres, and 0
+  // means unstated exactly as it does on the BLE wire; `dirq` is the same 0-3
+  // code the packet's flags bits 2-3 carry.
+  //
+  // They exist so the marker's shapes can be put on the panel and looked at
+  // without a phone that happens to have a bad fix -- the style rule is that a
+  // mark on the map is judged on the glass (CLAUDE.md).
+  uint16_t accuracyM = 0;
+  uint8_t dirQuality = 0;
+  uint8_t zoom = 0;    // 0-4
+  uint8_t marker = 0;  // 0-4
   // Missing: first entry of the page to print. uint16 because the store is
   // capped at 200 entries (MissingTilesStore::kMaxEntries); an offset past
   // the end is legal and answers an empty page rather than an error, which
@@ -196,12 +207,14 @@ struct MapCommand {
   // coordinate came from. Copied, not viewed, for the same reason as skipReason.
   MapPinVerb pinVerb = MapPinVerb::List;
   char pinKey[kPinKeyBytes] = {};
-  uint32_t pinUtc = 0;         // `pin set`, optional; 0 = the sender had no clock
-  uint16_t pinLogOffset = 0;   // `pin log`, default 0 = the newest page
+  uint32_t pinUtc = 0;        // `pin set`, optional; 0 = the sender had no clock
+  uint16_t pinLogOffset = 0;  // `pin log`, default 0 = the newest page
   MapRideMode mode = MapRideMode::Ride;
-  bool hasHeading = false;   // Pos carried a heading
-  bool hasSpeed = false;     // Pos carried a speed
-  bool hasAltitude = false;  // Pos carried an altitude
+  bool hasHeading = false;     // Pos carried a heading
+  bool hasAccuracy = false;    // Pos carried `acc`
+  bool hasDirQuality = false;  // Pos carried `dirq`
+  bool hasSpeed = false;       // Pos carried a speed
+  bool hasAltitude = false;    // Pos carried an altitude
 };
 
 // Parses one line. Never fails hard: a bad line comes back as

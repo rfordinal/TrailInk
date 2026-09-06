@@ -10,6 +10,7 @@
 #include "MapBleConsole.h"
 #include "MapCommandConsole.h"
 #include "MapDebugOverlay.h"
+#include "MapFixTrust.h"
 #include "MapFollow.h"
 #include "MapGnssHeading.h"
 #include "MapMarkerMetrics.h"
@@ -516,7 +517,15 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // incoming heading: the map is track-up, so a fix matching the frame's
   // heading points straight up, and a rider who has turned since the frame was
   // drawn gets an arrow that shows exactly that turn.
-  void drawPositionMarker(int cx, int cy, uint8_t headingStep, MapRideMode mode);
+  // `style` is the only thing this knows about fix quality: whether to break
+  // the ring, and whether the heading is a glyph, a wedge or nothing. It never
+  // sees metres, HDOP or a GGA quality digit -- MapFixTrust.h is where those
+  // turn into a shape.
+  void drawPositionMarker(int cx, int cy, uint8_t headingStep, MapRideMode mode, MapFixTrust::MarkerStyle style);
+
+  // The style for the fix currently on screen. One place, so the full redraw
+  // and the partial move cannot disagree about what the marker is claiming.
+  MapFixTrust::MarkerStyle markerStyle() const { return MapFixTrust::styleFor(trust_); }
 
   // Buttons, and the two timers they arm.
   void handleButtons();
@@ -1068,6 +1077,25 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // The heading the frame was drawn track-up with. proj_ is rotated by it, so
   // it is also the frame's "up".
   uint8_t anchorHeading_ = 0;
+
+  // How much the marker is allowed to claim about the newest fix, and the
+  // hysteresis latch behind it. Set by whichever ingest path accepted the fix
+  // (BLE, or the console's `pos`), read only through markerStyle().
+  //
+  // Starts Unstated, which draws the marker exactly as it drew before any of
+  // this existed -- so a source that says nothing about quality, and a device
+  // that has not had a fix yet, both look like they always did.
+  MapFixTrust::Trust trust_{};
+  MapFixTrust::State trustState_{};
+  // What the marker on the panel is actually claiming right now, recorded where
+  // it is painted -- the same pattern as markerBoxDrawn_ and for the same
+  // reason: the answer has to come from the frame, not from live state that may
+  // have moved on since.
+  //
+  // A fix that lands under the move floor Skips and never touches the panel, so
+  // without this a parked rider whose heading went stale or whose fix degraded
+  // would keep the old marker forever.
+  MapFixTrust::MarkerStyle markerStyleDrawn_{};
   // With a route loaded, the frame's "up" is the route's own direction and stays
   // that way for every reset -- docs/route-navigation.md, "The decision". Taken
   // from MapRouteFit, which measures the route's point set per heading and breaks

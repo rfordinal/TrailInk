@@ -3,10 +3,10 @@
 // Header-only and dependency-free (atomic/cstddef/cstdint, no NimBLE), which is
 // why a host-tested translation unit may include it: the chunk-payload formula
 // has to be the same one the radio reports.
-#include "BlePositionServer.h"
-
 #include <cstdio>
 #include <cstring>
+
+#include "BlePositionServer.h"
 
 namespace {
 
@@ -86,6 +86,14 @@ bool MapConsoleState::execute(const MapCommand& cmd, IMapReplyWriter& out) {
       lonE7_ = cmd.lonE7;
       if (cmd.hasHeading) heading_ = cmd.heading;
       if (cmd.hasSpeed) speedKmh_ = cmd.speedKmh;
+      if (cmd.hasAccuracy) {
+        accuracyM_ = cmd.accuracyM;
+        hasAccuracy_ = true;
+      }
+      if (cmd.hasDirQuality) {
+        dirQuality_ = cmd.dirQuality;
+        hasDirQuality_ = true;
+      }
       if (cmd.hasAltitude) {
         altitudeM_ = cmd.altitudeM;
         hasAltitude_ = true;
@@ -413,6 +421,14 @@ void MapConsoleState::writeInfo(IMapReplyWriter& out) const {
   snprintf(line, sizeof(line), "INFO speed_kmh=%u", static_cast<unsigned>(speedKmh_));
   out.reply(line);
 
+  if (hasAccuracy_) {
+    snprintf(line, sizeof(line), "INFO acc_m=%u", static_cast<unsigned>(accuracyM_));
+    out.reply(line);
+  }
+  if (hasDirQuality_) {
+    snprintf(line, sizeof(line), "INFO dirq=%u", static_cast<unsigned>(dirQuality_));
+    out.reply(line);
+  }
   if (hasAltitude_) {
     snprintf(line, sizeof(line), "INFO alt_m=%d", static_cast<int>(altitudeM_));
   } else {
@@ -491,8 +507,7 @@ void MapConsoleState::writeInfo(IMapReplyWriter& out) const {
       out.reply(line);
       // freeink::bleMaxChunkPayload, not `mtu - 8`: a pre-trip sender reads
       // `info` as its whole briefing, so this number is acted on (BUG-103).
-      snprintf(line, sizeof(line), "INFO chunk_payload=%u",
-               static_cast<unsigned>(freeink::bleMaxChunkPayload(mtu)));
+      snprintf(line, sizeof(line), "INFO chunk_payload=%u", static_cast<unsigned>(freeink::bleMaxChunkPayload(mtu)));
       out.reply(line);
     }
   }
