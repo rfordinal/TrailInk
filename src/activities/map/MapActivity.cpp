@@ -3051,20 +3051,33 @@ bool MapActivity::restoreMenuBackdrop() {
     LOG_ERR(kLogTag, "menu backdrop write rejected: %d,%d %dx%d", rect.x, rect.y, rect.width, rect.height);
     return false;
   }
-  // The popup drew its own four hints over the map's, in the band below the
-  // dialog. Repaint ours, and refresh from the dialog's top down to the bottom
-  // of the panel so the one window covers both.
+  // The popup drew its own four hints over the map's, in the band at the bottom
+  // of the panel. Repaint ours.
   drawMapButtonHints();
-  const int x = 0;
-  const int y = rect.y;
-  const int w = renderer.getScreenWidth();
-  const int h = renderer.getScreenHeight() - y;
-  // A dialog tall enough to reach y == 0 makes this "one window" the whole
-  // panel, which is exactly what the comment below says aborts the device.
-  // Nothing bounded it until 2026-08-22.
-  if (!windowRefreshAffordable(w, h) || !renderer.displayBufferWindow(x, y, w, h)) {
-    LOG_ERR(kLogTag, "menu close window rejected: %d,%d %dx%d", x, y, w, h);
+  // Two windows, not one band from the dialog's top edge to the bottom of the
+  // panel. The band was the cheaper thing to write and the more expensive thing
+  // to run: the driver allocates (w/8)*h bytes for a window, and a full-width
+  // band from a centred dialog is (ScreenW/8) * (ScreenH + DialogH)/2 -- 45,696
+  // bytes on a 540x960 T5 S3 Pro, past what windowRefreshAffordable() will allow
+  // on a map screen. Refused, every close fell back to a full re-render, which
+  // is exactly the redraw the backdrop exists to avoid.
+  //
+  // The popup only ever dirties three places: its own frame, the hint band, and
+  // the side-hint strip below. Refreshing those three costs a third of the band
+  // and nothing in between them was touched.
+  const Rect hints = GUI.buttonHintsRect(renderer);
+  if (!windowRefreshAffordable(rect.width, rect.height) ||
+      !renderer.displayBufferWindow(rect.x, rect.y, rect.width, rect.height)) {
+    LOG_ERR(kLogTag, "menu close window rejected: %d,%d %dx%d", rect.x, rect.y, rect.width, rect.height);
     return false;
+  }
+  // Empty when the panel is locked and the band carries the padlock strip
+  // instead -- drawMapButtonHints() drew that, and it lives in the same rect,
+  // so an empty rect here means there is genuinely nothing to refresh.
+  if (hints.width > 0 && hints.height > 0) {
+    if (!renderer.displayBufferWindow(hints.x, hints.y, hints.width, hints.height)) {
+      LOG_ERR(kLogTag, "menu close hint window rejected: %d,%d %dx%d", hints.x, hints.y, hints.width, hints.height);
+    }
   }
   // A popup with row actions drew the two side-hint boxes, and those sit outside
   // the dialog -- on the right edge, at the theme's own y. drawMapButtonHints()
@@ -3079,10 +3092,12 @@ bool MapActivity::restoreMenuBackdrop() {
   // bad_alloc -> terminate, with 38 KB free and a 34 KB largest block).
   if (popupDrewSideHints_) {
     popupDrewSideHints_ = false;
-    const Rect hints = GUI.sideButtonHintsRect(renderer);
-    if (hints.width > 0 && hints.height > 0 && hints.y < y) {
-      if (!renderer.displayBufferWindow(hints.x, hints.y, hints.width, hints.height)) {
-        LOG_ERR(kLogTag, "side hint window rejected: %d,%d %dx%d", hints.x, hints.y, hints.width, hints.height);
+    const Rect side = GUI.sideButtonHintsRect(renderer);
+    // No `y` test any more: the dialog window above covers only the dialog, so
+    // the side strip needs its own refresh wherever it sits.
+    if (side.width > 0 && side.height > 0) {
+      if (!renderer.displayBufferWindow(side.x, side.y, side.width, side.height)) {
+        LOG_ERR(kLogTag, "side hint window rejected: %d,%d %dx%d", side.x, side.y, side.width, side.height);
       }
     }
   }

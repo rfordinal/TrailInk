@@ -232,33 +232,13 @@ per board without being written per board, so a wider panel gets a box of the
 same proportion rather than an X4 pixel count. `optionPopupFixedBox()` resolves
 one, centres it, and clamps the width to the panel's side margins.
 
-Today: `Menu` 92% x 40%, `Confirm` 76% x 30%. On a 480x800 panel that is
-440x320 and 364x240; on a 540x960 T5 S3 Pro, 496x384 and 410x288. The `Menu`
-width clamps to exactly the widest a dialog was ever allowed to be, so nothing
-that fitted before overflows now.
+Today: `Menu` 70% x 40%, `Confirm` 60% x 30%. On a 480x800 panel that is
+336x320 and 288x240; on a 540x960 T5 S3 Pro, 378x384 and 324x288.
 
-**The `Menu` height is what the close costs.** `restoreMenuBackdrop()` refreshes
-a band the full width of the panel, from the dialog's top edge down to the
-bottom (the button hints live under the dialog and have to be repainted in the
-same window). A centred dialog puts its top edge at `(ScreenH - DialogH) / 2`,
-so the band is `(ScreenH + DialogH) / 2` tall and costs `ceil(W/8) * that`
-bytes:
-
-| `Menu` height | X4 480x800 | T5 S3 Pro 540x960 |
-|---|---|---|
-| 50% | 600 px band, 36,000 B | 720 px band, 48,960 B |
-| 40% | 560 px band, 33,600 B | 672 px band, 45,696 B |
-
-33,733 B is the number that was measured working on the X4 (the old
-content-sized menu, 480x553), against a largest free block of 43 to 45 kB. 40%
-keeps the X4 under it; 50% did not, which is why the metric is 40. Arithmetic,
-not a measurement -- nothing here has been on a panel yet.
-
-The T5 S3 Pro numbers are open: 45,696 B is close enough to the X4's largest
-block that `windowRefreshAffordable()` may refuse it there and fall back to a
-full redraw. That is slow, not unsafe -- the check exists precisely so an
-unaffordable window is never handed to the driver -- but nobody has read
-`ESP.getMaxAllocHeap()` on that board with the map up.
+The first cut was 92% wide and it was wrong on the panel: 494 px of box for
+rows whose longest label and value together need barely 300 (screenshot, T5 S3
+Pro, 2026-09-06). A fixed box does not get to be as wide as a dialog may be --
+it has to be as wide as the content usually is, because it no longer shrinks.
 
 **Why a fixed box and not a floor.** The mechanism before this was
 `setSizeHint()`: "be no smaller than the dialog you replaced". It was not
@@ -271,6 +251,26 @@ confirmation share one rect, `captureMenuBackdrop()` is taken once at the
 `Menu` box, and `Confirm` sits inside it because it is smaller on both axes and
 centred the same way. `dropBackdropIfPopupOutgrew()` stays as the guard, and
 with these metrics it never fires.
+
+**The close refreshes three small windows, not one band.**
+`restoreMenuBackdrop()` used to refresh the full width of the panel from the
+dialog's top edge down to the bottom, so that one window covered both the
+dialog and the button hints under it. That is `ceil(W/8) * (ScreenH + DialogH)/2`
+bytes, and the driver wants it as one block:
+
+| | X4 480x800 | T5 S3 Pro 540x960 |
+|---|---|---|
+| old full-width band | 33,600 B | 45,696 B |
+| dialog window now | 42 x 324 = 13,608 B | 48 x 388 = 18,624 B |
+| hint band now | 60 x 40 = 2,400 B | 68 x 40 = 2,720 B |
+
+`windowRefreshAffordable()` refuses anything that does not leave 4 kB under the
+largest free block, which on a map screen was measured at 43 to 45 kB on the X4.
+The T5 S3 Pro band sat right on that line, and a refused window means a full
+re-render -- the exact redraw the backdrop exists to avoid. The popup only ever
+dirties three places (its frame, the hint band, the side-hint strip a pin list
+takes), so refreshing those three costs a third of the band and nothing between
+them was touched anyway.
 
 **What still adapts.** The row count. The title may wrap to two or three lines
 and eat a row, so `optionPopupGeometry()` budgets the rows against the box's own
@@ -293,9 +293,13 @@ title wrapped to the full-screen budget wins `maxTextWidth` on its own and
 drags the dialog wider than the box it was told to match. The wrap budget has
 to be the box's, or the box is not a box.
 
-Not verified on hardware yet: how the two boxes read on the panel, whether the
-`Menu` box looks airy when the rows do not fill it, and whether the close is
-still one window refresh on both boards.
+Verified on the T5 S3 Pro 2026-09-06, first cut: the `Menu` box is one rect and
+the map menu draws in it (screenshot, 494x382 measured against 496x384
+computed), and it was too wide -- hence 70%. Still open: whether the narrower
+box reads right, and whether the three-window close is visibly cheap. The
+"leaving Pins re-renders the screen" report is what the window split above is
+for; the band refusal is the arithmetic's explanation for it and has not been
+read off the device log.
 
 ## The hint says "Options", not "Select"
 
