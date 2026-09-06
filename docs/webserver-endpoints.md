@@ -319,6 +319,54 @@ Notes:
   does not implement full WebDAV Class 2 locking semantics such as persistent
   locks or lock discovery.
 
+### `GET` sent one byte per file, and then reset the board
+
+Two separate defects, found 2026-09-05 and 2026-09-06 pulling logs off a
+LilyGo T5 S3 Pro. Both are fixed. Both were upstream's.
+
+**One byte per file.** `handleGet()` ended in `client.write(file)`. That worked
+while `Storage.open()` returned an SdFat `FsFile`, which derives from `Stream`:
+the call matched `NetworkClient::write(Stream&)` and streamed the file.
+Upstream's `6ff5fcd9` (2026-02-28, thread-safe `HalFile`) wrapped it, and
+`HalFile` derives from `Print`, not `Stream` (`lib/hal/HalStorage.h`). The
+overload stopped matching, the compiler took `HalFile::operator bool()`,
+promoted the `true` to `uint8_t` and wrote a single `0x01`. The call site never
+changed; its meaning did, and nothing warned, because every step is a legal
+conversion.
+
+The reply still carried the real `Content-Length`, so clients waited for a body
+that never came and reported a truncated transfer rather than an error. That is
+why it read as a flaky network for six months. `WebDAVHandler.cpp` now calls
+`Storage.readFileToStream(path, client)`. Verified on hardware 2026-09-06: a
+7401-byte `power.csv` returns exactly 7401 bytes.
+
+**Then a big file reset the board.** With bytes actually flowing, a 732 765-byte
+tile reset the device 16 s in, 545 kB delivered:
+
+```text
+[179485] [DBG] [DAV] GET /trailink/base/13/4485/2842.tib
+E (195459) task_wdt: Task watchdog got triggered ... - loopTask (CPU 1)
+E (195459) task_wdt: Aborting.
+```
+
+`SDCardManager::readFileToStream()` streamed in a loop that never blocked, so
+`loopTask` could not feed the watchdog. Fixed in the SDK fork, which now yields
+every 100 ms (`freeink-sdk` `55a4958`, upstream PR Free-Ink/freeink-sdk#83).
+The same file now completes in 6.7 s, and two downloads of it are byte-for-byte
+identical.
+
+**Yielding tripled throughput** rather than costing any: ~34 kB/s before the
+reset, ~109 kB/s after. Holding the core starved the networking stack.
+
+**Still open: a large `GET` blocks `loopTask` for about 7 s.** Measured
+2026-09-06, `New max loop duration: 7197 ms` for that tile. Under the watchdog
+now, but it is one reason `loop_max_ms` reads in seconds and why the task
+watchdog cannot be tightened. Moving the transfer off `loopTask` would settle
+it; nothing has measured what that would cost.
+
+The one-byte bug is still live in CrossPoint `develop`
+(`src/network/WebDAVHandler.cpp`, `client.write(file)`) and is reported there.
+
 ## UDP Discovery
 
 The server listens on UDP port `8134`. When it receives the text payload
