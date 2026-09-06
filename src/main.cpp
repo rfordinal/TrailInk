@@ -1942,7 +1942,14 @@ void loop() {
   // Touch counts as activity only while touch is allowed to do anything. With
   // it switched off the glass is dead input, so a pocket or a palm on it must
   // not hold the device awake.
-  const bool userInput = gpio.wasAnyPressed() || gpio.wasAnyReleased() ||
+  // The capacitive home key is neither a button nor a coordinate frame, so
+  // neither of the two tests below sees it: wasAnyPressed/Released read the
+  // button bitmask and wasTouchActivity() reads contact frames. A rider who
+  // drove the device from that key alone was therefore slept on schedule and
+  // spent the whole time on the throttled 50 ms loop, which also stretched the
+  // key's own gesture timing.
+  const bool homeKeyActivity = gpio.wasHomeKeyPressed() || gpio.wasHomeKeyTapped() || gpio.wasHomeKeyLongPressed();
+  const bool userInput = gpio.wasAnyPressed() || gpio.wasAnyReleased() || homeKeyActivity ||
                          (TouchPolicy::touchActive() && gpio.wasTouchActivity()) || halTiltSensor.hadActivity();
   if (userInput || activityManager.preventAutoSleep()) {
     lastActivityTime = millis();

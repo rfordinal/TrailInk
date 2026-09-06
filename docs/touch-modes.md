@@ -70,6 +70,20 @@ In BUTTONS mode, `MappedInputManager::pumpHintTouch()` runs once per
   long-press behaviours work off a box.
 - lifted without producing a tap: the held state is cleared with no release
   event. Without this branch the button would stay held for good.
+- **dragged off the box while still on the glass: the same silent cancel.**
+  `InputManager::isTouchHeldAt()` has no slop gate, so a finger that left the box
+  still reported as held and the button stayed pressed wherever the finger went
+  -- `ButtonNavigator`'s continuous step kept scrolling from a box the finger had
+  left. A cancel emits nothing, the way sliding off a physical key does not press
+  it.
+
+One tail of that cancel is **not** fixed and is worth knowing: `ButtonNavigator`
+clears `lastContinuousNavTime` only on a release edge
+(`ButtonNavigator.cpp`, `onRelease`), so after a cancel that followed a
+continuous run, the next genuine release on that button is swallowed once. It
+only bites an activity that acts on release rather than on press. Fixing it means
+changing `ButtonNavigator`, which every device shares, so it waits for the input
+redesign rather than being patched here.
 
 **A tap on a box must not read as a hold.** `ButtonNavigator::onNext()` is
 `onPress` plus `onContinuous`, and the continuous step fires when the button
@@ -181,6 +195,41 @@ Confirm on arrival cannot work — it would activate whatever the cursor was on
 before the second tap could mean the lock instead, and a select cannot be taken
 back. Half a second is still small against a panel refresh measured in whole
 seconds.
+
+### Four defects the audit found, fixed 2026-09-06
+
+A read-only audit of the whole input path (see "What a hardware pass has to
+check") turned up four things in this layer that were wrong independently of the
+home key:
+
+- **A finger dragged off a hint box left the button held** -- above.
+- **The home key was not activity.** `main.cpp`'s sleep timer reads the button
+  bitmask and `wasTouchActivity()`; the capacitive key is neither, so a rider
+  driving the device from that key alone was slept on schedule and spent the
+  whole time on the throttled 50 ms loop -- which also stretched the key's own
+  gesture timing. It now counts.
+- **`wasAnyPressed()` / `wasAnyReleased()` did not see hint-box taps**, so a
+  screen driven only by the boxes looked idle to anything asking "did the rider
+  do something". `main.cpp`'s sleep timer deliberately still does not come
+  through here: it reads `HalGPIO` plus `wasTouchActivity()`, which already
+  counts the touch that made the press.
+- **`getPressedFrontButton()` did not either**, which left the button remap
+  screen unusable by touch on a board with no front keys.
+- **The touch held-time override answered for the wrong input.**
+  `getHeldTime()` returns the last touch's duration for 250 ms when no button
+  edge landed this frame. A hardware button going down inside that window starts
+  an input the override knows nothing about, and while it is held there are no
+  further edges to stop it answering -- `ButtonNavigator` read a slow screen tap
+  as an instant half-second hold on the key. A press now ends the override's
+  claim.
+
+Two more the audit found are **not** fixed here, because they are in the SDK and
+belong to the input redesign rather than to another patch: `getHeldTime()`
+reports the duration of the **first** key of a chord for every key in it
+(`InputManager.cpp`, `buttonPressStart` is set only when nothing was down), and
+the T5 S3 Pro's user button can never long-press Confirm, because its hook emits
+a ~30 ms synthetic pulse *after* release, so `isPressed(Confirm) && getHeldTime()`
+is unreachable there.
 
 ### The key produces more events than the rider makes gestures
 

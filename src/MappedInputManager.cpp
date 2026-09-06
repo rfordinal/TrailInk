@@ -264,6 +264,13 @@ bool MappedInputManager::hintBoxAt(const int px, const int py, uint8_t& hwButton
 void MappedInputManager::pumpHintTouch() const {
   hintPressedButton = kNoHintButton;
   hintReleasedButton = kNoHintButton;
+  // The held-time override answers with the last TOUCH's duration for 250 ms
+  // (getHeldTime()). A hardware button going down in that window starts an input
+  // it knows nothing about, and while that button is held there are no more
+  // edges to stop it answering -- ButtonNavigator then read a slow screen tap as
+  // an instant half-second hold on the key. A press ends the override's claim.
+  if (gpio.wasAnyPressed()) touchHeldOverrideValid = false;
+
   if (!TouchPolicy::touchHintBoxes()) {
     hintDownButton = kNoHintButton;
     return;
@@ -295,10 +302,25 @@ void MappedInputManager::pumpHintTouch() const {
       rememberTouchHeldTime();
     }
     hintDownButton = kNoHintButton;
-  } else if (hintDownButton != kNoHintButton && !gpio.isTouchHeldAt(nx, ny)) {
-    // Lifted without producing a tap (dragged off, or moved past the tap slop).
-    // Without this the button would stay held for good.
-    hintDownButton = kNoHintButton;
+  } else if (hintDownButton != kNoHintButton) {
+    if (!gpio.isTouchHeldAt(nx, ny)) {
+      // Lifted without producing a tap (moved past the tap slop). Without this
+      // the button would stay held for good.
+      hintDownButton = kNoHintButton;
+    } else {
+      // Still on the glass -- but a finger dragged OFF the box is no longer
+      // pressing it. isTouchHeldAt() has no slop gate of its own
+      // (InputManager::isTouchHeldAt), so without this check the button stayed
+      // held wherever the finger went, and ButtonNavigator's continuous step
+      // kept scrolling from a box the finger had left.
+      tapToPortrait(nx, ny, px, py);
+      uint8_t stillOn = kNoHintButton;
+      if (!hintBoxAt(px, py, stillOn) || stillOn != hintDownButton) {
+        // A cancel, not a release: nothing is emitted, the way a finger slid off
+        // a physical key does not press it.
+        hintDownButton = kNoHintButton;
+      }
+    }
   }
 }
 
@@ -546,9 +568,23 @@ bool MappedInputManager::wasReleased(const Button button) const {
 
 bool MappedInputManager::isPressed(const Button button) const { return mapButton(button, &HalGPIO::isPressed); }
 
-bool MappedInputManager::wasAnyPressed() const { return gpio.wasAnyPressed(); }
+// A hint-box tap is a button press as far as anything asking "did the rider do
+// something" is concerned. Without this a screen driven only by the boxes looked
+// idle: the map's own "the rider is looking at the screen" test and the remap
+// capture below both went through here and saw nothing.
+//
+// main.cpp's sleep timer deliberately does NOT come through here -- it reads
+// HalGPIO plus wasTouchActivity(), which already counts the touch that made this
+// press, and counting it twice would say nothing new.
+bool MappedInputManager::wasAnyPressed() const {
+  ensureHintTouchPumped();
+  return gpio.wasAnyPressed() || hintPressedButton != kNoHintButton;
+}
 
-bool MappedInputManager::wasAnyReleased() const { return gpio.wasAnyReleased(); }
+bool MappedInputManager::wasAnyReleased() const {
+  ensureHintTouchPumped();
+  return gpio.wasAnyReleased() || hintReleasedButton != kNoHintButton;
+}
 
 unsigned long MappedInputManager::getHeldTime() const {
   ensureHintTouchPumped();
@@ -612,6 +648,14 @@ MappedInputManager::Labels MappedInputManager::mapFrontLabels(const char* back, 
 }
 
 int MappedInputManager::getPressedFrontButton() const {
+  ensureHintTouchPumped();
+  // A tap on a hint box is a press of the button that box stands for, so the
+  // remap screen can be driven by touch on a board with no front keys -- it was
+  // unusable there otherwise. Front boxes only: the index this returns is a
+  // front button index and the side boxes are not among them.
+  if (hintPressedButton <= HalGPIO::BTN_RIGHT) {
+    return static_cast<int>(hintPressedButton);
+  }
   // Scan the raw front buttons in hardware order.
   // This bypasses remapping so the remap activity can capture physical presses.
   if (gpio.wasPressed(HalGPIO::BTN_BACK)) {
