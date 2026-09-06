@@ -403,13 +403,19 @@ void BaseTheme::drawTouchLockIndicator(GfxRenderer& renderer) const {
   const GfxRenderer::Orientation origOrientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
-  const int stripHeight = UITheme::getInstance().getMetrics().buttonHintsHeight;
-  const int stripTop = renderer.getScreenHeight() - stripHeight;
-  const int iconX = (renderer.getScreenWidth() - icon_touchLock.w) / 2;
-  const int iconY = stripTop + (stripHeight - icon_touchLock.h) / 2;
-  // White backing: the strip is reserved, but a map or a rendered page can still
-  // have painted into it before this runs.
-  renderer.fillRect(iconX - 6, stripTop, icon_touchLock.w + 12, stripHeight, false);
+  // Drawn as a button, not as a small glyph floating in the band: the same box
+  // the hint boxes use, one of them wide, centred. A padlock on its own read as
+  // a status mark rather than as the thing that took the buttons' place.
+  const int boxHeight = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  const int boxWidth = HintGeometry::scaleMetric(kFrontBoxWidth);
+  const int boxX = (renderer.getScreenWidth() - boxWidth) / 2;
+  const int boxY = renderer.getScreenHeight() - boxHeight;
+  // Fill then border, the same pairing drawButtonHints() uses: the band is
+  // reserved, but a map or a rendered page can still have painted into it.
+  renderer.fillRect(boxX, boxY, boxWidth, boxHeight, false);
+  renderer.drawRect(boxX, boxY, boxWidth, boxHeight);
+  const int iconX = boxX + (boxWidth - icon_touchLock.w) / 2;
+  const int iconY = boxY + (boxHeight - icon_touchLock.h) / 2;
   renderer.drawMono1bpp(icon_touchLock.bits, iconX, iconY, icon_touchLock.w, icon_touchLock.h, true);
 
   renderer.setOrientation(origOrientation);

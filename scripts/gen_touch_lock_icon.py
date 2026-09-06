@@ -8,9 +8,9 @@ switched off (docs/touch-modes.md). Same freeink::Icon output format and the
 same cairosvg/rsvg fallback as scripts/gen_map_header_icons.py -- see that
 script's header for why this does not call the SDK's own generator.
 
-20px because the glyph sits inside the strip that replaces the 40px hint band on
-an X4-sized panel, with room to breathe above and below. A bigger panel scales
-the strip, not the glyph: a padlock is an indicator, not a target.
+28px because the glyph sits inside a box the size of a hint box, drawn where the
+band would be. A bigger panel scales the box, not the glyph: a padlock is an
+indicator, not a target, and one bitmap serves every panel.
 """
 import io
 import os
@@ -26,7 +26,7 @@ LUCIDE = os.path.join(REPO, "freeink-sdk/libs/assets/Icons/lucide/icons")
 OUT = os.path.join(REPO, "src/components/icons/touch_lock_icon.h")
 
 THRESHOLD = 110
-SIZE = 20
+SIZE = 28
 
 LUCIDE_ICONS = [
     ("touchLock", "lock", SIZE),

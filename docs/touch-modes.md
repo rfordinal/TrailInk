@@ -343,14 +343,17 @@ Boxes on screen mean the boxes are live, but their absence is ambiguous —
 ANYWHERE draws none either. So OFF draws a padlock where the band would be:
 
 - `TouchPolicy::lockIndicator()` is the one test.
-- `UITheme::getMetrics()` reserves a strip for it instead of the hint band
-  (`HintGeometry::kTouchLockStripHeight`, 26 px on an X4-sized panel, scaled on a
-  bigger one). Reserved rather than drawn over live content, so no screen has to
-  know the indicator exists.
+- **It is drawn as a button, not as a small glyph in an empty band.** One box the
+  size of a hint box, centred, with the padlock inside it. A 20 px padlock
+  floating in a thin strip read as a status mark rather than as the thing that
+  took the buttons' place, so it is now a 28 px glyph in a real box.
+- `UITheme::getMetrics()` reserves **the same band the boxes get**, not a thinner
+  strip. Nothing above it moves when the panel locks, and the map's chrome swap
+  refreshes one rectangle that fits both modes.
 - `BaseTheme::drawTouchLockIndicator()` paints it, called from every theme's
   `drawButtonHints()` on the path where that draws no boxes. That is why it
   reaches home, settings, the reader and the map without any of them changing.
-- The glyph is Lucide `lock` at 20 px through
+- The glyph is Lucide `lock` at 28 px through
   `scripts/gen_touch_lock_icon.py` (the icon rule in the parent repo's
   `CLAUDE.md`), drawn with `drawMono1bpp()`.
 
