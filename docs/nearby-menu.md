@@ -467,8 +467,9 @@ edge marker to the same 0.1 km step.
 - ~~The dimmed `Useful places` row.~~ **Done 2026-08-22**, see "One setting for
   the whole layer" above: present, dimmed, reading `OFF`, unreachable by the
   button walk and by a tap.
-- The three popups' layout at the map menu's dialog size: row count, the value
-  column with `?` in it, and a long POI name in the title.
+- The three popups' layout in the fixed `Menu` box (`docs/map-menu.md`, "Two
+  fixed boxes, defined per board"): row count, the value column with `?` in it,
+  and a long POI name in the title.
 - **The category-row icon column, added 2026-08-26.** Read off the code only:
   the 24px POI icons should fit inside the compact popup's row height (the
   option font's line height plus `optionPopupSelectionVPadding * 2`), leaving

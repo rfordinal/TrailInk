@@ -152,7 +152,9 @@ This is also where the double render went: the opener no longer paints, and
 `BaseTheme::optionPopupGeometry()` decides how many rows are on screen at once
 and caps it two ways: `kOptionPopupMaxVisibleRows` (6) and
 `kOptionPopupMaxHeightPercent` (50% of panel height). Rows past the window
-scroll; the dialog itself never grows or moves. The title line carries an
+scroll; the dialog itself never grows or moves. Both caps are for `Auto`
+dialogs only -- a fixed box budgets rows against its own height instead (see
+"Two fixed boxes, defined per board"). The title line carries an
 `n/m` counter whenever the list does not fit, so a scrolled list does not read
 as a short list that lost rows.
 
@@ -210,33 +212,90 @@ is one word or a short static phrase, well under the budget, so this changes
 nothing for them: `titleLineCount` stays 1 and the loop draws once, same as
 the old single `drawCenteredText()` call.
 
-### A hinted dialog needs the exact inverse formula, not an approximation
+## Two fixed boxes, defined per board
 
-The fixed budget above is right for a dialog with no size hint. A dialog
-opened with `setSizeHint()` (`OptionPopupSpec::minDialogWidth` -- "match the
-list this replaces") needs the title to wrap to *that* width instead, or the
-title decides `maxTextWidth` on its own and the hint never gets a chance to
-bind. The first cut of this clamp was `minDialogWidth - innerPadding * 2`,
-which is not the inverse of `dialogW`'s actual formula:
+**Every popup the map opens is one of two boxes, and each box is the same rect
+every time.** `BaseTheme::OptionPopupSize` (`src/components/themes/BaseTheme.h`)
+names them:
 
-```
-dialogW = (maxTextWidth + innerPadding*2 + selectionHPadding*2) * widthPercent / 100
-```
+- `Menu` -- the browsing box. The CONFIRM menu, the pin lists, the Nearby
+  screens.
+- `Confirm` -- the yes/no box, smaller on purpose, so a confirmation reads as a
+  different kind of dialog and not as the next list.
+- `Auto` -- measure the content, the historical behaviour. Every screen outside
+  the map still uses it.
 
-Missing `selectionHPadding*2` and the `widthPercent` scaling meant a title
-that "fit" the approximate clamp still pushed `dialogW` past the hint once
-that formula added the same padding back on top a second time. Measured on
-the S8 2026-08-24: the Add/Replace list at 280px, a one-line confirm title at
-363px even with the clamp in place, both hinted at 280. The exact inverse --
+The sizes are theme metrics, as a percent of the panel the HAL reports:
+`optionPopupMenuWidthPercent` / `optionPopupMenuHeightPercent` and the
+`Confirm` pair (`ThemeMetrics`, same file). Percent, not pixels: the number is
+per board without being written per board, so a wider panel gets a box of the
+same proportion rather than an X4 pixel count. `optionPopupFixedBox()` resolves
+one, centres it, and clamps the width to the panel's side margins.
 
-```
-hintedTitleMax = minDialogWidth * 100 / widthPercent - innerPadding*2 - selectionHPadding*2
-```
+Today: `Menu` 92% x 40%, `Confirm` 76% x 30%. On a 480x800 panel that is
+440x320 and 364x240; on a 540x960 T5 S3 Pro, 496x384 and 410x288. The `Menu`
+width clamps to exactly the widest a dialog was ever allowed to be, so nothing
+that fitted before overflows now.
 
--- forces a second wrapped line when the hint genuinely has no room for one,
-and the two now land on the same width exactly. Same fix, same reasoning, in
-both `optionPopupGeometry()` and `drawOptionPopup()` again -- they still have
-to agree, and now they agree on the right number.
+**The `Menu` height is what the close costs.** `restoreMenuBackdrop()` refreshes
+a band the full width of the panel, from the dialog's top edge down to the
+bottom (the button hints live under the dialog and have to be repainted in the
+same window). A centred dialog puts its top edge at `(ScreenH - DialogH) / 2`,
+so the band is `(ScreenH + DialogH) / 2` tall and costs `ceil(W/8) * that`
+bytes:
+
+| `Menu` height | X4 480x800 | T5 S3 Pro 540x960 |
+|---|---|---|
+| 50% | 600 px band, 36,000 B | 720 px band, 48,960 B |
+| 40% | 560 px band, 33,600 B | 672 px band, 45,696 B |
+
+33,733 B is the number that was measured working on the X4 (the old
+content-sized menu, 480x553), against a largest free block of 43 to 45 kB. 40%
+keeps the X4 under it; 50% did not, which is why the metric is 40. Arithmetic,
+not a measurement -- nothing here has been on a panel yet.
+
+The T5 S3 Pro numbers are open: 45,696 B is close enough to the X4's largest
+block that `windowRefreshAffordable()` may refuse it there and fall back to a
+full redraw. That is slow, not unsafe -- the check exists precisely so an
+unaffordable window is never handed to the driver -- but nobody has read
+`ESP.getMaxAllocHeap()` on that board with the map up.
+
+**Why a fixed box and not a floor.** The mechanism before this was
+`setSizeHint()`: "be no smaller than the dialog you replaced". It was not
+enough. A floor does not stop a popup with wider content growing past it, does
+not stop a popup with more rows growing taller, and a dialog is centred -- so
+any change of height moves the top edge. A moved edge is a different refresh
+window and a dead backdrop, which is a full re-render (tiles off the card, a
+whole-panel waveform, seconds). The fixed box removes all three: menu, list and
+confirmation share one rect, `captureMenuBackdrop()` is taken once at the
+`Menu` box, and `Confirm` sits inside it because it is smaller on both axes and
+centred the same way. `dropBackdropIfPopupOutgrew()` stays as the guard, and
+with these metrics it never fires.
+
+**What still adapts.** The row count. The title may wrap to two or three lines
+and eat a row, so `optionPopupGeometry()` budgets the rows against the box's own
+height instead of `kOptionPopupMaxHeightPercent`, and drops
+`kOptionPopupMaxVisibleRows`: the cap exists to stop a dialog growing with its
+list, and a box that cannot grow needs no second brake. Rows past what the box
+holds scroll, same as before. Space left under the last row stays empty -- that
+emptiness is what keeps the rect constant.
+
+**The title wraps to the box, in both passes.** `optionPopupGeometry()` and
+`drawOptionPopup()` each compute the same budget from the box's width, and each
+reserves the `n/m` counter corner unconditionally in fixed mode. Reserving
+always costs a slightly narrower title on a list that turns out to fit;
+guessing costs a counter drawn over the title's last word, because whether the
+list scrolls is not known until after the title is wrapped, and the draw pass
+must reach the identical number without knowing it either.
+
+That last part is the lesson the size hint paid for on the S8, 2026-08-24: a
+title wrapped to the full-screen budget wins `maxTextWidth` on its own and
+drags the dialog wider than the box it was told to match. The wrap budget has
+to be the box's, or the box is not a box.
+
+Not verified on hardware yet: how the two boxes read on the panel, whether the
+`Menu` box looks airy when the rows do not fill it, and whether the close is
+still one window refresh on both boards.
 
 ## The hint says "Options", not "Select"
 

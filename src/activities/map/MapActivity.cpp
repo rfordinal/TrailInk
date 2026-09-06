@@ -3895,14 +3895,14 @@ void MapActivity::openMapMenu() {
     keepOpen[static_cast<size_t>(modeIdx)] = 1;
     optionPopup_.setKeepOpenRows(std::move(keepOpen));
   }
-  // After show() (the layout the rect comes from needs the rows) and before
-  // the first draw (the framebuffer still holds the map).
-  //
-  // The size is recorded here too: every pins list opens at exactly this size, so
-  // it lands as the next step of this menu and not as a differently shaped box --
-  // and so this same backdrop still covers it.
-  menuDialogWidth_ = optionPopup_.dialogWidth(renderer);
-  menuVisibleRows_ = optionPopup_.visibleRows(renderer);
+  // The menu box, and every list opened from it, is the same rect (setSize()).
+  // Two things follow: a list lands as the next step of this menu rather than as
+  // a differently shaped box, and this one backdrop stays valid for the whole
+  // chain -- menu, pin list, confirmation -- because the confirm box is smaller
+  // and centred inside it.
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
+  // After show() (which resets the size class) and before the first draw: the
+  // framebuffer still holds the map, which is what the backdrop is.
   captureMenuBackdrop();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4081,7 +4081,7 @@ void MapActivity::openPinsOffscreenList() {
     pinsOffscreenRow_ = static_cast<uint8_t>(idx);
     pendingPinPopup_ = PinPopup::Offscreen;
   });
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4298,7 +4298,7 @@ void MapActivity::openNearbyMenu() {
     pendingNearbyPopup_ = NearbyPopup::Category;
   });
   optionPopup_.setIcons(std::move(icons));
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4335,7 +4335,7 @@ void MapActivity::openNearbyCategoryList(uint8_t category) {
                                 pendingNearbyArg_ = static_cast<uint8_t>(idx - 1);
                                 pendingNearbyPopup_ = NearbyPopup::Detail;
                               });
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4374,7 +4374,7 @@ void MapActivity::openNearbyPointDetail(uint8_t hitIndex) {
   // make every POI look conditional.
   const bool hasCondition = (hit.flags & (kPointFlaggedOnMapMask | kPointUnstaffed | kPointOpenSided)) != 0;
   if (hasCondition) optionPopup_.setNote(I18N.get(nearbyConditionLabel(hit.category, hit.flags)));
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4598,7 +4598,7 @@ void MapActivity::openPinsMenu() {
   // Same size as the menu it came out of: a differently sized box in the middle
   // of the previous one reads as a different kind of dialog rather than the next
   // step of the same one, and matching it keeps the menu backdrop valid.
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4646,7 +4646,7 @@ void MapActivity::openPinsAddList() {
     pendingPinPopup_ = PinPopup::ConfirmSet;
   });
   optionPopup_.setIcons(std::move(icons));
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4698,7 +4698,7 @@ void MapActivity::confirmPinReplaceSlot(size_t slot) {
   // popup opener sets it) is why the confirm box used to compute its own
   // narrower size from just "Cancel"/"Replace" instead of matching the
   // Add/Replace or Pins list behind it. Reported on the S8 2026-08-24.
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Confirm);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4725,7 +4725,7 @@ void MapActivity::confirmPinDelete(size_t slot) {
   });
   // Same missing size hint as confirmPinReplaceSlot() above, after show() for
   // the same reason -- same fix.
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Confirm);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
