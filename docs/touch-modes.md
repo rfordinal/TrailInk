@@ -356,10 +356,24 @@ it later, the way the option popup already saves the map under an open dialog:
   snapshot** -- its bits are still a clean picture of the map under that
   rectangle, so the next swap needs no new capture.
 - `swapChrome()` restores the map, calls `drawMapButtonHints()` (which draws the
-  boxes, the padlock, or nothing, per mode) and refreshes **two small windows**.
-  Never one window spanning both: `displayBufferWindow()` allocates a buffer per
-  window inside the driver, and a full-panel window aborted the device on a map
-  screen (measured 2026-08-17).
+  boxes, the padlock, or nothing, per mode) and refreshes **one window over both
+  rects**. A windowed refresh costs the same panel time as a full one whatever
+  its area -- ~1,081 ms on this panel, measured over a 4h36m walk 2026-09-05
+  ([`map-follow.md`](map-follow.md), "A windowed refresh blocks the loop") -- so
+  area is free and the *count* is what costs. Two windows would be 2.2 s against
+  1.08 s for one.
+- **The union is affordability-tested, not assumed.**
+  `displayBufferWindow()` allocates a buffer per window inside the driver, and an
+  unbounded union of two far-apart boxes is the whole panel, which aborted the
+  device on a map screen (measured 2026-08-17). When the union does not fit,
+  `swapChrome()` gives up and lets the caller do the full render: two windows
+  would cost the same panel time as that render, and the render is at least
+  correct about the layout.
+- **This trade-off flips when the T5 S3 Pro gets a real partial-window refresh**
+  (planned, another session). Today area is free and the window count is
+  everything, so one union wins. Once a window costs in proportion to its area,
+  two small far-apart rects beat one union that spans mostly untouched panel --
+  revisit `swapChrome()` then rather than assuming it still holds.
 - **Two rectangles, never their union.** The bottom band and the side boxes are
   far apart; one rect covering both would be 540 x 546 on a T5 S3 Pro, about
   37 kB, against roughly 4 kB for the pair.

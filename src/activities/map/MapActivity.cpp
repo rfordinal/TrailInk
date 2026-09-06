@@ -3524,17 +3524,40 @@ bool MapActivity::swapChrome() {
   // next swap needs no new capture.
   drawMapButtonHints();
 
-  // Two small windows, never one big one -- displayBufferWindow() allocates a
-  // buffer per window inside the driver and a full-panel window aborted the
-  // device on a map screen (measured 2026-08-17, see restoreMenuBackdrop()).
-  if (!windowRefreshAffordable(front.width, front.height) ||
-      !renderer.displayBufferWindow(front.x, front.y, front.width, front.height)) {
-    LOG_ERR(kLogTag, "chrome swap window rejected: %d,%d %dx%d", front.x, front.y, front.width, front.height);
+  // ONE window over both rects when the driver can afford it, not two.
+  //
+  // A windowed refresh costs the same panel time as a full one whatever its area
+  // -- ~1,081 ms on this panel, measured over a 4h36m walk 2026-09-05
+  // (docs/map-follow.md, "A windowed refresh blocks the loop"). So two windows
+  // cost two refreshes, about 2.2 s, where one union costs 1.08 s. Area is free;
+  // the count is not.
+  //
+  // This flips when this panel gets a real partial-window refresh (planned,
+  // 2026-09-06): once a window costs in proportion to its area, two small
+  // far-apart rects beat one union spanning mostly untouched panel.
+  //
+  // What is NOT free is the driver's buffer: displayBufferWindow() allocates one
+  // per window, and an unbounded union of two far-apart boxes is the whole panel,
+  // which aborted the device on a map screen (measured 2026-08-17,
+  // Ssd1677Driver::displayWindow -> operator new -> bad_alloc). Hence the
+  // affordability test, and hence the fallback below rather than a bigger try.
+  Rect window = front;
+  if (side.width > 0) {
+    const int x0 = std::min(front.x, side.x);
+    const int y0 = std::min(front.y, side.y);
+    const int x1 = std::max(front.x + front.width, side.x + side.width);
+    const int y1 = std::max(front.y + front.height, side.y + side.height);
+    window = Rect{x0, y0, x1 - x0, y1 - y0};
+  }
+  if (!windowRefreshAffordable(window.width, window.height)) {
+    // The union does not fit. Two windows are two refreshes, the same panel time
+    // as the full render the caller falls back to -- and the full render is at
+    // least correct about the layout, so let the caller do that instead.
+    LOG_DBG(kLogTag, "chrome swap union %dx%d unaffordable -- full render instead", window.width, window.height);
     return false;
   }
-  if (side.width > 0 && (!windowRefreshAffordable(side.width, side.height) ||
-                         !renderer.displayBufferWindow(side.x, side.y, side.width, side.height))) {
-    LOG_ERR(kLogTag, "chrome swap side window rejected: %d,%d %dx%d", side.x, side.y, side.width, side.height);
+  if (!renderer.displayBufferWindow(window.x, window.y, window.width, window.height)) {
+    LOG_ERR(kLogTag, "chrome swap window rejected: %d,%d %dx%d", window.x, window.y, window.width, window.height);
     return false;
   }
   return true;
