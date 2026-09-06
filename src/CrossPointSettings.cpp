@@ -87,6 +87,12 @@ void CrossPointSettings::toJson(JsonDocument& doc) const {
   doc["frontButtonConfirm"] = frontButtonConfirm;
   doc["frontButtonLeft"] = frontButtonLeft;
   doc["frontButtonRight"] = frontButtonRight;
+  // Not in SettingsList on purpose -- it has no Settings row, because a row that
+  // can lock the rider out of Settings must not exist. That also means the list
+  // loop above never writes it, so it is written by hand here or it is not
+  // written at all. It was not, until 2026-09-07: the panel came back unlocked
+  // from every sleep and reboot, which is exactly the case the flag exists for.
+  doc["touchLocked"] = touchLocked;
   // Map ladder state — owned by MapActivity's buttons, not by SettingsList.
   // One array element per MapRideMode, in enum order, so a mode added later
   // appends rather than renumbers.
@@ -200,6 +206,11 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
   frontButtonRight =
       clamp(doc["frontButtonRight"] | (uint8_t)FRONT_HW_RIGHT, FRONT_BUTTON_HARDWARE_COUNT, FRONT_HW_RIGHT);
   validateFrontButtonMapping(s);
+
+  // Same reason as toJson(): no SettingsList entry, so no automatic load.
+  // Clamped to 0/1 rather than trusted -- this decides whether the device
+  // accepts touch at all, and a stray value must not leave it locked.
+  touchLocked = (doc["touchLocked"] | (uint8_t)0) != 0 ? 1 : 0;
 
   // Map ladder state — not in SettingsList, load manually. Everything is
   // clamped: these are three plain bytes in a file a user can open in a text

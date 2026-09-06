@@ -477,6 +477,10 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // Persisted, so a device that was locked when it slept wakes up locked -- the
   // rider put it in a bag, and coming back unlocked would be a surprise. The
   // preference underneath survives, so unlocking needs nothing remembered.
+  //
+  // **Written by hand in toJson/fromJson**, because it has no SettingsList entry
+  // and that list is what drives serialisation. Adding a field here and stopping
+  // is how it silently did not persist at all until 2026-09-07.
   uint8_t touchLocked = 0;
   // Language setting (Language enum index, default 0 = EN)
   uint8_t language = 0;
