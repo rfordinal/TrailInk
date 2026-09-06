@@ -272,6 +272,31 @@ dirties three places (its frame, the hint band, the side-hint strip a pin list
 takes), so refreshing those three costs a third of the band and nothing between
 them was touched anyway.
 
+**A chained popup is one dialog, so the backdrop is not spent on the way in.**
+Picking `Pins` in the menu closes the menu popup and queues the pin list
+(`PinPopup`, opened from `loop()` -- a row callback may not `show()` from inside
+`handleInput()`). The close path treated that as a dismissal: it restored the
+map, which flashed the map onto the panel for one frame before the pin list
+drew, and `restoreMenuBackdrop()` drops the backdrop it uses -- so the pin list
+had none, and closing *it* re-rendered the viewport from the card.
+
+Measured on the T5 S3 Pro 2026-09-07, serial log: `menu backdrop 19100 bytes
+(382x388), free heap 119388` at menu open, then `render 2331 ms` with the busy
+badge on the Back out of the pin list. Nothing failed -- no rejected window, no
+refused capture. The backdrop had been spent one popup too early.
+
+So the close does nothing at all while `pendingPinPopup_` or
+`pendingNearbyPopup_` names a follow-up: the popup's pixels stay up until the
+next popup draws over the same rect, and the backdrop waits for whoever closes
+the chain. A chained handler that draws a real frame instead of a popup
+(`showPinOnMap()`, `savePin()`) drops the backdrop itself.
+
+This one is not new. It predates the fixed boxes -- with `setSizeHint()` the
+pin list matched the menu's size, so the same double-restore happened and the
+same full re-render followed. What the fixed box changed is that the flicker
+became obvious: the two boxes are now identical, so the map blinking between
+them has nothing to hide behind.
+
 **What still adapts.** The row count. The title may wrap to two or three lines
 and eat a row, so `optionPopupGeometry()` budgets the rows against the box's own
 height instead of `kOptionPopupMaxHeightPercent`, and drops
