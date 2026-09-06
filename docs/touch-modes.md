@@ -44,7 +44,16 @@ DISABLED while it is set. Two reasons, and the first is the one that matters:
 
 The flag is persisted rather than kept in RAM: a device locked when it went to
 sleep wakes up locked, because the rider put it in a bag and coming back unlocked
-would be the surprise. The preference underneath survives untouched, so
+would be the surprise.
+
+**It is written by hand in `CrossPointSettings::toJson()` / `fromJson()`, and it
+has to be.** Serialisation is driven by `SettingsList`, and this flag
+deliberately has no entry there -- a Settings row that can lock the rider out of
+Settings must not exist. So a field added to the struct and nowhere else is never
+written and never read: measured 2026-09-07, the panel came back unlocked from
+every sleep and reboot, which is exactly the case the flag exists for. The
+front-button remap and the map ladder state are in the same position and are
+loaded the same way. The preference underneath survives untouched, so
 unlocking needs nothing remembered. `TouchPolicy::mode()` also treats a *stored*
 DISABLED as ANYWHERE, so a settings file written by an older build cannot lock a
 device whose owner has no way to unlock it.
