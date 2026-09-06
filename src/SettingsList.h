@@ -380,10 +380,16 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
                           {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS),
         // Touch policy. Dropped below on a board with no digitizer, where it
-        // would offer a choice between three identical behaviours.
+        // would offer a choice between identical behaviours.
+        //
+        // Two values, not three: OFF is deliberately unreachable from here. A
+        // rider who picked it could not get back to Settings to undo it, and on
+        // an X4 Pro -- Back and Confirm both come from touch there -- that is a
+        // device with no input at all. The lock lives on a gesture that can also
+        // undo it (CrossPointSettings::touchLocked).
         SettingInfo::Enum(StrId::STR_TOUCH_MODE, &CrossPointSettings::touchMode,
-                          {StrId::STR_TOUCH_MODE_ANYWHERE, StrId::STR_TOUCH_MODE_BUTTONS, StrId::STR_STATE_OFF},
-                          "touchMode", StrId::STR_CAT_CONTROLS),
+                          {StrId::STR_TOUCH_MODE_ANYWHERE, StrId::STR_TOUCH_MODE_BUTTONS}, "touchMode",
+                          StrId::STR_CAT_CONTROLS),
         SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
                             "frontButtonFollowOrientation", StrId::STR_CAT_CONTROLS),
         SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,

@@ -28,6 +28,27 @@ row otherwise.
 | `TOUCH_BUTTONS_ONLY` (1) | yes | only the six boxes, each acting as its hardware button |
 | `TOUCH_DISABLED` (2) | no | nothing, and touch stops counting as user activity |
 
+**`TOUCH_DISABLED` is an effective mode, never a stored one, and Settings does
+not offer it.** The Controls row has two values; the lock is its own persisted
+flag, `CrossPointSettings::touchLocked`, and `TouchPolicy::mode()` reports
+DISABLED while it is set. Two reasons, and the first is the one that matters:
+
+- **A rider who picked OFF in Settings could not reach Settings again to undo
+  it.** On an X4 Pro, where Back and Confirm both come from touch, that is a
+  device with no working input at all. The lock is only reachable from a gesture
+  that can also undo it.
+- A stored value outside the row's own list was an **out-of-bounds read** in the
+  settings screen: `SettingsActivity.cpp` indexed `enumValues[value]` unchecked
+  on the `valuePtr` path, while the `valueGetter` path two branches below already
+  bounds-checked. Now both do.
+
+The flag is persisted rather than kept in RAM: a device locked when it went to
+sleep wakes up locked, because the rider put it in a bag and coming back unlocked
+would be the surprise. The preference underneath survives untouched, so
+unlocking needs nothing remembered. `TouchPolicy::mode()` also treats a *stored*
+DISABLED as ANYWHERE, so a settings file written by an older build cannot lock a
+device whose owner has no way to unlock it.
+
 Default is `TOUCH_ANYWHERE`, so a device that was already in use behaves exactly
 as it did before the setting existed.
 
