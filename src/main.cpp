@@ -141,26 +141,21 @@ void toggleFrontlight(const char* source) {
 namespace {
 constexpr unsigned long USER_BUTTON_HOLD_MS = 600;
 
-// What to go back to when the touch lock is lifted. Runtime only, and
-// deliberately: a device that boots already locked has nothing to restore, and
-// BUTTONS_ONLY is the mode this board is useful in.
-uint8_t touchModeBeforeLock = CrossPointSettings::TOUCH_BUTTONS_ONLY;
-
 void toggleTouchLock() {
-  if (SETTINGS.touchMode == CrossPointSettings::TOUCH_DISABLED) {
-    SETTINGS.touchMode = touchModeBeforeLock;
-  } else {
-    touchModeBeforeLock = SETTINGS.touchMode;
-    SETTINGS.touchMode = CrossPointSettings::TOUCH_DISABLED;
-  }
+  // One flag, flipped. Nothing has to be remembered across it: the mode the
+  // rider chose lives in SETTINGS.touchMode and the lock never touches it, so
+  // unlocking simply stops overriding it (TouchPolicy::mode()). The earlier
+  // version stored DISABLED *into* touchMode and kept the previous value in RAM,
+  // which lost it across a reboot and put a value in that field that the
+  // Settings row does not list.
+  SETTINGS.touchLocked = SETTINGS.touchLocked != 0 ? 0 : 1;
   // One SD write per deliberate tap, the same reasoning the frontlight hold
   // below carries: a handful of writes a ride, not one per interaction.
   SETTINGS.saveToFile();
   // The hint boxes appear or vanish with the mode and the layout reserves room
   // for them or does not, so the screen is repainted rather than nudged.
   activityManager.requestUpdate();
-  LOG_INF("BTN", "Home key: touch %s",
-          SETTINGS.touchMode == CrossPointSettings::TOUCH_DISABLED ? "locked" : "unlocked");
+  LOG_INF("BTN", "Home key: touch %s", SETTINGS.touchLocked != 0 ? "locked" : "unlocked");
 }
 
 // The tap is reported as a synthetic Confirm press *after* the button is

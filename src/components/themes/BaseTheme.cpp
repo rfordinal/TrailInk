@@ -397,19 +397,30 @@ bool BaseTheme::frontBoxActive(const int index) const {
 
 bool BaseTheme::sideBoxActive(const int index) const { return index >= 0 && index <= 1 && sideLabelDrawn[index]; }
 
+void BaseTheme::drawTouchLockBox(GfxRenderer& renderer, const Rect box) const {
+  // Fill then border, the same pairing this theme's drawButtonHints() uses: the
+  // band is reserved, but a map or a rendered page can still have painted into
+  // it before this runs.
+  renderer.fillRect(box.x, box.y, box.width, box.height, false);
+  renderer.drawRect(box.x, box.y, box.width, box.height);
+}
+
 void BaseTheme::drawTouchLockIndicator(GfxRenderer& renderer) const {
   if (!TouchPolicy::lockIndicator()) return;
 
   const GfxRenderer::Orientation origOrientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
-  const int stripHeight = UITheme::getInstance().getMetrics().buttonHintsHeight;
-  const int stripTop = renderer.getScreenHeight() - stripHeight;
-  const int iconX = (renderer.getScreenWidth() - icon_touchLock.w) / 2;
-  const int iconY = stripTop + (stripHeight - icon_touchLock.h) / 2;
-  // White backing: the strip is reserved, but a map or a rendered page can still
-  // have painted into it before this runs.
-  renderer.fillRect(iconX - 6, stripTop, icon_touchLock.w + 12, stripHeight, false);
+  // Drawn as a button, not as a small glyph floating in the band: the same box
+  // the hint boxes use, one of them wide, centred. A padlock on its own read as
+  // a status mark rather than as the thing that took the buttons' place.
+  const int boxHeight = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  const int boxWidth = HintGeometry::scaleMetric(kFrontBoxWidth);
+  const int boxX = (renderer.getScreenWidth() - boxWidth) / 2;
+  const int boxY = renderer.getScreenHeight() - boxHeight;
+  drawTouchLockBox(renderer, Rect{boxX, boxY, boxWidth, boxHeight});
+  const int iconX = boxX + (boxWidth - icon_touchLock.w) / 2;
+  const int iconY = boxY + (boxHeight - icon_touchLock.h) / 2;
   renderer.drawMono1bpp(icon_touchLock.bits, iconX, iconY, icon_touchLock.w, icon_touchLock.h, true);
 
   renderer.setOrientation(origOrientation);

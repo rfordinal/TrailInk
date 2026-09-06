@@ -218,7 +218,12 @@ void MappedInputManager::pumpHomeKey() const {
   // have nothing to do with it.
   if (homeTapPendingSince != 0 && now - homeTapPendingSince >= HOME_KEY_DOUBLE_TAP_WINDOW_MS) {
     homeTapPendingSince = 0;
-    homeConfirmResolved = true;
+    // A locked screen must not select. The tap still had to be held for the
+    // window -- a second one inside it is the unlock and that path is above --
+    // but once it resolves as a single tap on a locked panel it means nothing.
+    // Locking is the rider saying "ignore what I touch", and the key is the one
+    // control that is still listened to, for exactly one thing.
+    homeConfirmResolved = !TouchPolicy::locked();
     homeRefractoryUntil = now + HOME_KEY_REFRACTORY_MS;
   }
 }

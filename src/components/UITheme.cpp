@@ -74,9 +74,12 @@ const ThemeMetrics& UITheme::getMetrics() const {
       adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetricY(adjustedMetrics.buttonHintsHeight);
       adjustedMetrics.sideButtonHintsWidth = HintGeometry::scaleMetric(adjustedMetrics.sideButtonHintsWidth);
     } else if (lock) {
-      // Room for the padlock and nothing else. Reserved so the glyph never lands
-      // on top of a list row or a map.
-      adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetricY(HintGeometry::kTouchLockStripHeight);
+      // The **same** band the boxes get, not a thinner strip. The padlock is
+      // drawn as one box the size of a hint box, so keeping the band identical
+      // means nothing on the screen above it moves when the panel locks -- and
+      // the map's chrome swap refreshes one rectangle that fits both modes.
+      adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetricY(adjustedMetrics.buttonHintsHeight);
+      adjustedMetrics.sideButtonHintsWidth = HintGeometry::scaleMetric(adjustedMetrics.sideButtonHintsWidth);
     } else {
       adjustedMetrics.buttonHintsHeight = 0;
     }

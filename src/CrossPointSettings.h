@@ -202,11 +202,18 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // boxes are drawn and every list row, gesture and swipe is live. BUTTONS
   // draws the same six hint boxes an X4 draws and makes *only* those boxes
   // touchable -- the rest of the glass is dead, so the panel can be held,
-  // wiped or rained on without the UI moving. OFF is hardware buttons only.
+  // wiped or rained on without the UI moving.
   //
   // Only BUTTONS draws the boxes. Their presence is the whole indication of
   // which mode is on, which matters on a board whose only other feedback would
   // be tapping something and watching for nothing to happen.
+  //
+  // **DISABLED is an EFFECTIVE mode, never a stored one.** It is what
+  // TouchPolicy reports while `touchLocked` is set, and it is deliberately not
+  // offered in Settings: a rider who picked it there could not reach Settings
+  // again to undo it, and on an X4 Pro -- whose Back and Confirm both come from
+  // touch -- that is a device with no working input at all. The lock is reached
+  // only from a gesture that can also undo it.
   enum TOUCH_MODE { TOUCH_ANYWHERE = 0, TOUCH_BUTTONS_ONLY = 1, TOUCH_DISABLED = 2, TOUCH_MODE_COUNT };
 
   enum QUICK_RESUME_SLEEP_SCREEN {
@@ -457,9 +464,20 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t tiltPageTurn = TILT_OFF;
   // Touch screen reader zones/gestures on boards with a touch controller.
   uint8_t touchReaderControls = TOUCH_READER_ON;
-  // Touch policy on boards with a touch controller (TOUCH_MODE). Defaults to
-  // ANYWHERE so an existing device behaves exactly as it did before the setting.
+  // Touch policy on boards with a touch controller: ANYWHERE or BUTTONS_ONLY
+  // only. Defaults to ANYWHERE so an existing device behaves exactly as it did
+  // before the setting. Never DISABLED -- see TOUCH_MODE above.
   uint8_t touchMode = TOUCH_ANYWHERE;
+  // Whether the panel is locked right now. Its own flag rather than a third
+  // value of touchMode, for two reasons. The Settings row would otherwise have
+  // to offer a value that can lock the rider out of Settings; and a stored value
+  // outside the row's own list is an out-of-bounds read in the settings screen
+  // (SettingsActivity.cpp, the enumValues[value] on the valuePtr path).
+  //
+  // Persisted, so a device that was locked when it slept wakes up locked -- the
+  // rider put it in a bag, and coming back unlocked would be a surprise. The
+  // preference underneath survives, so unlocking needs nothing remembered.
+  uint8_t touchLocked = 0;
   // Language setting (Language enum index, default 0 = EN)
   uint8_t language = 0;
   // Quick Resume: keep current content visible with moon icon instead of showing a static sleep screen.

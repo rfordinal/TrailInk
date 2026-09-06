@@ -28,6 +28,27 @@ row otherwise.
 | `TOUCH_BUTTONS_ONLY` (1) | yes | only the six boxes, each acting as its hardware button |
 | `TOUCH_DISABLED` (2) | no | nothing, and touch stops counting as user activity |
 
+**`TOUCH_DISABLED` is an effective mode, never a stored one, and Settings does
+not offer it.** The Controls row has two values; the lock is its own persisted
+flag, `CrossPointSettings::touchLocked`, and `TouchPolicy::mode()` reports
+DISABLED while it is set. Two reasons, and the first is the one that matters:
+
+- **A rider who picked OFF in Settings could not reach Settings again to undo
+  it.** On an X4 Pro, where Back and Confirm both come from touch, that is a
+  device with no working input at all. The lock is only reachable from a gesture
+  that can also undo it.
+- A stored value outside the row's own list was an **out-of-bounds read** in the
+  settings screen: `SettingsActivity.cpp` indexed `enumValues[value]` unchecked
+  on the `valuePtr` path, while the `valueGetter` path two branches below already
+  bounds-checked. Now both do.
+
+The flag is persisted rather than kept in RAM: a device locked when it went to
+sleep wakes up locked, because the rider put it in a bag and coming back unlocked
+would be the surprise. The preference underneath survives untouched, so
+unlocking needs nothing remembered. `TouchPolicy::mode()` also treats a *stored*
+DISABLED as ANYWHERE, so a settings file written by an older build cannot lock a
+device whose owner has no way to unlock it.
+
 Default is `TOUCH_ANYWHERE`, so a device that was already in use behaves exactly
 as it did before the setting existed.
 
@@ -300,15 +321,22 @@ wrong about the board and wrong about which switch the rider was pressing.
 
 Four details worth knowing:
 
+- **A locked screen does not select.** The single tap is still held for the
+  window, because a second tap inside it is the unlock, but once it resolves as a
+  single tap on a locked panel it means nothing and no Confirm is emitted.
+  Locking is the rider saying "ignore what I touch", and the key stays listened
+  to for exactly one thing.
 - **A hold never also toggles the lock or selects.** The SDK reports the tap only
   on release and only when the hold threshold was not crossed
   (`InputManager::serviceTouch`), and `pumpHomeKey()` drops any pending tap when
   the hold fires.
-- **The mode to return to is remembered in RAM only.** A device that boots
-  already locked has nothing to restore, so the return value starts at
-  `TOUCH_BUTTONS_ONLY`, the mode this board is useful in.
-- **The lock is persisted, one SD write per tap.** The same reasoning the
-  frontlight hold carries: a handful of writes a ride, not one per interaction.
+- **Nothing has to be remembered across the lock.** It is one persisted flag,
+  `CrossPointSettings::touchLocked`, and it never touches the mode the rider
+  chose -- unlocking simply stops overriding it. The first version stored
+  DISABLED *into* `touchMode` and kept the previous value in RAM, which lost it
+  across a reboot and put a value in that field the Settings row does not list.
+- **One SD write per deliberate tap.** The same reasoning the frontlight hold
+  carries: a handful of writes a ride, not one per interaction.
 
 A toggle repaints the screen (`activityManager.requestUpdate()`), because the
 chrome at the bottom changes with the mode. That is a full refresh per tap on
@@ -320,14 +348,23 @@ Boxes on screen mean the boxes are live, but their absence is ambiguous —
 ANYWHERE draws none either. So OFF draws a padlock where the band would be:
 
 - `TouchPolicy::lockIndicator()` is the one test.
-- `UITheme::getMetrics()` reserves a strip for it instead of the hint band
-  (`HintGeometry::kTouchLockStripHeight`, 26 px on an X4-sized panel, scaled on a
-  bigger one). Reserved rather than drawn over live content, so no screen has to
-  know the indicator exists.
+- **It is drawn as a button, not as a small glyph in an empty band.** One box the
+  size of a hint box, centred, with the padlock inside it. A 20 px padlock
+  floating in a thin strip read as a status mark rather than as the thing that
+  took the buttons' place, so it is now a 28 px glyph in a real box.
+- `UITheme::getMetrics()` reserves **the same band the boxes get**, not a thinner
+  strip. Nothing above it moves when the panel locks, and the map's chrome swap
+  refreshes one rectangle that fits both modes.
 - `BaseTheme::drawTouchLockIndicator()` paints it, called from every theme's
   `drawButtonHints()` on the path where that draws no boxes. That is why it
   reaches home, settings, the reader and the map without any of them changing.
-- The glyph is Lucide `lock` at 20 px through
+- **The box is `drawTouchLockBox()`, and it is virtual**, because every theme
+  draws its hint boxes differently: Lyra rounds the top corners, RoundedRaff uses
+  its own 2 px outline and bottom radius, the classic theme is square. The
+  padlock stands in for those boxes, so a square box next to rounded ones read as
+  a different kind of thing. The caller keeps the policy, the orientation and the
+  geometry; an override changes the look and nothing else.
+- The glyph is Lucide `lock` at 28 px through
   `scripts/gen_touch_lock_icon.py` (the icon rule in the parent repo's
   `CLAUDE.md`), drawn with `drawMono1bpp()`.
 
@@ -346,7 +383,10 @@ task's request never lands there.
 panel for real -- touch went dead -- while the hint boxes stayed on screen and no
 padlock appeared. Functional change, no visual one.
 
-So `MapActivity::loop()` compares `drawnTouchMode_` against `SETTINGS.touchMode`
+So `MapActivity::loop()` compares `drawnTouchMode_` against
+`TouchPolicy::mode()` -- the **effective** mode, since the lock is its own flag
+and overrides the stored preference; polling `SETTINGS.touchMode` would miss
+every lock and unlock --
 and swaps the chrome when they differ. Two details in that check:
 
 - It sits **below** the option popup's early return. A menu open over the map

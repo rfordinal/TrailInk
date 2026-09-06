@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
+#include "TouchPolicy.h"
 #include "MapPointMarks.h"
 #include "MapPointShards.h"
 // APP_STATE.showBootScreen: the quick-resume-sleep decision, read in onExit().
@@ -3007,9 +3008,13 @@ void MapActivity::loop() {
   // Below the popup's early return on purpose. A menu open over the map owns
   // the panel, and repainting the map under it would strand the popup's pixels;
   // the check fires on the first frame after it closes instead.
-  if (drawnTouchMode_ != SETTINGS.touchMode) {
+  // The EFFECTIVE mode, not SETTINGS.touchMode: the lock is its own flag now and
+  // it overrides the stored preference (TouchPolicy::mode()). Polling the stored
+  // field would have missed every lock and unlock.
+  const uint8_t effectiveTouchMode = static_cast<uint8_t>(TouchPolicy::mode());
+  if (drawnTouchMode_ != effectiveTouchMode) {
     const bool firstFrame = drawnTouchMode_ == 0xFF;
-    drawnTouchMode_ = SETTINGS.touchMode;
+    drawnTouchMode_ = effectiveTouchMode;
     if (!firstFrame) {
       // Two strips of chrome changed, not the map. swapChrome() puts the
       // snapshotted map back and refreshes only those strips; the full render is
