@@ -73,6 +73,11 @@ bool TileSyncActivity::armRun() {
   // next connection. Carrying the old announcement across would count the same
   // files twice.
   announced_ = 0;
+  // A re-ask is a new run for a burst's live-discovered tiles too -- the array
+  // itself is kept (not freed) if a previous run already allocated it, only the
+  // count resets, so a second push in one visit does not pay another alloc.
+  pushRowCount_ = 0;
+  windowChosen_ = false;
   pushPending_ = 0;
   drawnDone_ = 0;
   drawnSkipped_ = 0;
@@ -523,6 +528,8 @@ void TileSyncActivity::onExit() {
   MISSING_TILES.flushIfDirty();
   rows_.reset();
   rowCount_ = 0;
+  pushRows_.reset();
+  pushRowCount_ = 0;
   Activity::onExit();
 }
 
@@ -608,6 +615,7 @@ void TileSyncActivity::loop() {
 
   trackPhone();
   drainTransferredTiles();
+  trackPushTiles();
   updateProgress();
 
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) leave();
@@ -718,14 +726,17 @@ void TileSyncActivity::parentOf(const MapTileCoord& tile, uint16_t& pc, uint16_t
   pr = static_cast<uint16_t>(tile.row >> down);
 }
 
-size_t TileSyncActivity::interestCount() const { return rowCount_ + g_heldTiles.pendingCount() + staleTiles_.count(); }
+size_t TileSyncActivity::interestCount() const {
+  return rowCount_ + staleTiles_.count() + pushRowCount_ + g_heldTiles.pendingCount();
+}
 
-size_t TileSyncActivity::downloadCount() const { return rowCount_ + staleTiles_.count(); }
+size_t TileSyncActivity::downloadCount() const { return rowCount_ + staleTiles_.count() + pushRowCount_; }
 
 MapTileCoord TileSyncActivity::interestAt(size_t index) const {
-  // [0, rowCount_) missing, then the stale ones -- together the download queue,
-  // drawn as frames -- then the tiles still waiting on a check, drawn as dots.
-  // Contiguous in that order so drawParent() can walk one range per mark.
+  // [0, rowCount_) missing, then stale, then push tiles discovered live from a
+  // burst's own BEGIN frames -- together the download queue, drawn as frames --
+  // then the tiles still waiting on a check, drawn as dots. Contiguous in that
+  // order so drawParent() can walk one range per mark.
   if (index < rowCount_) return rows_[index].tile;
   size_t rest = index - rowCount_;
 
@@ -734,6 +745,9 @@ MapTileCoord TileSyncActivity::interestAt(size_t index) const {
     return MapTileCoord{e.z, e.col, e.row};
   }
   rest -= staleTiles_.count();
+
+  if (rest < pushRowCount_) return pushRows_[rest].tile;
+  rest -= pushRowCount_;
 
   // The nth entry that is still unsettled. Walked rather than indexed: the
   // store keeps pending and settled entries in one array so that re-recording
@@ -750,6 +764,7 @@ MapTileCoord TileSyncActivity::interestAt(size_t index) const {
 void TileSyncActivity::chooseWindow() {
   const size_t interest = interestCount();
   if (interest == 0) return;
+  windowChosen_ = true;
 
   uint16_t minCol = 0xFFFF, maxCol = 0, minRow = 0xFFFF, maxRow = 0;
   for (size_t i = 0; i < interest; ++i) {
@@ -823,6 +838,64 @@ void TileSyncActivity::chooseWindow() {
   LOG_INF(kLogTag, "grid window at z11 %u/%u, %lu of %lu tiles outside it", static_cast<unsigned>(windowCol_),
           static_cast<unsigned>(windowRow_), static_cast<unsigned long>(offWindow_),
           static_cast<unsigned long>(interest));
+}
+
+void TileSyncActivity::choosePushWindow(const MapTileCoord& tile) {
+  uint16_t pc = 0, pr = 0;
+  parentOf(tile, pc, pr);
+  // Centred, not corner-anchored: the first tile a burst happens to reveal is
+  // no more likely to sit at the edge of the area than the last one, and there
+  // is no distribution to weigh against like chooseWindow() has -- just one
+  // point. Clamped so a tile near the antimeridian-adjacent edge of the tile
+  // grid cannot underflow the unsigned column/row.
+  const uint16_t halfCols = kMaxWindowCols / 2;
+  const uint16_t halfRows = kMaxWindowRows / 2;
+  windowCol_ = pc > halfCols ? static_cast<uint16_t>(pc - halfCols) : 0;
+  windowRow_ = pr > halfRows ? static_cast<uint16_t>(pr - halfRows) : 0;
+  windowCols_ = kMaxWindowCols;
+  windowRows_ = kMaxWindowRows;
+  windowChosen_ = true;
+  LOG_INF(kLogTag, "push window seeded at z11 %u/%u from the first discovered tile", static_cast<unsigned>(windowCol_),
+          static_cast<unsigned>(windowRow_));
+}
+
+void TileSyncActivity::trackPushTiles() {
+  const MapTransferReceiver::Status transfer = transfer_.status();
+  if (!transfer.active || !transfer.activeTileValid) return;
+  const MapTileCoord& tile = transfer.activeTile;
+
+  // Already this run's own snapshot -- a normal fetch tile, not a burst
+  // discovery, and already drawn by the loop above.
+  for (uint32_t i = 0; i < rowCount_; ++i) {
+    if (rows_[i].tile.z == tile.z && rows_[i].tile.col == tile.col && rows_[i].tile.row == tile.row) return;
+  }
+  // Already tracked from an earlier BEGIN this run.
+  for (uint32_t i = 0; i < pushRowCount_; ++i) {
+    if (pushRows_[i].tile.z == tile.z && pushRows_[i].tile.col == tile.col && pushRows_[i].tile.row == tile.row) {
+      return;
+    }
+  }
+
+  if (!pushRows_) {
+    pushRows_ = makeUniqueNoThrow<Row[]>(kMaxPushRows);
+    if (!pushRows_) {
+      LOG_ERR(kLogTag, "OOM: push tile grid (%u rows)", static_cast<unsigned>(kMaxPushRows));
+      return;
+    }
+  }
+  // Past the cap the file still downloads normally -- only the grid stops
+  // growing. See pushRows_'s comment for why that is an acceptable trade.
+  if (pushRowCount_ >= kMaxPushRows) return;
+
+  if (!windowChosen_) choosePushWindow(tile);
+
+  pushRows_[pushRowCount_++] = Row{tile, false};
+  LOG_INF(kLogTag, "push tile discovered live: z%u %lu/%lu", static_cast<unsigned>(tile.z),
+          static_cast<unsigned long>(tile.col), static_cast<unsigned long>(tile.row));
+  // A new frame just appeared -- the same weight as a tile settling
+  // (updateProgress()), and no more frequent: this fires once per file, on its
+  // first BEGIN, never per byte.
+  renderScreen();
 }
 
 void TileSyncActivity::summaryRect(int& x, int& y, int& w, int& h) const {
