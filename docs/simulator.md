@@ -111,6 +111,23 @@ Keys: `BACK`, `ENTER`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `POWER`, `SLEEP`, `HOME`,
 `QUIT`. Screenshots are BMP at the host's drawable resolution. Upstream's
 `README.md` has the touch actions, the sleep/wake pair and the heap overrides.
 
+**A timed screenshot can capture the previous command's state.**
+`CROSSPOINT_SIM_SCREENSHOTS` fires on wall clock from process start, and a map
+console command sent over the BLE shim does not redraw immediately: if nothing is
+listening for the reply the send blocks for its full timeout first
+(`[BLEPOS] reply unconfirmed after 3000 ms`), and the redraw lands after it.
+
+Measured 2026-09-05: a command received at 17.5 s rendered at 20.5 s, so an 18 s
+screenshot showed the state before it. Five states driven from one run therefore
+came out shifted by one, and one marker shape looked like it was never drawn at
+all -- two captures were pixel-identical, which reads exactly like a rendering
+bug and is not one.
+
+**One simulator run per state** removes the coupling entirely: command at 6 s,
+capture at 14 s, quit at 16 s, about 16 s a state. Diff the crops afterwards
+rather than eyeballing them, because "these two frames differ by 43 pixels" is
+evidence and "it looks right" is not.
+
 **Headless capture needs a software renderer, not just a dummy video driver.**
 `SDL_VIDEODRIVER=dummy` alone makes `CROSSPOINT_SIM_SCREENSHOTS` silently
 write nothing: `SDL_CreateRenderer(..., SDL_RENDERER_ACCELERATED)`

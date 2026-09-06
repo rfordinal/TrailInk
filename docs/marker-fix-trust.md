@@ -67,6 +67,13 @@ not a lie. Rounded down to 25.
 The marker cannot express a precision finer than itself. That is the only
 non-arbitrary place to put the line.
 
+**The 1 m/px is ground metres, checked rather than assumed.**
+`MapViewport::kZoomLadder` carries ground metres and `mppMercFor()` is where the
+conversion to Mercator is paid -- at 48.5N one Mercator metre is 0.66 ground
+metres (`MapViewport.h`, the comment above `mppMercFor`). Reading the ladder as
+Mercator would have put this line at 17 m instead of 25, so the check is worth
+keeping written down: the next reader gets the same doubt.
+
 This makes `Trusted` generous for a phone, which reports 5 to 15 m under open
 sky. Intended: **the broken ring is an alarm, not a quality meter.** It should
 be quiet on a normal ride and fire in a street canyon or a tunnel mouth.
@@ -74,8 +81,10 @@ be quiet on a normal ride and fire in a street canyon or a tunnel mouth.
 **18 m, coming back.** 7 m of hysteresis. Without it a fix hovering at the line
 repaints the marker on every packet, and a repaint is a windowed refresh, which
 costs the same ~500 ms as a full one whatever its area (measured on the X4
-2026-08-05, `map-follow.md`). That is a panel refresh per fix with the rider
-standing still.
+2026-08-05, `map-follow.md`). **On the T5 S3 Pro, today's reference board, the
+same windowed refresh is ~1,081 ms** (`refresh-modes.md`, measured 2026-09-05),
+so every argument in this doc about the cost of a repaint is stated at its
+cheapest. That is a panel refresh per fix with the rider standing still.
 
 **22.5 degrees, the heading line.** The render has 16 heading steps and nothing
 finer (`MapHeading.h`). A glyph aimed at exactly one step therefore already
@@ -206,7 +215,8 @@ once they have been standing a while -- at that point there is effectively no
 heading. `STALE_HEADING_MS` is where one becomes the other, currently **90 s**,
 a first cut that has **not been judged on a ride**. It sits between an arrow
 still pointing somewhere long after the rider parked and an arrow that vanishes
-at every traffic light, each change costing a ~500 ms refresh. The trend itself
+at every traffic light, each change costing a refresh the device pays in full --
+~500 ms on an X4, ~1,081 ms on a T5 S3 Pro. The trend itself
 disappears within about 5 s of stopping, so the timer runs from "stopped
 moving", not from "stopped sending".
 
