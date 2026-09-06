@@ -486,3 +486,10 @@ anything about a finger on glass.
    (bottom-left, S3) must still be Confirm on a tap and the frontlight on a hold
    — that switch is not part of this change.
 9. **Boot while locked, then tap:** it should come up in Buttons only.
+10. **The Settings row offers two values, not three.** OFF must not be
+    selectable; the lock is reachable only from the home key's double tap.
+11. **Reboot while locked.** It comes up locked, and one double tap returns it to
+    the mode stored in Settings, not to a default.
+12. **The padlock matches the boxes it replaced.** The same corner style as this
+    theme's hint boxes, centred, and nothing above the band moves when the panel
+    locks.
