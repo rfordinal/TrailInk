@@ -325,11 +325,13 @@ Four details worth knowing:
   on release and only when the hold threshold was not crossed
   (`InputManager::serviceTouch`), and `pumpHomeKey()` drops any pending tap when
   the hold fires.
-- **The mode to return to is remembered in RAM only.** A device that boots
-  already locked has nothing to restore, so the return value starts at
-  `TOUCH_BUTTONS_ONLY`, the mode this board is useful in.
-- **The lock is persisted, one SD write per tap.** The same reasoning the
-  frontlight hold carries: a handful of writes a ride, not one per interaction.
+- **Nothing has to be remembered across the lock.** It is one persisted flag,
+  `CrossPointSettings::touchLocked`, and it never touches the mode the rider
+  chose -- unlocking simply stops overriding it. The first version stored
+  DISABLED *into* `touchMode` and kept the previous value in RAM, which lost it
+  across a reboot and put a value in that field the Settings row does not list.
+- **One SD write per deliberate tap.** The same reasoning the frontlight hold
+  carries: a handful of writes a ride, not one per interaction.
 
 A toggle repaints the screen (`activityManager.requestUpdate()`), because the
 chrome at the bottom changes with the mode. That is a full refresh per tap on
@@ -367,7 +369,10 @@ task's request never lands there.
 panel for real -- touch went dead -- while the hint boxes stayed on screen and no
 padlock appeared. Functional change, no visual one.
 
-So `MapActivity::loop()` compares `drawnTouchMode_` against `SETTINGS.touchMode`
+So `MapActivity::loop()` compares `drawnTouchMode_` against
+`TouchPolicy::mode()` -- the **effective** mode, since the lock is its own flag
+and overrides the stored preference; polling `SETTINGS.touchMode` would miss
+every lock and unlock --
 and swaps the chrome when they differ. Two details in that check:
 
 - It sits **below** the option popup's early return. A menu open over the map
