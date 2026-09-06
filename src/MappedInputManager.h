@@ -155,9 +155,10 @@ class MappedInputManager {
   mutable bool homeConfirmResolved = false;       // this frame: the single tap won
   mutable bool homeDoubleTapResolved = false;     // this frame: the second tap won
   mutable bool homeLongResolved = false;          // this frame: a hold this layer believes in
-  // Ignore further taps until this time. One physical double tap has produced
-  // three tap events on hardware, and the third one started a fresh single-tap
-  // window that then selected -- a lock and an activation from one gesture.
+  // Ignore further taps until this time. Measured: one physical double tap
+  // produced a lock, a Select and a frontlight toggle. That extra tap events
+  // caused it is inferred, not observed -- see pumpHomeKey() and
+  // docs/input-gestures.md.
   mutable unsigned long homeRefractoryUntil = 0;
   // Whether a tap has already been made of the press the key is currently
   // holding. The SDK fires its hold from a latched down-state that survives a

@@ -128,10 +128,14 @@ constexpr unsigned long TOUCH_HELD_OVERRIDE_WINDOW_MS = 250;
 // only on a fresh touch frame (InputManager::pollGt911, the 0x80 gate), so the
 // second tap is seen later than the finger made it.
 constexpr unsigned long HOME_KEY_DOUBLE_TAP_WINDOW_MS = 500;
-// After a gesture resolves, ignore the key for this long. One physical double
-// tap has produced three tap events on hardware, and without this the third
-// started a fresh single-tap window that then selected -- the rider got a lock
-// and an activation from one gesture.
+// After a gesture resolves, ignore the key for this long.
+//
+// What was MEASURED (2026-09-05): one physical double tap produced a lock, a
+// Select and a frontlight toggle. Three tap events is the INFERRED explanation,
+// not an observation -- nobody logged the events, and whether the extra ones are
+// contact bounce or stale GT911 frames is open (docs/input-gestures.md). That
+// question decides whether the real answer is a minimum press width or rejecting
+// stale frames; this window is a filter over a noisy stream either way.
 constexpr unsigned long HOME_KEY_REFRACTORY_MS = 500;
 }  // namespace
 

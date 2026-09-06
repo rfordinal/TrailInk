@@ -236,7 +236,9 @@ is unreachable there.
 **Measured on hardware 2026-09-05.** One double tap on the Home screen locked the
 panel, opened the map, *and* lit the frontlight once the map finished rendering.
 All three gestures, from one gesture. The cause is in how the GT911's key is
-read, and it cannot be fixed from this repo:
+read, and it cannot be fixed from this repo **as the input layer stands** --
+`freeink-sdk` is our own fork, so the real fix belongs there, and
+[`input-gestures.md`](input-gestures.md) is the design for it:
 
 `InputManager::pollGt911()` takes the key's **press/release edges only from a
 fresh touch frame** (the `status & 0x80` gate) but runs the **hold timer from a
@@ -247,8 +249,17 @@ then fires from a press that was already spent as a tap. A map render blocks the
 main loop for seconds, so the stale hold surfaced the moment polling resumed.
 
 The same coarse sampling explains the rest: a deliberate double tap regularly
-landed outside a 300 ms window, and one physical double tap has produced **three**
-tap events, the third of which started a fresh single-tap window and selected.
+landed outside a 300 ms window.
+
+**Careful with the next sentence, because it is the one that keeps being
+repeated.** What was *measured* is the outcome above: one gesture, three
+behaviours. That extra **tap events** caused it -- a third tap starting a fresh
+single-tap window that then selected -- is the **inferred** explanation. Nobody
+logged the events. Whether the extra ones are contact bounce or stale GT911
+frames is open, and it decides the real fix: bounce wants a minimum press width,
+stale frames want the frame discarded.
+[`input-gestures.md`](input-gestures.md) carries that question and the
+measurement that settles it.
 
 Three filters in `pumpHomeKey()`, all of them our side of a noisy source:
 
@@ -369,6 +380,12 @@ it later, the way the option popup already saves the map under an open dialog:
   `swapChrome()` gives up and lets the caller do the full render: two windows
   would cost the same panel time as that render, and the render is at least
   correct about the layout.
+- **Unverified on hardware.** The union window and its affordability test were
+  flashed 2026-09-06 but not specifically exercised: the last map lock the
+  maintainer confirmed ran on the two-window build. The union wants about 37 kB
+  as one block on a T5 S3 Pro, and whether `ESP.getMaxAllocHeap()` offers that on
+  a map screen is `[read]`, not measured. If it does not, the fallback is the
+  full render -- correct, and slow.
 - **This trade-off flips when the T5 S3 Pro gets a real partial-window refresh**
   (planned, another session). Today area is free and the window count is
   everything, so one union wins. Once a window costs in proportion to its area,
