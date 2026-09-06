@@ -231,19 +231,26 @@ class OptionPopup {
 
   bool hasSideHints() const { return sideHintTop != nullptr || sideHintBottom != nullptr; }
 
-  // Keep this popup at least as big as the one it replaced: same width, same row
-  // count. A submenu that shrinks to its own content reads as a different kind of
-  // dialog instead of the next step of the same one, and a caller holding a
-  // backdrop of the previous dialog can reuse it only while the new one fits
-  // inside it. Cleared by every show(), like the row actions.
-  void setSizeHint(int dialogWidth, int visibleRows) {
-    minDialogWidth = dialogWidth;
-    minVisibleRows = visibleRows;
+  // Open at one of the fixed boxes instead of measuring the content. The box is
+  // per board -- a percent of whatever panel the HAL reports, not a pixel count
+  // written for one device (ThemeMetrics::optionPopupMenuWidthPercent and
+  // friends). Two classes, because a yes/no confirmation and a browsable list
+  // are different kinds of dialog and should not be the same box.
+  //
+  // The rect is the *same* rect every time, not merely no smaller than the last
+  // one -- which is what the size hint this replaced gave, and it was not enough:
+  // a popup with wider content still grew past the hint, and a taller one moved
+  // the box's top edge, because a dialog is centred. A caller that snapshots the
+  // pixels under the dialog keeps one backdrop valid across a whole menu -> list
+  // -> confirm chain (MapActivity), and every close refreshes one known window.
+  // Cleared by every show(), like the row actions.
+  void setSize(BaseTheme::OptionPopupSize size) {
+    sizeClass = size;
     layoutValid = false;
   }
 
-  // The dialog's own geometry, for a caller that wants the next popup to match it
-  // (setSizeHint above). frameRect() is the same box plus the frame thickness.
+  // The dialog's own geometry. frameRect() is the same box plus the frame
+  // thickness.
   int dialogWidth(const GfxRenderer& renderer) const { return getLayout(renderer).dialog.width; }
   int visibleRows(const GfxRenderer& renderer) const { return getLayout(renderer).visibleRows; }
 
@@ -401,8 +408,7 @@ class OptionPopup {
     s.scrollTop = scrollTop;
     s.leftAlign = leftAligned;
     s.compact = compact;
-    s.minDialogWidth = minDialogWidth;
-    s.minVisibleRows = minVisibleRows;
+    s.size = sizeClass;
     s.note = note.empty() ? nullptr : note.c_str();
     s.icons = ownedIcons.empty() ? nullptr : &ownedIcons;
     return s;
@@ -481,8 +487,7 @@ class OptionPopup {
     sideHintTop = nullptr;
     sideHintBottom = nullptr;
     sideHintFontId = SMALL_FONT_ID;
-    minDialogWidth = 0;
-    minVisibleRows = 0;
+    sizeClass = BaseTheme::OptionPopupSize::Auto;
     ownedDisabled.clear();
     ownedKeepOpen.clear();
     ownedIcons.clear();
@@ -533,8 +538,7 @@ class OptionPopup {
   const char* sideHintTop = nullptr;
   const char* sideHintBottom = nullptr;
   int sideHintFontId = SMALL_FONT_ID;
-  int minDialogWidth = 0;
-  int minVisibleRows = 0;
+  BaseTheme::OptionPopupSize sizeClass = BaseTheme::OptionPopupSize::Auto;
   mutable Layout layout;
   std::string note;
   mutable bool layoutValid = false;

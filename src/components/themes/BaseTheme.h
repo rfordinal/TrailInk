@@ -98,6 +98,23 @@ struct ThemeMetrics {
   bool optionPopupDrawAllRows;
   int optionPopupDialogSideMargin;
   bool optionPopupTitleSeparator;
+  // The two fixed dialog boxes, as a percent of the panel the HAL reports.
+  //
+  // Board-relative on purpose: the numbers are per device without being written
+  // per device -- a 480x800 X4 and a wider panel both get a box of the same
+  // proportion, and nothing here is an X4 pixel count. A caller asks for a size
+  // class (OptionPopupSize) and gets this box exactly, neither shrunk to its own
+  // content nor grown by it.
+  //
+  // Menu is the browsing box: the map menu, the pin and POI lists. Confirm is the
+  // yes/no box, deliberately smaller so a confirmation reads as a different kind
+  // of dialog. Confirm must stay inside Menu on both axes -- both are centred, and
+  // MapActivity's saved backdrop is taken at the Menu box, so a Confirm that stuck
+  // out would leave the previous dialog's frame on the panel after the restore.
+  int optionPopupMenuWidthPercent;
+  int optionPopupMenuHeightPercent;
+  int optionPopupConfirmWidthPercent;
+  int optionPopupConfirmHeightPercent;
 
   int textFieldHorizontalPadding;
   int textFieldNormalThickness;
@@ -186,6 +203,10 @@ constexpr ThemeMetrics values = {.batteryWidth = 15,
                                  .optionPopupDrawAllRows = false,
                                  .optionPopupDialogSideMargin = 20,
                                  .optionPopupTitleSeparator = true,
+                                 .optionPopupMenuWidthPercent = 92,
+                                 .optionPopupMenuHeightPercent = 40,
+                                 .optionPopupConfirmWidthPercent = 76,
+                                 .optionPopupConfirmHeightPercent = 30,
                                  .textFieldHorizontalPadding = 6,
                                  .textFieldNormalThickness = 1,
                                  .textFieldCursorThickness = 3,
@@ -311,6 +332,17 @@ class BaseTheme {
   virtual void drawHomeMenu(const GfxRenderer& renderer, Rect rect, const HomeRow* rows, int rowCount,
                             int selectedIndex, int rowHeight) const;
   virtual Rect drawPopup(const GfxRenderer& renderer, const char* message) const;
+  // Which of the fixed boxes this popup opens at, or Auto for the historical
+  // behaviour (the dialog measures its own content and lands wherever that puts
+  // it). A fixed box is the same rect every time, which is the whole point:
+  // MapActivity snapshots the map pixels under the dialog and refreshes exactly
+  // that window on close, so a rect that moves with the content costs a full
+  // re-render instead (MapActivity::captureMenuBackdrop()). The size numbers are
+  // ThemeMetrics::optionPopupMenu*/optionPopupConfirm*.
+  //
+  // Auto stays the default: every screen outside the map still sizes to content.
+  enum class OptionPopupSize : uint8_t { Auto, Menu, Confirm };
+
   // What the option popup draws. `values` is parallel to `options` and may be
   // null or shorter -- a row with no value entry draws label-only.
   // `leftAlign` puts every label at the same left edge instead of centring
@@ -326,18 +358,11 @@ class BaseTheme {
     int scrollTop = 0;
     bool leftAlign = false;
     bool compact = false;
-    // Floors, both optional (0 = no floor). For a popup that *replaces* another
-    // one over the same background: without them a submenu shrinks to its own
-    // content and lands as a differently sized box in the middle of the previous
-    // one, which reads as a different kind of thing rather than the next step of
-    // the same one. The ceilings still win -- neither can push the dialog past
-    // kOptionPopupMaxVisibleRows or the panel's side margins.
-    //
-    // A matching size also keeps the caller's saved backdrop valid, which is what
-    // makes closing the second popup as cheap as closing the first
-    // (MapActivity::captureMenuBackdrop()).
-    int minDialogWidth = 0;
-    int minVisibleRows = 0;
+    // Auto measures the content and lands where that puts it. A size class takes
+    // the whole rect from the theme instead -- width, height and position -- and
+    // only the row count still comes from measurement, because the title may wrap
+    // to two lines and eat a row.
+    OptionPopupSize size = OptionPopupSize::Auto;
     // Rows the rider cannot select, parallel to `options`: non-zero means the
     // row is disabled. Drawn dimmed by dimDisabledRow() and skipped by
     // OptionPopup's selection walk. nullptr or short means every row is live.
@@ -416,6 +441,12 @@ class BaseTheme {
   // layout is not; a settings-style row's width is computed exactly (label +
   // gap + boxed value), so padding it out only wastes screen and backdrop.
   static OptionPopupSpacing optionPopupSpacing(const ThemeMetrics& metrics, bool compact);
+
+  // The box a size class asks for, already centred on the panel. Width and height
+  // are 0 for Auto, which is how every caller tells the two modes apart. Clamped
+  // to the panel's side margins, so a metric set too wide cannot push a dialog
+  // off the screen.
+  static Rect optionPopupFixedBox(const GfxRenderer& renderer, const ThemeMetrics& metrics, OptionPopupSize size);
   virtual void fillPopupProgress(const GfxRenderer& renderer, const Rect& layout, const int progress) const;
   void drawStatusBar(GfxRenderer& renderer, const float bookProgress, const int currentPage, const int pageCount,
                      std::string title, const int paddingBottom = 0, const int textYOffset = 0,

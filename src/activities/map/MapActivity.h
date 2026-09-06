@@ -563,16 +563,9 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   enum class PinPopup : uint8_t { None, List, AddList, Offscreen, ConfirmSet, ConfirmDelete, Show, Save };
   PinPopup pendingPinPopup_ = PinPopup::None;
   uint8_t pendingPinArg_ = 0;
-  // The map menu's own dialog size, so every pins list opens at exactly that size
-  // instead of shrinking to its own content. Two reasons: a differently sized box
-  // in the middle of the previous one reads as a different kind of dialog rather
-  // than the next step of the same one, and a same-or-smaller dialog keeps the
-  // menu backdrop valid, which is what makes the close cheap.
   // Which row the off-screen list reopens on after a toggle, so flipping four pins
   // does not walk back down the list four times.
   uint8_t pinsOffscreenRow_ = 0;
-  int menuDialogWidth_ = 0;
-  int menuVisibleRows_ = 0;
 
   // ## Nearby (../../docs/nearby-menu.md)
   //
