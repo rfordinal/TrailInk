@@ -48,6 +48,28 @@ and personal, so there is no reason for it to be relative.
 Only the symlink form has been exercised so far -- the committed git-URL default
 is unverified.
 
+## When it stops compiling: the fork tracks our HAL
+
+The simulator **replaces** `lib/hal/`, so every HAL member the firmware grows is
+a member the fork has to grow too. The failure is a plain compile error in
+firmware code, which reads like a firmware bug and is not:
+
+```
+src/MappedInputManager.cpp:135: error: 'class HalGPIO' has no member named 'updateSequence'
+src/components/themes/HintGeometry.h:43: error: 'struct BoardConfig::BoardProfile' has no member named 'displayHeight'
+```
+
+Both were real, 2026-09-06, and both were fixed in the fork
+(`explorink-simulator`, `EXPLORINK.md` names the rows). The rule: a new member on
+`lib/hal/HalGPIO.h`, `HalDisplay.h`, `HalPowerManager.h` or a new field the
+firmware reads off `BoardConfig::BoardProfile` needs the same member in the fork
+in the same pass, or the next person to build the simulator pays for it.
+
+The semantics do not have to match the device's, and sometimes must not.
+`updateSequence()` ticks per `update()` on the device and per `beginFrame()` in
+the simulator, because there the firmware calls `update()` several times inside
+one frame. The fork's `EXPLORINK.md` is where that reasoning lives.
+
 ## The simulated SD card
 
 Everything the firmware reads from the card lives under `./fs_/` next to the
@@ -110,6 +132,15 @@ CROSSPOINT_SIM_SCREENSHOTS='6000:./qa-artifacts/map.bmp' \
 Keys: `BACK`, `ENTER`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `POWER`, `SLEEP`, `HOME`,
 `QUIT`. Screenshots are BMP at the host's drawable resolution. Upstream's
 `README.md` has the touch actions, the sleep/wake pair and the heap overrides.
+
+**Headless: `SDL_VIDEODRIVER=dummy`.** A scripted run then takes no focus from
+whatever the desktop is doing (a Wayland desktop ignores SDL's focus hint, so
+this is the only lever). Until 2026-09-06 a dummy run drew nothing and said
+nothing: no accelerated render driver exists there, `SDL_CreateRenderer` returned
+null, `presentIfNeeded()` returns early on null, and the process ran its whole
+input script and exited 0 with no BMP written. The fork now falls back to the
+software renderer and prints which one it took. Verified the same day: a dummy
+run and a windowed run write the same map frame.
 
 **A timed screenshot can capture the previous command's state.**
 `CROSSPOINT_SIM_SCREENSHOTS` fires on wall clock from process start, and a map
