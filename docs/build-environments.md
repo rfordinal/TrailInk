@@ -234,3 +234,37 @@ The first one, `explorink-v0.1.0-alpha` (2026-08-22), publishes the archived
 binary that was confirmed working on an X4 rather than a build made for the
 release: same bytes, same SHA-256. A published build nobody ran on hardware is
 worse than no build.
+
+## `file format not recognized` from objdump is a corrupt object, not a broken tree
+
+Three builds failed 2026-09-05 on
+
+```
+riscv32-esp-elf-objdump -h .../esp-idf/app_trace/libapp_trace.a
+  returned non-zero exit status 1
+```
+
+while every source file compiled fine. Running objdump by hand named the
+culprit, which the build never prints:
+
+```
+app_trace.c.o: file format not recognized
+```
+
+One object inside the archive was truncated or garbage.
+
+**Cause unknown.** It first appeared with two `pio run` invocations racing the
+same `.pio`, which is the obvious suspect, but it recurred once with only a
+gradle build running alongside. So "do not build twice at once" is a suspicion
+worth having and not a finding, and it is written here as one.
+
+**The fix is settled and it is cheap.** Delete the one subdirectory and rebuild:
+
+```bash
+rm -rf .pio/build/<env>/esp-idf/app_trace
+pio run -e <env>
+```
+
+Under three minutes. Deleting the whole `.pio/build/<env>` also works and costs
+about four times that, which is what the first two recoveries paid before
+anybody ran objdump by hand.

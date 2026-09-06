@@ -33,8 +33,9 @@
 // quantity mapped onto a size.
 //
 // It also keeps the panel still. Every change to the marker's shape costs a
-// windowed refresh, and a windowed refresh costs the same ~500 ms as a full one
-// whatever its area (measured on the X4 2026-08-05, docs/map-follow.md). A
+// windowed refresh, and a windowed refresh costs the same as a full one whatever
+// its area -- ~500 ms on an X4 (measured 2026-08-05, docs/map-follow.md) and
+// ~1,081 ms on a T5 S3 Pro (docs/refresh-modes.md, measured 2026-09-05). A
 // continuous mapping would repaint the marker on accuracy noise alone, with the
 // rider parked. Hence the hysteresis below, and hence three states rather than
 // ten.
@@ -86,7 +87,8 @@ struct Trust {
 inline constexpr uint16_t kLooseAtOrAboveM = 25;
 // Coming back is harder than going: 7 m of gap, so a fix hovering at the line
 // does not repaint the marker on every packet. Without this the panel would
-// take a ~500 ms refresh per fix with the rider standing still.
+// take a refresh per fix with the rider standing still -- ~500 ms on an X4,
+// ~1,081 ms on a T5 S3 Pro (docs/refresh-modes.md).
 inline constexpr uint16_t kTrustedAtOrBelowM = 18;
 
 // Accuracy is carried on the wire as a saturating byte, and zero has always
