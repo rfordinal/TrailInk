@@ -5894,39 +5894,44 @@ void MapActivity::pollGnssFix() {
   if (!fix.valid) return;
   if (fix.quality == 0 || fix.quality == 6) return;
 
-  // **Two sanity gates, because quality alone let obvious nonsense through.**
-  //
-  // Measured on the Barcelona walk of 2026-09-05, 7467 fixes: in the second half
-  // the satellite count halved (16.5 to 6.9 on average) and HDOP went from 1.0
-  // to 5.3, and the marker jumped tens of metres. 266 fixes carried HDOP over 5
-  // and 95 over 10, several pinned at the receiver's 25.5 ceiling.
-  //
-  // **Neither gate knows or cares how the rider is travelling.** A first version
-  // capped speed per ride mode -- 30 km/h in Hike and so on -- and the
-  // maintainer killed it on the spot: a hiker gets on a bus, and that same walk
-  // had two metro rides in it. A mode is what the map is drawn for, not a
-  // promise about the next ten minutes, and a filter that assumes otherwise
-  // deletes the rider's position exactly when they are moving fastest.
-  //
-  // So both gates are self-contained. One asks whether the geometry can support
-  // any position at all; the other asks whether the fix agrees with itself.
-  {
-    // Geometry too poor for the position to mean anything, whatever it says.
-    constexpr float kMaxHdop = 20.0f;
-    const bool badGeometry = fix.hdop > kMaxHdop;
+  // **The receiver's own confidence, into the marker.** MapFixTrust was built
+  // as the seam both sources hang off, but only the metre-speaking ones were
+  // wired to it -- the BLE packet and the console. A GNSS session left the ring
+  // showing whatever a previous BLE session had latched, which is to say
+  // nothing about the receiver. posTrustForHdop() is that missing half.
+  trust_.pos = MapFixTrust::posTrustForHdop(fix.hdop, fix.satsUsed, trustState_);
+  // `trust_.dir` is deliberately left alone. MapFixTrust says outright that
+  // there is no degrees-to-state mapping and that a receiver's course would
+  // have to come from whether it is moving, not from a figure -- and nobody has
+  // written that mapping. Leaving it Unstated draws the glyph this screen has
+  // always drawn, which is honest; inventing a rule here would put a second,
+  // unreviewed opinion next to the one that file exists to hold.
 
-    // **The fix against itself.** A fix carries a position and, separately, a
-    // Doppler speed. Where the position jumped implies a speed too, and on a
-    // sound fix the two roughly agree -- on a bus as much as on foot, which is
-    // the whole reason to compare them rather than to a ceiling. Multipath moves
-    // the position without moving the Doppler, so the two diverge and say so.
-    //
-    // Measured against the three worst jumps of that walk: 85 m in 1 s implies
-    // 306 km/h while the receiver reported 76.8, a factor of four -- rejected.
-    // 89 m in 5 s implies 64 against a reported 58, and 79 m in 5 s implies 57
-    // against 69. Those two agree with themselves, so they stand: the rider may
-    // genuinely have been on a bus, and this code cannot know that they were
-    // not. **Rejecting only what contradicts itself is the honest line.**
+  // **One gate, and it only catches a fix that contradicts itself.**
+  //
+  // There were two. The other refused a fix whose HDOP was hopeless, and it is
+  // gone on the maintainer's call, 2026-09-06: with the ring now able to say
+  // "this position is loose", refusing the fix is the worse answer. A marker
+  // that quietly stops moving cannot be told from a device standing still,
+  // while a marker that moves with a broken ring says exactly what it knows.
+  // **Informing beats withholding wherever the fix is merely imprecise.**
+  //
+  // What no ring can rescue is a fix that disagrees with itself. A fix carries
+  // a position and, separately, a Doppler speed. Where the position jumped
+  // implies a speed too, and on a sound fix the two roughly agree -- on a bus
+  // as much as on foot, which is why they are compared to each other and never
+  // to a ceiling. An earlier version did cap speed per ride mode and the
+  // maintainer killed it on the spot: a hiker gets on a bus, and the walk this
+  // came from had two metro rides in it.
+  //
+  // Multipath moves the position without moving the Doppler, so the two
+  // diverge and say so. Measured against the three worst jumps of the walk of
+  // 2026-09-05: 85 m in 1 s implies 306 km/h while the receiver reported 76.8,
+  // a factor of four -- refused. 89 m in 5 s implies 64 against a reported 58,
+  // and 79 m in 5 s implies 57 against 69; those agree with themselves, so they
+  // stand, because the rider may genuinely have been on a bus and this code
+  // cannot know they were not.
+  {
     bool inconsistent = false;
     const uint32_t nowMs = millis();
     if (haveGnssAcceptedFix_) {
@@ -5949,20 +5954,17 @@ void MapActivity::pollGnssFix() {
       }
     }
 
-    if (badGeometry || inconsistent) {
-      // **Never reject forever.** A receiver settling into a bad state would
-      // otherwise freeze the marker silently, and a position that quietly stops
-      // updating is worse than one that wanders: the rider cannot tell it from a
-      // device that is simply still. After a short run the next fix is taken
-      // whatever it says, so the error stays visible instead of hidden.
+    if (inconsistent) {
+      // **Never refuse forever.** A receiver settling into a bad state would
+      // otherwise freeze the marker, and after a short run the next fix is
+      // taken whatever it says -- the ring will have already said it is loose.
       if (++gnssRejectedRun_ <= kGnssMaxRejectedRun) {
-        LOG_DBG(kLogTag, "gnss fix rejected (%s): hdop %.1f, speed %.1f km/h, sats %u, run %u",
-                badGeometry ? "geometry" : "self-contradiction", static_cast<double>(fix.hdop),
+        LOG_DBG(kLogTag, "gnss fix refused: hdop %.1f, speed %.1f km/h, sats %u, run %u", static_cast<double>(fix.hdop),
                 static_cast<double>(fix.speedKmh), static_cast<unsigned>(fix.satsUsed),
                 static_cast<unsigned>(gnssRejectedRun_));
         return;
       }
-      LOG_INF(kLogTag, "gnss: %u fixes rejected in a row, taking this one anyway",
+      LOG_INF(kLogTag, "gnss: %u fixes refused in a row, taking this one anyway",
               static_cast<unsigned>(gnssRejectedRun_));
     }
     gnssRejectedRun_ = 0;
