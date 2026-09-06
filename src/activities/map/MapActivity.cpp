@@ -5894,6 +5894,86 @@ void MapActivity::pollGnssFix() {
   if (!fix.valid) return;
   if (fix.quality == 0 || fix.quality == 6) return;
 
+  // **The receiver's own confidence, into the marker.** MapFixTrust was built
+  // as the seam both sources hang off, but only the metre-speaking ones were
+  // wired to it -- the BLE packet and the console. A GNSS session left the ring
+  // showing whatever a previous BLE session had latched, which is to say
+  // nothing about the receiver. posTrustForHdop() is that missing half.
+  trust_.pos = MapFixTrust::posTrustForHdop(fix.hdop, fix.satsUsed, trustState_);
+  // `trust_.dir` is deliberately left alone. MapFixTrust says outright that
+  // there is no degrees-to-state mapping and that a receiver's course would
+  // have to come from whether it is moving, not from a figure -- and nobody has
+  // written that mapping. Leaving it Unstated draws the glyph this screen has
+  // always drawn, which is honest; inventing a rule here would put a second,
+  // unreviewed opinion next to the one that file exists to hold.
+
+  // **One gate, and it only catches a fix that contradicts itself.**
+  //
+  // There were two. The other refused a fix whose HDOP was hopeless, and it is
+  // gone on the maintainer's call, 2026-09-06: with the ring now able to say
+  // "this position is loose", refusing the fix is the worse answer. A marker
+  // that quietly stops moving cannot be told from a device standing still,
+  // while a marker that moves with a broken ring says exactly what it knows.
+  // **Informing beats withholding wherever the fix is merely imprecise.**
+  //
+  // What no ring can rescue is a fix that disagrees with itself. A fix carries
+  // a position and, separately, a Doppler speed. Where the position jumped
+  // implies a speed too, and on a sound fix the two roughly agree -- on a bus
+  // as much as on foot, which is why they are compared to each other and never
+  // to a ceiling. An earlier version did cap speed per ride mode and the
+  // maintainer killed it on the spot: a hiker gets on a bus, and the walk this
+  // came from had two metro rides in it.
+  //
+  // Multipath moves the position without moving the Doppler, so the two
+  // diverge and say so. Measured against the three worst jumps of the walk of
+  // 2026-09-05: 85 m in 1 s implies 306 km/h while the receiver reported 76.8,
+  // a factor of four -- refused. 89 m in 5 s implies 64 against a reported 58,
+  // and 79 m in 5 s implies 57 against 69; those agree with themselves, so they
+  // stand, because the rider may genuinely have been on a bus and this code
+  // cannot know they were not.
+  {
+    bool inconsistent = false;
+    const uint32_t nowMs = millis();
+    if (haveGnssAcceptedFix_) {
+      const uint32_t dtMs = nowMs - lastAcceptedFixMs_;
+      // Under a second there is no useful denominator, and over a minute the
+      // rider may have been underground -- a metro ride is a gap, not a jump.
+      if (dtMs >= 1000 && dtMs <= 60000) {
+        const double dLat = (fix.latitude - lastAcceptedLat_) * 111320.0;
+        const double dLon = (fix.longitude - lastAcceptedLon_) * 111320.0 * cos(fix.latitude * M_PI / 180.0);
+        const double metres = sqrt(dLat * dLat + dLon * dLon);
+        const double impliedKmh = metres / (dtMs / 1000.0) * 3.6;
+        // Both conditions, not either: a slow rider whose Doppler reads zero
+        // would otherwise trip this on every step. Only a large absolute jump
+        // that also outruns the reported speed several times over is a glitch.
+        inconsistent = impliedKmh > 40.0 && impliedKmh > fix.speedKmh * 3.0 + 20.0;
+        if (inconsistent) {
+          LOG_DBG(kLogTag, "gnss fix disagrees with itself: %.0f m in %lu ms implies %.0f km/h, receiver says %.1f",
+                  metres, static_cast<unsigned long>(dtMs), impliedKmh, static_cast<double>(fix.speedKmh));
+        }
+      }
+    }
+
+    if (inconsistent) {
+      // **Never refuse forever.** A receiver settling into a bad state would
+      // otherwise freeze the marker, and after a short run the next fix is
+      // taken whatever it says -- the ring will have already said it is loose.
+      if (++gnssRejectedRun_ <= kGnssMaxRejectedRun) {
+        LOG_DBG(kLogTag, "gnss fix refused: hdop %.1f, speed %.1f km/h, sats %u, run %u", static_cast<double>(fix.hdop),
+                static_cast<double>(fix.speedKmh), static_cast<unsigned>(fix.satsUsed),
+                static_cast<unsigned>(gnssRejectedRun_));
+        return;
+      }
+      LOG_INF(kLogTag, "gnss: %u fixes refused in a row, taking this one anyway",
+              static_cast<unsigned>(gnssRejectedRun_));
+    }
+    gnssRejectedRun_ = 0;
+    lastAcceptedLat_ = fix.latitude;
+    lastAcceptedLon_ = fix.longitude;
+    lastAcceptedFixMs_ = nowMs;
+    haveGnssAcceptedFix_ = true;
+  }
+
   // Which sample this is. The driver's "something changed" answer is poll()'s
   // return value and main.cpp already consumed it, so the change instant stands
   // in for a sequence number: it is constant between changes and moves on every

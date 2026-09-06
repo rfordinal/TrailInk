@@ -999,6 +999,19 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // What the GNSS bar block last painted: how many bars were filled and how tall
   // they were. Two fields because the block carries two numbers, and either one
   // moving is a repaint (drawHeaderStatusStrip()).
+  // Consecutive GNSS fixes refused by pollGnssFix()'s sanity gates. Bounded so a
+  // receiver in a bad state cannot freeze the marker indefinitely.
+  uint8_t gnssRejectedRun_ = 0;
+  static constexpr uint8_t kGnssMaxRejectedRun = 5;
+  // The last fix pollGnssFix() actually accepted, for the self-consistency
+  // check. Separate from lastLatE7_/lastFixMs_, which the BLE path also writes
+  // and which Observe mode holds back -- this has to be the receiver's own
+  // previous point or the implied speed is measured against the wrong thing.
+  bool haveGnssAcceptedFix_ = false;
+  double lastAcceptedLat_ = 0.0;
+  double lastAcceptedLon_ = 0.0;
+  uint32_t lastAcceptedFixMs_ = 0;
+
   int drawnGnssBars_ = -1;
   int drawnGnssBarHeight_ = -1;
 
