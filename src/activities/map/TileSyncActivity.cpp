@@ -161,6 +161,12 @@ void TileSyncActivity::onEnter() {
   // version transfers fine, passes CRC and is then refused on open, so the
   // supplier needs the number before it sends anything (MapTileReader.h).
   consoleState_.setTileFormatVersion(MapTileReader::kFormatVersion);
+  // Same grammar as the map screen: rebuild the active set from the card, then
+  // point `pin set`/`pin del`/`pin list`/`pin log` at it. Alongside the other
+  // setters above, not inside the `rowCount_ == 0` branch below -- pin
+  // management does not depend on there being anything missing to fetch.
+  pins_.begin();
+  consoleState_.setPinsSource(&pins_);
 
   if (rowCount_ == 0) {
     // Worth a screen rather than a silent bounce back to the menu: the rider
@@ -509,6 +515,7 @@ void TileSyncActivity::onExit() {
   consoleState_.setPushObserver(nullptr);
   consoleState_.setStaleObserver(nullptr);
   consoleState_.setStaleTiles(nullptr);
+  consoleState_.setPinsSource(nullptr);
   freeink::BlePositionServer::getInstance().end();
   // Leaving is the checkpoint: whatever this sync cleared has to reach the card,
   // or the phone sends the same tiles again after a restart. A no-op when

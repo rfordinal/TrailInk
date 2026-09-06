@@ -7,6 +7,7 @@
 
 #include "MapBleConsole.h"
 #include "MapCommandConsole.h"
+#include "MapPins.h"
 #include "MapTilePath.h"
 #include "MapTransferReceiver.h"
 #include "activities/Activity.h"
@@ -109,6 +110,11 @@
 // - its own `MapConsoleState` plus a BLE console over it, because the phone
 //   answers in the same ASCII the map console takes: `missing` to read the list,
 //   `skip` to give up on a tile
+// - its own `MapPins` (own `PinStore`, rebuilt from the card in `onEnter()`), so
+//   `pin set`/`pin del`/`pin list`/`pin log` answer here exactly as they do on
+//   the map screen. No popup for it -- the rider manages pins from the phone at
+//   home, over the same wire this screen already runs for tile sync
+//   (`MapCommandParser.h`, `docs/pins.md`).
 //
 // It deliberately does not share MapActivity's console state. Two screens are
 // never up at once, and a shared state would put this screen's skip tally and
@@ -549,4 +555,9 @@ class TileSyncActivity final : public Activity,
   MapConsoleState consoleState_;
   MapBleConsole ble_{consoleState_};
   MapTransferReceiver transfer_;
+
+  // Same object MapActivity uses, rebuilt independently here: no heap, ~450
+  // bytes, one PinStore per screen (MapPins.h). Two screens are never up at
+  // once, so there is never a second copy of the active set in RAM.
+  MapPins pins_;
 };

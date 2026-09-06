@@ -152,6 +152,13 @@ whether it ever discards.
 Added to the existing grammar (`MapCommandParser.h`), so the USB serial console
 and the BLE command characteristic cannot drift.
 
+Answered on both screens that build a `MapConsoleState` -- the map screen and
+the Sync map tiles screen (`TileSyncActivity`) -- each with its own `MapPins`
+rebuilt from the card in `onEnter()`. No popup on the Sync screen: the phone
+does the managing, the device just answers the wire the same way it does on
+the map. Any other screen has no `IMapPinsSource` wired in, so `pin` there
+answers `INFO pins=unavailable`.
+
 ```
 pin set <key> <lat> <lon> [<utc>]   create or replace, from anywhere
 pin del <key>
