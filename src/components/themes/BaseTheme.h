@@ -261,6 +261,11 @@ class BaseTheme {
   // indicator reaches every screen that has hints without any of them knowing.
   // A no-op unless the panel is locked.
   void drawTouchLockIndicator(GfxRenderer& renderer) const;
+  // Just the box, in this theme's own style. The caller owns the policy, the
+  // orientation and the geometry, so an override changes the look and nothing
+  // else -- the padlock has to match the boxes it stands in for, and every theme
+  // draws those differently (Lyra and RoundedRaff round their corners).
+  virtual void drawTouchLockBox(GfxRenderer& renderer, Rect box) const;
   virtual bool frontHintBox(int index, int portraitWidth, int portraitHeight, Rect& out) const;
   virtual bool sideHintBox(int index, int portraitWidth, int portraitHeight, Rect& out) const;
 

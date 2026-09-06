@@ -321,6 +321,11 @@ wrong about the board and wrong about which switch the rider was pressing.
 
 Four details worth knowing:
 
+- **A locked screen does not select.** The single tap is still held for the
+  window, because a second tap inside it is the unlock, but once it resolves as a
+  single tap on a locked panel it means nothing and no Confirm is emitted.
+  Locking is the rider saying "ignore what I touch", and the key stays listened
+  to for exactly one thing.
 - **A hold never also toggles the lock or selects.** The SDK reports the tap only
   on release and only when the hold threshold was not crossed
   (`InputManager::serviceTouch`), and `pumpHomeKey()` drops any pending tap when
@@ -353,6 +358,12 @@ ANYWHERE draws none either. So OFF draws a padlock where the band would be:
 - `BaseTheme::drawTouchLockIndicator()` paints it, called from every theme's
   `drawButtonHints()` on the path where that draws no boxes. That is why it
   reaches home, settings, the reader and the map without any of them changing.
+- **The box is `drawTouchLockBox()`, and it is virtual**, because every theme
+  draws its hint boxes differently: Lyra rounds the top corners, RoundedRaff uses
+  its own 2 px outline and bottom radius, the classic theme is square. The
+  padlock stands in for those boxes, so a square box next to rounded ones read as
+  a different kind of thing. The caller keeps the policy, the orientation and the
+  geometry; an override changes the look and nothing else.
 - The glyph is Lucide `lock` at 28 px through
   `scripts/gen_touch_lock_icon.py` (the icon rule in the parent repo's
   `CLAUDE.md`), drawn with `drawMono1bpp()`.

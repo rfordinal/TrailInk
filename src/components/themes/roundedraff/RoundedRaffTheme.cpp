@@ -378,6 +378,13 @@ inline HintBand hintBand(const int pageWidth, const int pageHeight) {
 }
 }  // namespace
 
+void RoundedRaffTheme::drawTouchLockBox(GfxRenderer& renderer, const Rect box) const {
+  // White backing then the same 2px rounded outline this theme gives its two
+  // hint groups (drawButtonHints above), so the padlock reads as one of them.
+  renderer.fillRect(box.x, box.y, box.width, box.height, false);
+  renderer.drawRoundedRect(box.x, box.y, box.width, box.height, 2, kBottomRadius, true);
+}
+
 bool RoundedRaffTheme::frontHintBox(const int index, const int portraitWidth, const int portraitHeight,
                                    Rect& out) const {
   if (!TouchPolicy::hintsVisible() || !frontBoxActive(index)) return false;

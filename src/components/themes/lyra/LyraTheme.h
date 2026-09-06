@@ -97,6 +97,7 @@ class LyraTheme : public BaseTheme {
                        const char* btn4, int fontId = 0, int btn3FontId = 0, int btn4FontId = 0) const override;
   void drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn,
                            int fontId = SMALL_FONT_ID) const override;
+  void drawTouchLockBox(GfxRenderer& renderer, Rect box) const override;
   bool frontHintBox(int index, int portraitWidth, int portraitHeight, Rect& out) const override;
   bool sideHintBox(int index, int portraitWidth, int portraitHeight, Rect& out) const override;
   void drawButtonMenu(GfxRenderer& renderer, Rect rect, int buttonCount, int selectedIndex,
