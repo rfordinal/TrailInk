@@ -11,8 +11,11 @@
 #include <cstdint>
 #include <string>
 
+#include "HintGeometry.h"
+#include "components/icons/touch_lock_icon.h"
 #include "I18n.h"
 #include "RecentBooksStore.h"
+#include "TouchPolicy.h"
 #include "components/UITheme.h"
 #include "components/icons/bookmark.h"
 #include "components/icons/home_icons.h"
@@ -205,27 +208,52 @@ void BaseTheme::drawProgressBar(const GfxRenderer& renderer, Rect rect, const si
   renderer.drawCenteredText(UI_10_FONT_ID, rect.y + rect.height + 15, percentText.c_str());
 }
 
+namespace {
+// Front hint box geometry in X4 portrait pixels. The X4 and X3 arrays are
+// hand-tuned to the keys under the glass and are never derived; a panel with no
+// keys there gets them scaled (HintGeometry).
+constexpr int kFrontBoxWidth = 106;
+constexpr int kX4FrontPositions[4] = {25, 130, 245, 350};
+// X3 has wider screen in portrait (528 vs 480), use more spacing
+constexpr int kX3FrontPositions[4] = {38, 154, 268, 384};
+
+// Side-hint box geometry, in one place because two functions read it: the drawing
+// below and sideButtonHintsRect(), which a caller repainting part of the panel
+// needs in order to refresh exactly what these boxes cover. Two copies of these
+// numbers would drift the first time one of them moved.
+// Functions rather than constants because a non-X4 panel scales them, which
+// needs the board profile read at runtime.
+inline int sideHintWidth() {  // width on screen (height when rotated)
+  return UITheme::getInstance().getMetrics().sideButtonHintsWidth;
+}
+inline int sideHintHeight() { return HintGeometry::scaleMetricY(80); }  // height on screen (width when rotated)
+inline int sideHintMargin() { return HintGeometry::scaleMetric(4); }
+inline int sideHintX4TopY() { return HintGeometry::scaleMetricY(345); }  // X4: both boxes stacked on the right
+constexpr int kSideHintX3Y = 155;                                        // X3: one box per side, higher up
+}  // namespace
+
 void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const char* btn2, const char* btn3,
                                 const char* btn4, int fontId, int btn3FontId, int btn4FontId) const {
   if (fontId == 0) fontId = UI_10_FONT_ID;
   if (btn3FontId == 0) btn3FontId = fontId;
   if (btn4FontId == 0) btn4FontId = fontId;
-  if (gpio.hasTouch()) {
+  if (!TouchPolicy::hintsVisible()) {
+    drawTouchLockIndicator(renderer);
     return;
   }
+  rememberFrontLabels(btn1, btn2, btn3, btn4);
 
   const GfxRenderer::Orientation orig_orientation = renderer.getOrientation();
   renderer.setOrientation(GfxRenderer::Orientation::Portrait);
 
   const int pageHeight = renderer.getScreenHeight();
-  constexpr int buttonWidth = 106;
-  constexpr int buttonHeight = BaseMetrics::values.buttonHintsHeight;
-  constexpr int buttonY = BaseMetrics::values.buttonHintsHeight;  // Distance from bottom
-  constexpr int textYOffset = 7;                                  // Distance from top of button to text baseline
-  // X3 has wider screen in portrait (528 vs 480), use more spacing
-  constexpr int x4ButtonPositions[] = {25, 130, 245, 350};
-  constexpr int x3ButtonPositions[] = {38, 154, 268, 384};
-  const int* buttonPositions = gpio.deviceIsX3() ? x3ButtonPositions : x4ButtonPositions;
+  const int buttonHeight = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  const int buttonY = buttonHeight;  // Distance from bottom
+  const int textYOffset = HintGeometry::scaleMetric(7);  // Distance from top of button to text baseline
+  int buttonPositions[4] = {0, 0, 0, 0};
+  const int buttonWidth =
+      HintGeometry::frontRow(renderer.getScreenWidth(), kX4FrontPositions, kX3FrontPositions, kFrontBoxWidth,
+                             buttonPositions);
   const char* labels[] = {btn1, btn2, btn3, btn4};
   const int fontIds[] = {fontId, fontId, btn3FontId, btn4FontId};
 
@@ -244,20 +272,10 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   renderer.setOrientation(orig_orientation);
 }
 
-namespace {
-// Side-hint box geometry, in one place because two functions read it: the drawing
-// below and sideButtonHintsRect(), which a caller repainting part of the panel
-// needs in order to refresh exactly what these boxes cover. Two copies of these
-// numbers would drift the first time one of them moved.
-constexpr int kSideHintWidth = BaseMetrics::values.sideButtonHintsWidth;  // width on screen (height when rotated)
-constexpr int kSideHintHeight = 80;                                       // height on screen (width when rotated)
-constexpr int kSideHintMargin = 4;
-constexpr int kSideHintX4TopY = 345;  // X4: both boxes stacked on the right
-constexpr int kSideHintX3Y = 155;     // X3: one box per side, higher up
-}  // namespace
-
 Rect BaseTheme::buttonHintsRect(const GfxRenderer& renderer) const {
-  if (gpio.hasTouch()) return Rect{0, 0, 0, 0};  // drawButtonHints() draws nothing on a touch panel
+  // Not empty when the panel is locked: the padlock strip lives in the same band
+  // and a caller repainting around it has to refresh that too.
+  if (!TouchPolicy::hintsVisible() && !TouchPolicy::lockIndicator()) return Rect{0, 0, 0, 0};
   // Full width: the four boxes are one band as far as anything trying to stay out
   // of their way is concerned. Height and offset are drawButtonHints()' own.
   const int height = BaseMetrics::values.buttonHintsHeight;
@@ -266,25 +284,27 @@ Rect BaseTheme::buttonHintsRect(const GfxRenderer& renderer) const {
 
 Rect BaseTheme::sideButtonHintsRect(const GfxRenderer& renderer) const {
   const int screenWidth = renderer.getScreenWidth();
-  if (gpio.hasTouch()) return Rect{0, 0, 0, 0};  // drawSideButtonHints() draws nothing on a touch panel
+  if (!TouchPolicy::hintsVisible()) return Rect{0, 0, 0, 0};  // drawSideButtonHints() draws nothing then
   if (gpio.deviceIsX3()) {
     // Both sides, so the rect spans the full width -- the two boxes are the left
     // and the right edge of the same band.
-    return Rect{0, kSideHintX3Y, screenWidth, kSideHintHeight};
+    return Rect{0, kSideHintX3Y, screenWidth, sideHintHeight()};
   }
-  return Rect{screenWidth - kSideHintMargin - kSideHintWidth, kSideHintX4TopY, kSideHintWidth, kSideHintHeight * 2};
+  return Rect{screenWidth - sideHintMargin() - sideHintWidth(), sideHintX4TopY(), sideHintWidth(),
+              sideHintHeight() * 2};
 }
 
 void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* topBtn, const char* bottomBtn,
                                     int fontId) const {
-  if (gpio.hasTouch()) {
+  if (!TouchPolicy::hintsVisible()) {
     return;
   }
+  rememberSideLabels(topBtn, bottomBtn);
 
   const int screenWidth = renderer.getScreenWidth();
-  constexpr int buttonWidth = kSideHintWidth;
-  constexpr int buttonHeight = kSideHintHeight;
-  constexpr int buttonMargin = kSideHintMargin;
+  const int buttonWidth = sideHintWidth();
+  const int buttonHeight = sideHintHeight();
+  const int buttonMargin = sideHintMargin();
 
   if (gpio.deviceIsX3()) {
     // X3 layout: Up on left side, Down on right side, positioned higher
@@ -311,7 +331,7 @@ void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
     }
   } else {
     // X4 layout: Both buttons stacked on right side
-    constexpr int topButtonY = kSideHintX4TopY;
+    const int topButtonY = sideHintX4TopY();
     const char* labels[] = {topBtn, bottomBtn};
     const int x = screenWidth - buttonMargin - buttonWidth;
 
@@ -355,6 +375,70 @@ void BaseTheme::drawSideButtonHints(const GfxRenderer& renderer, const char* top
       }
     }
   }
+}
+
+namespace {
+inline bool labelPresent(const char* label) { return label != nullptr && label[0] != '\0'; }
+}  // namespace
+
+void BaseTheme::rememberFrontLabels(const char* btn1, const char* btn2, const char* btn3, const char* btn4) const {
+  const char* labels[4] = {btn1, btn2, btn3, btn4};
+  for (int i = 0; i < 4; i++) frontLabelDrawn[i] = labelPresent(labels[i]);
+}
+
+void BaseTheme::rememberSideLabels(const char* topBtn, const char* bottomBtn) const {
+  sideLabelDrawn[0] = labelPresent(topBtn);
+  sideLabelDrawn[1] = labelPresent(bottomBtn);
+}
+
+bool BaseTheme::frontBoxActive(const int index) const {
+  return index >= 0 && index <= 3 && frontLabelDrawn[index];
+}
+
+bool BaseTheme::sideBoxActive(const int index) const { return index >= 0 && index <= 1 && sideLabelDrawn[index]; }
+
+void BaseTheme::drawTouchLockIndicator(GfxRenderer& renderer) const {
+  if (!TouchPolicy::lockIndicator()) return;
+
+  const GfxRenderer::Orientation origOrientation = renderer.getOrientation();
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+
+  const int stripHeight = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  const int stripTop = renderer.getScreenHeight() - stripHeight;
+  const int iconX = (renderer.getScreenWidth() - icon_touchLock.w) / 2;
+  const int iconY = stripTop + (stripHeight - icon_touchLock.h) / 2;
+  // White backing: the strip is reserved, but a map or a rendered page can still
+  // have painted into it before this runs.
+  renderer.fillRect(iconX - 6, stripTop, icon_touchLock.w + 12, stripHeight, false);
+  renderer.drawMono1bpp(icon_touchLock.bits, iconX, iconY, icon_touchLock.w, icon_touchLock.h, true);
+
+  renderer.setOrientation(origOrientation);
+}
+
+bool BaseTheme::frontHintBox(const int index, const int portraitWidth, const int portraitHeight, Rect& out) const {
+  if (!TouchPolicy::hintsVisible() || !frontBoxActive(index)) return false;
+  int positions[4] = {0, 0, 0, 0};
+  const int width =
+      HintGeometry::frontRow(portraitWidth, kX4FrontPositions, kX3FrontPositions, kFrontBoxWidth, positions);
+  const int height = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  out = Rect{positions[index], portraitHeight - height, width, height};
+  return true;
+}
+
+bool BaseTheme::sideHintBox(const int index, const int portraitWidth, const int portraitHeight, Rect& out) const {
+  (void)portraitHeight;
+  if (!TouchPolicy::hintsVisible() || !sideBoxActive(index)) return false;
+  const int screenWidth = portraitWidth;
+  const int width = sideHintWidth();
+  const int height = sideHintHeight();
+  if (gpio.deviceIsX3()) {
+    // X3 puts one box per side rather than stacking them: top = left edge.
+    const int x = (index == 0) ? sideHintMargin() : screenWidth - sideHintMargin() - width;
+    out = Rect{x, kSideHintX3Y, width, height};
+    return true;
+  }
+  out = Rect{screenWidth - sideHintMargin() - width, sideHintX4TopY() + index * height, width, height};
+  return true;
 }
 
 int BaseTheme::getListRowStep(bool hasSubtitle) const {

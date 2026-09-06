@@ -9,8 +9,10 @@
 #include <memory>
 
 #include "MappedInputManager.h"
+#include "TouchPolicy.h"
 #include "RecentBooksStore.h"
 #include "components/themes/BaseTheme.h"
+#include "components/themes/HintGeometry.h"
 #include "components/themes/lyra/Lyra3CoversTheme.h"
 #include "components/themes/lyra/LyraTheme.h"
 #include "components/themes/roundedraff/RoundedRaffTheme.h"
@@ -54,19 +56,37 @@ void UITheme::setTheme(CrossPointSettings::UI_THEME type) {
 }
 
 const ThemeMetrics& UITheme::getMetrics() const {
-  // hasTouch() can flip once touch init completes after static construction, so the
-  // cached copy is refreshed when the flag differs instead of copying the struct per call.
-  const bool touch = gpio.hasTouch();
-  if (!metricsValid || touch != metricsForTouch) {
+  // hasTouch() can flip once touch init completes after static construction, and
+  // the touch mode can change from the Settings screen, so the cached copy is
+  // refreshed when the answer differs instead of copying the struct per call.
+  const bool hints = TouchPolicy::hintsVisible();
+  const bool lock = !hints && TouchPolicy::lockIndicator();
+  const uint8_t chrome = hints ? 1 : (lock ? 2 : 0);
+  if (!metricsValid || chrome != metricsChrome) {
     adjustedMetrics = *currentMetrics;
-    if (touch) {
+    if (hints) {
+      // Every theme's hint metrics are written against the X4's 480px-wide
+      // portrait screen. On a bigger panel an unscaled 40px band is a 4mm tap
+      // target at ~234 PPI -- too small for a finger, and on these boards the
+      // boxes are the only buttons there are.
+      // Each along its own axis: the band's height follows the taller screen
+      // dimension, the side boxes' width the wider one.
+      adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetricY(adjustedMetrics.buttonHintsHeight);
+      adjustedMetrics.sideButtonHintsWidth = HintGeometry::scaleMetric(adjustedMetrics.sideButtonHintsWidth);
+    } else if (lock) {
+      // Room for the padlock and nothing else. Reserved so the glyph never lands
+      // on top of a list row or a map.
+      adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetricY(HintGeometry::kTouchLockStripHeight);
+    } else {
       adjustedMetrics.buttonHintsHeight = 0;
     }
-    metricsForTouch = touch;
+    metricsChrome = chrome;
     metricsValid = true;
   }
   return adjustedMetrics;
 }
+
+int UITheme::chromeBandHeight() const { return HintGeometry::scaleMetricY(currentMetrics->buttonHintsHeight); }
 
 int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
                                      bool hasSubtitle, int extraReservedHeight) {

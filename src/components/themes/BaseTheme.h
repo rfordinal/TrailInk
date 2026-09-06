@@ -243,6 +243,43 @@ class BaseTheme {
   // aborted the device (measured 2026-08-17, crash_report.txt:
   // Ssd1677Driver::displayWindow -> operator new -> bad_alloc -> terminate).
   Rect sideButtonHintsRect(const GfxRenderer& renderer) const;
+  // Where a tap counts as pressing a hardware button, in portrait logical
+  // coordinates (the hint boxes are always painted in portrait, whatever the
+  // reader is rotated to). `index` is HalGPIO's front-button order, 0 = BTN_BACK
+  // to 3 = BTN_RIGHT; sideHintBox() takes 0 = top (BTN_UP), 1 = bottom (BTN_DOWN).
+  // False when that box is not drawn.
+  //
+  // The rect returned is the rect painted. A hit area that is not the box the
+  // user can see is a lie they aim at, so both come from the same numbers --
+  // which is also why every theme that moves its boxes must override these.
+  // portraitWidth/portraitHeight are the panel in portrait logical coordinates,
+  // passed in rather than looked up: the drawing takes them from the renderer, so
+  // the hit test must come from the same place or a tap can miss a box that is
+  // plainly on screen.
+  // The padlock that stands in for the boxes when touch is locked. Every theme's
+  // drawButtonHints() calls this on the path where it draws no boxes, so the
+  // indicator reaches every screen that has hints without any of them knowing.
+  // A no-op unless the panel is locked.
+  void drawTouchLockIndicator(GfxRenderer& renderer) const;
+  virtual bool frontHintBox(int index, int portraitWidth, int portraitHeight, Rect& out) const;
+  virtual bool sideHintBox(int index, int portraitWidth, int portraitHeight, Rect& out) const;
+
+ protected:
+  // The hint boxes are drawn per screen paint with the labels that screen wants,
+  // and a box with an empty label is not a button on that screen. The input
+  // layer sees no labels, so the last painted set is remembered here: without it
+  // a tap on blank glass where a box used to be would still fire its button.
+  // Every theme's drawButtonHints()/drawSideButtonHints() must call these.
+  void rememberFrontLabels(const char* btn1, const char* btn2, const char* btn3, const char* btn4) const;
+  void rememberSideLabels(const char* topBtn, const char* bottomBtn) const;
+  bool frontBoxActive(int index) const;
+  bool sideBoxActive(int index) const;
+
+ private:
+  mutable bool frontLabelDrawn[4] = {false, false, false, false};
+  mutable bool sideLabelDrawn[2] = {false, false};
+
+ public:
   virtual int getListRowStep(bool hasSubtitle) const;
   virtual int getListPageItems(int contentHeight, bool hasSubtitle) const;
   virtual void drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,

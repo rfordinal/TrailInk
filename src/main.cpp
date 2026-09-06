@@ -42,6 +42,7 @@
 #include <cstring>
 
 #include "CrossPointSettings.h"
+#include "TouchPolicy.h"
 #include "CrossPointState.h"
 #include "GnssAccess.h"
 #include "GnssLog.h"
@@ -92,19 +93,75 @@ void toggleFrontlight(const char* source) {
 }  // namespace
 
 #if FREEINK_DEVICE_LILYGO
-// The T5 S3 Pro's user button (switch S3, silkscreened IO48, wired to PCA9535
-// IO12 -- docs/devices/lilygo-t5-s3-pro.md, "The four physical buttons") is the
-// only button on this board firmware can read at all: BOOT is the power button,
-// RST resets the MCU and PWR sits on the charger. So it carries two jobs.
+// ===========================================================================
+// THE T5 S3 PRO'S BUTTON MAP. Read this before changing any of it.
+// ===========================================================================
 //
-//   tap   -> Confirm (Select)
-//   hold  -> toggle the frontlight
+// Three sessions in a row mis-identified which switch is which here, because the
+// silkscreen, the schematic and the firmware each use a different name for the
+// same thing. The canonical hardware page is the parent repo's
+// docs/devices/lilygo-t5-s3-pro.md, "The four physical buttons"; this table is
+// what the firmware actually does with them.
+//
+// | Physical            | Schematic       | Reaches the MCU as    | Firmware job     |
+// |---------------------|-----------------|-----------------------|------------------|
+// | BOOT, left, top     | S2, net IO0     | GPIO0 = input.power   | Power: wake/sleep|
+// | IO48 silkscreen,    | S3, net BUTTON  | PCA9535 U1 (0x20)     | tap = Confirm    |
+// |   left, bottom      |                 |   pin IO1_0, polled   | hold 600ms =     |
+// |   ("the user        |                 |   by userButtonHook() |   frontlight     |
+// |    button")         |                 |   below               |                  |
+// | RST, right, top     | S1, net RST/EN  | nothing -- it is the  | none, and never  |
+// |                     |                 |   hardware reset pin  |   readable       |
+// | PWR, right, bottom  | S4, BQ25896 QON | nothing -- no MCU or  | none, and never  |
+// |                     |                 |   expander pin at all |   readable       |
+//
+// **"The user button", "S3", "the IO48 one" and "the left bottom button" are all
+// the same single switch.** It is NOT a home button, and GPIO48 has no switch on
+// it anywhere in the schematic (GPIO48 is EP_CKV, the panel bus clock).
+//
+// **The capacitive home key is a fifth, separate input** and is not one of the
+// four above. It is not a GPIO at all: the GT911 reports it in its own status
+// byte, bit 0x10, and InputManager::serviceTouch() reads that bit on every board
+// **regardless of TouchConfig::hasHomeKey** -- that flag is consulted nowhere in
+// InputManager and gates nothing today, so do not go looking for it as the
+// switch that turns this key on. Confirmed working on this panel 2026-09-05
+// (holding it turns the frontlight on). Its jobs are handled in loop(), not
+// here:
+//
+//   home key tap        -> Confirm (Select), after the double-tap window
+//   home key double tap -> lock / unlock the touch panel (toggleTouchLock)
+//   home key hold       -> toggle the frontlight (toggleFrontlight)
 //
 // Why the light hangs off a physical hold and not a touch control: gloves defeat
 // the capacitive panel, and the light is exactly what a rider reaches for with
-// gloves on.
+// gloves on. Why the lock hangs off a double tap: nothing else on this board can
+// stop the glass reacting to a bag, a palm or rain, and the single tap was worth
+// keeping as Select. The cost is that Select through this key waits out the
+// double-tap window -- a single tap cannot be known to be single until then.
 namespace {
 constexpr unsigned long USER_BUTTON_HOLD_MS = 600;
+
+// What to go back to when the touch lock is lifted. Runtime only, and
+// deliberately: a device that boots already locked has nothing to restore, and
+// BUTTONS_ONLY is the mode this board is useful in.
+uint8_t touchModeBeforeLock = CrossPointSettings::TOUCH_BUTTONS_ONLY;
+
+void toggleTouchLock() {
+  if (SETTINGS.touchMode == CrossPointSettings::TOUCH_DISABLED) {
+    SETTINGS.touchMode = touchModeBeforeLock;
+  } else {
+    touchModeBeforeLock = SETTINGS.touchMode;
+    SETTINGS.touchMode = CrossPointSettings::TOUCH_DISABLED;
+  }
+  // One SD write per deliberate tap, the same reasoning the frontlight hold
+  // below carries: a handful of writes a ride, not one per interaction.
+  SETTINGS.saveToFile();
+  // The hint boxes appear or vanish with the mode and the layout reserves room
+  // for them or does not, so the screen is repainted rather than nudged.
+  activityManager.requestUpdate();
+  LOG_INF("BTN", "Home key: touch %s",
+          SETTINGS.touchMode == CrossPointSettings::TOUCH_DISABLED ? "locked" : "unlocked");
+}
 
 // The tap is reported as a synthetic Confirm press *after* the button is
 // released, because a press edge at touch-down would let the activity act
@@ -1005,9 +1062,23 @@ void loop() {
   // every screen has it, and before activityManager.loop() so the screen on top
   // cannot consume it first. The SDK suppresses the key's tap once the hold
   // fires (InputManager::serviceTouch), so a hold never also selects.
-  if (gpio.wasHomeKeyLongPressed()) {
+  // Through MappedInputManager, not gpio: the SDK's hold fires from a latched
+  // down-state that survives a missed release edge, so the raw event can arrive
+  // from a press already spent as a tap. That is how one double tap on Home
+  // locked the panel, opened the map, and lit the frontlight when the map
+  // finished rendering (measured 2026-09-05).
+  if (mappedInputManager.wasHomeKeyLongPress()) {
     toggleFrontlight("Home key hold");
   }
+#if FREEINK_DEVICE_LILYGO
+  // The third gesture on the same key: a double tap locks or unlocks the panel.
+  // Resolved in MappedInputManager, which holds the first tap for the double-tap
+  // window and decides between Confirm and this -- a tap that had already
+  // selected could not be taken back once the second tap arrived.
+  if (mappedInputManager.wasHomeKeyDoubleTap()) {
+    toggleTouchLock();
+  }
+#endif
   if (frontlightStateChanged) {
     frontlightStateChanged = false;
     SETTINGS.frontlightOn = frontlight.brightness() > 0 ? 1 : 0;
@@ -1868,8 +1939,18 @@ void loop() {
   // changed.
   static unsigned long lastActivityTime = millis();   // -> auto-sleep timeout
   static unsigned long lastFullClockTime = millis();  // -> CPU throttle
-  const bool userInput =
-      gpio.wasAnyPressed() || gpio.wasAnyReleased() || gpio.wasTouchActivity() || halTiltSensor.hadActivity();
+  // Touch counts as activity only while touch is allowed to do anything. With
+  // it switched off the glass is dead input, so a pocket or a palm on it must
+  // not hold the device awake.
+  // The capacitive home key is neither a button nor a coordinate frame, so
+  // neither of the two tests below sees it: wasAnyPressed/Released read the
+  // button bitmask and wasTouchActivity() reads contact frames. A rider who
+  // drove the device from that key alone was therefore slept on schedule and
+  // spent the whole time on the throttled 50 ms loop, which also stretched the
+  // key's own gesture timing.
+  const bool homeKeyActivity = gpio.wasHomeKeyPressed() || gpio.wasHomeKeyTapped() || gpio.wasHomeKeyLongPressed();
+  const bool userInput = gpio.wasAnyPressed() || gpio.wasAnyReleased() || homeKeyActivity ||
+                         (TouchPolicy::touchActive() && gpio.wasTouchActivity()) || halTiltSensor.hadActivity();
   if (userInput || activityManager.preventAutoSleep()) {
     lastActivityTime = millis();
   }
