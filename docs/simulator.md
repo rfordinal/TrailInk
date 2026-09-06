@@ -83,6 +83,24 @@ ln -sfn <repo>/mapbuilder/cdn/base   fs_/trailink/base
 ln -sfn <repo>/mapbuilder/cdn/points fs_/trailink/points
 ```
 
+**The simulator writes state back, so two runs are not the same run.**
+`./fs_/.crosspoint/settings.json` holds the persisted fix and the map ladder
+state, and the firmware saves to it on exit:
+
+```
+[16066] [DBG] [MAP] saved ladder state: mode ride, zoom 2, marker 3
+```
+
+A position pushed over the BLE shim therefore survives into the next run's first
+frame. Measured 2026-09-06: two runs of the same binary and the same input
+script differed by 69,631 of 384,000 pixels, purely from that carry-over;
+rewriting the seed JSON before each run brought it to 0.
+
+So **reseed before any before/after comparison**, and treat a frame captured
+after a BLE push as carrying that position -- the parent repo's screenshot
+privacy rule applies to it (`CLAUDE.md`, "After every device screenshot, judge
+two things").
+
 Settings are a plain JSON file at `./fs_/.crosspoint/settings.json`
 (`CrossPointSettings::getFilePath()`, src/CrossPointSettings.h:468).
 
@@ -140,7 +158,8 @@ nothing: no accelerated render driver exists there, `SDL_CreateRenderer` returne
 null, `presentIfNeeded()` returns early on null, and the process ran its whole
 input script and exited 0 with no BMP written. The fork now falls back to the
 software renderer and prints which one it took. Verified the same day: a dummy
-run and a windowed run write the same map frame.
+run and a windowed run write the same map frame -- 0 of 384,000 pixels differ, with the
+persisted fix reseeded before each run.
 
 **A timed screenshot can capture the previous command's state.**
 `CROSSPOINT_SIM_SCREENSHOTS` fires on wall clock from process start, and a map
