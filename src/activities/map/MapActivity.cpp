@@ -2961,7 +2961,28 @@ void MapActivity::loop() {
       suppressConfirmRelease_ = true;
     }
     const bool justClosed = popupWasActive && !optionPopup_.isActive();
-    if (justClosed && mapMenuModeChanged_) {
+    // A row callback that queued the next popup (PinPopup, NearbyPopup) closed
+    // this one as a *step* inside one dialog, not as a dismissal: loop() opens
+    // the next one a few lines from here, over the same rect. Putting the map
+    // back in between is wrong twice over -- the map appears for one frame,
+    // which reads as the dialog flickering on the way in, and
+    // restoreMenuBackdrop() drops the backdrop it just spent, so the popup that
+    // followed had none and *its* close paid a full re-render off the card.
+    //
+    // Measured on the T5 S3 Pro 2026-09-07: menu -> Pins -> Back rendered the
+    // viewport from scratch, 2,331 ms with the busy badge up, while the log
+    // showed the backdrop had been taken normally at menu open (19,100 bytes,
+    // 119 kB free). Nothing was failing; the backdrop had simply been used up
+    // one popup too early.
+    //
+    // A chained handler that draws a real frame instead of a popup
+    // (showPinOnMap(), savePin()) drops the backdrop itself, so keeping it here
+    // cannot strand a stale one.
+    const bool chaining = pendingPinPopup_ != PinPopup::None || pendingNearbyPopup_ != NearbyPopup::None;
+    if (justClosed && chaining) {
+      // Deliberately nothing: the popup's pixels stay on the panel until the
+      // next one draws over them.
+    } else if (justClosed && mapMenuModeChanged_) {
       // The Mode row cycled mode_ while the menu stayed open (openMapMenu()'s
       // modeIdx is exempt from OptionPopup's auto-close) -- however the menu
       // just closed, Back or a tap outside, menuBackdrop_ is the frame from
