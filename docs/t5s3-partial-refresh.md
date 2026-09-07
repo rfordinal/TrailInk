@@ -37,14 +37,34 @@ virtual void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev,
 
 The rectangle is dropped on the floor and a whole-panel frame is pushed.
 
-That is the **1,081 ms** `[measured on the T5 S3 Pro, 2026-09-05]`. Instrument:
-the device's own `PowerTelemetry` counters over one 4 h 36 min walk, read out of
-`power.csv` afterwards -- `panel_busy_ms` 2,944,634 over `ref_window` 2,608
-window refreshes plus 29 whole-panel ones, holding between 1,049 and 1,101 ms
-across seven segments. That figure is recorded on `develop` in
-[`refresh-modes.md`](refresh-modes.md) under "The T5 S3 Pro is not the X4"; this
-branch carries only the short pointer. **All 2,608 of those were full-screen
-refreshes wearing a window's name.**
+Instrument: the device's own `PowerTelemetry` counters over one 4 h 36 min walk,
+read out of `power.csv` afterwards -- `panel_busy_ms` 2,944,634 over `ref_window`
+2,608 window refreshes plus 29 whole-panel ones. **Two different numbers get
+quoted off that walk and they are not the same number**: the flat quotient is
+2,944,634 / 2,637 = **1,117 ms**, while the widely-quoted **1,081 ms** is the
+mean of seven per-segment figures which held between 1,049 and 1,101 ms. Both
+are recorded on `develop` in [`refresh-modes.md`](refresh-modes.md) under "The
+T5 S3 Pro is not the X4"; this branch carries only the short pointer. Section 3b
+shows the spread is wider still on other sessions.
+
+`PowerTelemetry::Refresh::Window` is incremented at the call site in
+`lib/hal/HalDisplay.cpp:118-124`, before the driver sees anything, so it counts
+**requests**. Nothing outside `HalDisplay` calls `einkDisplay.displayWindow`.
+**So all 2,608 of those requests took the whole-panel path.**
+
+One accounting caveat on `panel_busy_ms`: `HalDisplay::displayBufferAsync` bills
+a whole-panel refresh at 0 ms (`HalDisplay.cpp:97`) and expects the time to
+arrive later from `waitRefreshComplete`. On this board `supportsAsyncDisplay()`
+is false, the facade routes back to the blocking path, `_refreshPending` never
+becomes true, and that later call returns ~0. Whether the walk's 29 whole-panel
+refreshes were billed at all is therefore **unverified**, and any claim that
+they were "under 1 % of the total" rests on it.
+
+**"Whole-panel push" means the data path, not the ink.** The CPU converts and
+pushes all 518,400 pixels and the gate scan clocks every row, but `Panel_EPD`
+still arms only pixels whose target changed (section 2b), so unchanged pixels
+are not re-driven electrically. The waste is prep and scan time, not a
+full-screen flash.
 
 One doc in the parent repo still needs fixing: `docs/prior-art-opentrailpaper.md`
 says "we already have ... an explicit `displayWindow(x, y, w, h)`". True of the
@@ -52,7 +72,8 @@ X4, false of this board.
 
 ## 2. What `Panel_EPD` already gives us
 
-The board runs LovyanGFX's `Panel_EPD`, bundled inside M5GFX
+The board runs LovyanGFX's `Panel_EPD`, bundled inside **M5GFX 0.2.28**, pinned
+at `platformio.ini:322`
 (`.pio/libdeps/t5s3pro/M5GFX/src/lgfx/v1/platforms/esp32/Panel_EPD.cpp`, read
 2026-09-07). It is not a dumb blitter. It is a per-pixel state machine, and it
 already does most of what we would otherwise write ourselves.
@@ -174,7 +195,9 @@ Per whole-panel frame today, in order:
 
 Bus time per pass, `[derived]`: 133,920 bytes on an 8-bit bus at
 `busHz` 16,000,000 (`LilyGoT5S3LgfxConfig.cpp:167`) is **8.4 ms**, so nine
-passes is about 75 ms of bus. The measured frame is 1,081 ms. **Roughly 93 % of
+passes is about 75 ms of bus. A measured frame is 1,081 to 1,117 ms depending on
+which average of the walk you take, and 510 to 1,113 ms across other sessions
+(section 3b). Take the middle of that: **roughly 90 % of
 a T5 S3 Pro refresh is CPU and PSRAM traffic, not panel time.**
 
 That is the opposite of the X4, where the 500 ms `FAST` is waveform-fixed and
@@ -185,7 +208,8 @@ here.** On this board area is the thing to minimise.
 Estimated split, `[derived, needs measurement]`: steps 1-3 scale with area and
 should be most of the ~1,000 ms; step 4 is a floor of maybe 300-400 ms
 (nine passes, each reading 1 MB of PSRAM plus 8.4 ms of bus). So a small window
-plausibly lands at **300-400 ms instead of 1,081 ms** -- a 3x win, not a 20x one.
+plausibly lands at **300-400 ms instead of about 1,100 ms** -- a 3x win, not a
+20x one.
 Anyone who quotes a bigger number has not counted step 4.
 
 **The instrument that would settle it**: `micros()` brackets around
@@ -257,8 +281,8 @@ Off `docs/power-runs/run6-2026-09-04.csv` in the parent repo, build
 number that makes this worth doing at all, and it is a counter rather than a
 voltage, so it is trustworthy.
 
-It also **corrects the doc's own framing above**: 1,081 ms is one walk's average,
-not a constant. The same build spans **510 to 1,113 ms** per refresh across
+It also **corrects the doc's own framing above**: neither 1,081 nor 1,117 ms is
+a constant -- both are one walk, averaged two different ways. The same build spans **510 to 1,113 ms** per refresh across
 boots. Something varies by more than a factor of two and nothing here says what.
 The obvious candidate is that a frame with nothing armed short-circuits after a
 single pass, which would make the mean a function of how many redraws were
@@ -357,7 +381,10 @@ never sleep or cut rails between start and finish (FastEPD's neutral-pass
 comment, OpenTrailPaper's rail-cut bug), and keep `fadingFix` users on the
 blocking path exactly as `GfxRenderer::displayBufferAsync` already does.
 
-**T-271. Override `displayWindow` on `LgfxEpdDriver`.** The library needs no
+**T-271. Override `displayWindow` on `LgfxEpdDriver`. In the same pass, make
+`MapActivity::windowRefreshAffordable` driver-aware** -- see section 6; it
+guards against an allocation `LgfxEpdDriver` never makes, and once windows are
+real it would refuse them for no reason. The library needs no
 patch -- `LGFXBase::display(x, y, w, h)` is public (`LGFXBase.cpp:95`) and
 `Panel_EPD::writeImage` already narrows `_range_mod` to whatever rectangle was
 written. The shape:
@@ -429,6 +456,24 @@ from it; T-273 and T-274 are the ones that touch battery.
 - **`_range_mod` accumulates.** Two writes before one display give the bounding
   box of both, not two updates. Fine, but it means an unrelated stray draw
   silently widens a window.
+- **`FreeInkDisplay::displayWindow`'s inverted early-out is dead code here.**
+  It redirects to a whole-buffer `FAST_REFRESH` when `_inverted ||
+  _inversionDirty` (`FreeInkDisplay.cpp:689-695`), and a dirty inversion is then
+  promoted to `HALF` -- 34 passes. Both flags default false and **nothing in
+  `src/`, `lib/` or `freeink-sdk/` ever calls `setInverted` or
+  `toggleInverted`**; `SleepActivity`'s `invertScreen()` is
+  `GfxRenderer::invertScreen()`, which flips framebuffer bits and never touches
+  the facade. So the early-out cannot fire today -- but anyone who wires
+  inversion up later silently turns every window on this board into a 34-pass
+  whole-panel clean.
+- **`MapActivity::windowRefreshAffordable` is guarding against the wrong
+  driver.** It refuses a window when `(w/8 + 1) * h + 4 kB` will not fit the
+  largest free heap block (`src/activities/map/MapActivity.cpp:4234-4247`), and
+  its own comment says why: `Ssd1677Driver::displayWindow` allocates a buffer
+  per window. `LgfxEpdDriver` allocates nothing on that path. Today the gate is
+  merely pointless -- it swaps a whole-panel refresh for a whole-panel refresh.
+  **After T-271 it would refuse real windows for a reason that does not exist on
+  this board**, so it has to be made driver-aware in the same pass.
 - **A window cannot clear the glass.** `FreeInkDisplay::displayWindow` already
   refuses to spend a pending `requestCleanNextFrame()`
   (`refresh-modes.md`), and the same logic holds here: only an eraser-prefixed
@@ -441,8 +486,9 @@ Everything in sections 1, 2 and 6 is **read off the source**, cited above, at
 `.pio/libdeps/t5s3pro` on 2026-09-07. The panel-duty table in 3b is
 **measured**, off `docs/power-runs/run6-2026-09-04.csv`, seven boots of build
 `0.2.0-t5s3pro`; the failed drain fit in the same section is **measured and
-negative**, which is why no per-refresh energy figure appears anywhere here. The 1,081 ms is **measured on the T5 S3
-Pro** (one 4 h 36 min walk, 2,608 refreshes, instrument named in section 1). The 8.4 ms bus
+negative**, which is why no per-refresh energy figure appears anywhere here. The
+1,081 / 1,117 ms pair is **measured on the T5 S3 Pro** (one 4 h 36 min walk,
+2,608 window requests, instrument and the two averagings named in section 1). The 8.4 ms bus
 figure per pass is **derived** from `busHz`, row count and `write_len`. The
 93 % CPU share and the 300-400 ms projected window cost are **derived and
 unverified** -- T-269 exists to replace them with numbers. Nothing in section 5
