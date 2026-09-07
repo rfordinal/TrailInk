@@ -46,6 +46,15 @@ built. So **never cite it as evidence about a particular build** (a claim off it
 names the date and the environment), and **never repair it in place** -- delete
 the whole directory and let PlatformIO fetch it again.
 
+**A second observed symptom, 2026-09-06/07**: `env:default` failed with
+`lib/hal/HalStorage.h:3:10: fatal error: Print.h: No such file or
+directory` in a file (`BmpViewerActivity.cpp`) untouched by the change being
+built. An immediate retry with zero code changes succeeded. Plausible --
+matches this pattern, several other sessions were building the same shared
+framework directory at that exact time -- but not independently
+instrumented (no timestamp check at the failure moment). If it recurs: retry
+once before treating it as a real code problem.
+
 A library compiled **per environment** out of `.pio/libdeps/<env>/` does not
 need the core rebuild at all: it picks the config up from the generated
 `sdkconfig.defaults` when it compiles. NimBLE-Arduino is the one that matters

@@ -41,6 +41,21 @@ they are one long stretch where the board does not reliably boot. Nothing
 about that should reach a session working on X4 firmware from `develop`. The
 release branch is the holding area; `develop` only sees the result.
 
+## Borrowing a release branch for verification only
+
+A `develop`-based, device-agnostic branch sometimes needs a hardware pass
+when no X4/X4 Pro is on hand, and a `release/<device>` board is the only
+thing plugged in. Cherry-pick the commits onto a throwaway branch off
+`release/<device>`, build, flash, confirm -- then merge the **original**
+`develop`-based branch into `develop` (never the cherry-picked one anywhere).
+The verification branch is discarded once its job is done; it was never
+meant to merge.
+
+Confirmed 2026-09-06/07: `pins-on-sync` (pin commands + live burst
+geography on the Sync screen, `firmware/explorink`) verified this way on a
+T5 S3 Pro with no X4 available, then merged straight into `develop` as
+`adf6faa1` -- the T5S3Pro branch itself was never merged anywhere.
+
 ## Existing branches
 
 - `release/lilygo-t5-s3-pro` — created 2026-08-31 from `develop`.
