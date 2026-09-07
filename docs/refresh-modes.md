@@ -150,6 +150,40 @@ The X4's 500 ms figure stays as measured. These are different panels and the
 cost is device-specific -- do not carry either number to a third board without
 measuring it there.
 
+#### And on this board a window is dearer than the whole panel
+
+**T5 S3 Pro, whole-panel `FAST`: ~545 ms, against the window's ~1,030 ms**
+`[measured, 2026-09-07]`. **A window costs about twice a full frame here**,
+which is the reverse of the X4, where the two are the same 500 ms and area does
+not enter into the waveform at all.
+
+Instrument: the same `PowerTelemetry` counters, off a 4 h 08 min walk's
+`power.csv`, build `0.2.0-t5s3pro`. The two kinds were separated by keeping only
+the one-minute intervals in which exactly one of the four refresh counters grew
+-- `panel_busy_ms` is a single bucket for all four, so any mixed interval
+charges its whole panel time to whichever counter you divide by, and the earlier
+1,081 ms figure carried the whole-panel share inside it. Windowed: median
+1,030 ms, n=374, p25 1,028, p75 1,055. Whole-panel `FAST`: median 545 ms, n=35,
+472 to 668. Both timings are wall clock around the driver call at the same
+boundary, `HalDisplay::displayWindow` (`lib/hal/HalDisplay.cpp:118`) and
+`HalDisplay::displayBuffer` (`:78`), so they are comparable.
+
+**Why a rectangle costs more than the whole frame is unexplained** `[open]`.
+`FreeInkDisplay::displayWindow()` only hands the rectangle to the active driver
+(`FreeInkDisplay.cpp:685-703`), so the extra second is inside that driver, and
+which driver the `t5s3pro` env links is not visible from `develop` -- that env
+lives on `release/lilygo-t5-s3-pro`. Settling it needs that branch's
+`platformio.ini` and then the driver's own `displayWindow`. One thing the code
+does rule out: the inverted-mode fallback at `FreeInkDisplay.cpp:689-695`, which
+turns a window request into a whole-panel `FAST` -- that would have shown up as
+the cheaper number, not the dearer one.
+
+The consequence is the opposite of the X4's advice: **on this board the thing to
+minimise is not the number of windows but the use of windows at all.** The map's
+marker-move path asking for a whole-panel `FAST` would halve its blocking time.
+Tracked as T-277 in the parent repo, together with the counter split the
+attribution needs.
+
 The consequence for the rider is in [`map-follow.md`](map-follow.md), "A
 windowed refresh blocks the loop": at this cost the map's main loop spends up to
 a quarter of its wall clock inside a blocking panel call.
