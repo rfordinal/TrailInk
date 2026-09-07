@@ -382,17 +382,38 @@ boot with the highest duty (35, at 21.3 %) shows zero. The cell sits on its
 voltage plateau, the boots are short, and the ADC resolution swamps the signal.
 **Do not quote a per-refresh energy figure off `power.csv`. It is not in there.**
 
-The instrument that would answer it already exists on this board and is already
-reachable from our code: the **BQ27220 fuel gauge at I2C `0x55`**, whose
-`Current()` register `0x0C` is a signed mA reading
-(`lib/hal/HalGPIO.h:26-29`, `lib/hal/HalGPIO.cpp:33`). `power.csv` has no
-current column today -- run6's header stops at `ble` and `build`. That is T-275.
+Two instruments do answer it, and both are already ours.
 
-The cell-side series meter that would settle it absolutely is **not available**:
-both our T5 S3 Pro units are enclosed, and `docs/hardware-policy.md`, "What
-instruments remain", limits an enclosed unit to firmware self-measurement, a
-USB-side VBUS meter and the gauge over I2C. A bare board from LilyGo would
-reopen that path.
+**On-device**: the **BQ27220 fuel gauge at I2C `0x55`**, whose `Current()`
+register `0x0C` is a signed mA reading (`lib/hal/HalGPIO.h:26-29`,
+`lib/hal/HalGPIO.cpp:33`). `power.csv` has no current column today -- run6's
+header stops at `ble` and `build`.
+
+**On the bench**: the USB meter, with the cell taken out of the path in
+software. Disabling charging already opens the BQ25896's BATFET (SLUSC76C p.18,
+9.2.3.5), so VBUS current becomes the board's draw with no charge term;
+`REG09` bit 5 `BATFET_DIS` / `PPM.shutdown()` forces it and survives the
+charger's watchdog (`docs/t5s3-power-path.md` in the parent repo). **No opening
+required and no bare board needed** -- an earlier version of this doc said the
+cell-side path was closed to us and that was wrong.
+
+**Read it as a difference, never as an absolute.** VBUS is ~5 V and the system
+rail is `VBAT + 50 mV`, so the meter reads roughly 0.8x the board's current at a
+3.85 V cell; the buck's efficiency at our 20-130 mA load is `[open]` in the
+datasheet, whose light-load curve plots nothing below ~50 mA; and the charger
+itself draws up to 3 mA (`docs/usb-power-meter.md`, "VBUS milliamps are not
+board milliamps"). In a difference between two states the 3 mA offset cancels
+exactly and the scale factor is common to both. **Every question this doc asks
+is a difference**: a window against a whole panel, eleven passes against one,
+`epd_fast` against `epd_text`, rails cycled per frame against rails held across
+a burst. So the imprecise absolute does not block any of them.
+
+What stays out of reach either way is the sub-milliamp end -- deep sleep at
+~873 uA and ship mode are below what a whole board through a charger resolves,
+and the gauge reports them as an exact zero. Irrelevant here: a refresh is tens
+of milliamps.
+
+That is T-275.
 
 ## 4. What the two reference projects say
 
@@ -565,13 +586,19 @@ abandoned as a misdiagnosis before it was built. Note that our clean mode
 map is expensive twice over. **Done when** a long map session ends without
 accumulated residue and no clean fires during a zoom burst. Depends on T-271.
 
-**T-275. Put a current reading in `power.csv`.** The BQ27220 at I2C `0x55`
-already answers `Current()` in signed mA (`lib/hal/HalGPIO.h:26-29`,
-`lib/hal/HalGPIO.cpp:33`) and nothing samples it into the log. Add the column and
-take one sample deliberately inside a refresh and one between refreshes. Without
-it every power claim about this panel stays an argument, because `batt_mv`
-demonstrably cannot carry it (3b). Independent, and needed before T-273 or T-274
-can be judged.
+**T-275. Measure what a refresh costs, two ways.** On-device: the BQ27220 at
+I2C `0x55` already answers `Current()` in signed mA (`lib/hal/HalGPIO.h:26-29`,
+`lib/hal/HalGPIO.cpp:33`) and nothing samples it into the log -- add the column
+and take a sample deliberately inside a refresh and one between refreshes. On
+the bench: the USB meter with charging disabled so the BATFET is open and the
+cell is out of the path, read as a **difference** between states (3b explains why
+the absolute carries an open efficiency term and why the difference does not).
+The states worth pairing are the ones the plan turns on: a window against a whole
+panel, an unchanged frame against a one-pixel change, `epd_fast` against
+`epd_text`, and rails cycled per frame against rails held across a burst. Without
+this every power claim about this panel stays an argument, because `batt_mv`
+demonstrably cannot carry it. Independent of the others, and needed before T-273
+or T-274 can be judged.
 
 ## 6. Traps, written down before anyone hits them
 
