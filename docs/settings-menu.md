@@ -96,11 +96,31 @@ Three mechanics behind `disabled` (`SettingsActivity.h:59`):
   (`BaseTheme.cpp:499`).
 - **The dither is skipped on the selected row** (`BaseTheme.cpp:499`, `i !=
   selectedIndex`), so dimming alone tells a rider standing on the row nothing.
-  The Confirm hint is therefore blanked for a disabled row, and
-  `drawButtonHints()` draws no box at all for an empty label
-  (`BaseTheme.cpp:259`). No button, no promise.
+  The Confirm hint is therefore blanked for a disabled row.
+- **What an empty hint label draws is per theme, and the device does not run
+  the plain one.** `BaseTheme::drawButtonHints()` skips an empty label and
+  draws nothing (`BaseTheme.cpp:259`). `LyraTheme` — the default — draws a
+  **short stub box** with no text instead (`LyraTheme.cpp:398-403`), so the
+  slot is not empty, it is visibly shorter than its neighbours. Seen on a
+  T5 S3 Pro panel 2026-09-07, on that board's release branch.
+- **The stub is not tappable.** `rememberFrontLabels()` records only non-empty
+  labels (`BaseTheme.cpp:380-383`), `frontBoxActive()` gates the hit test on
+  that flag (`BaseTheme.cpp:390`), and `frontHintBox()` refuses a rect for an
+  inactive slot. So the stub is drawn and dead — the behaviour wanted, arrived
+  at by accident rather than designed.
 - `toggleCurrentSetting()` returns early, so both the button path and the
   touch-tap path are inert.
+
+**Read on hardware, on the T5 S3 Pro release branch, 2026-09-07.** The same
+change cherry-picked onto `release/lilygo-t5-s3-pro` was flashed and grabbed at
+540x960: four tabs cycling Display -> Map -> Controls -> System -> Display, the
+hidden rows gone, and Confirm pressed three times on the disabled row changing
+nothing. The maintainer's reading of the panel was "riadok je mrtvy". That
+branch's copy of this file carries the detail.
+
+**Still open: `settings.json` was not read back.** `CMD:SETTING` is a four-key
+allow-list (`main.cpp:771-780`) and none of the hidden keys is in it, so the
+claim that hidden rows keep being serialised is still read-off-the-code only.
 
 **Only the label dims, not the value.** The simulator capture shows "Screen
 Orientation" in dither grey with "Portrait" beside it in solid black:
