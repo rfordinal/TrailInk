@@ -2591,7 +2591,28 @@ void MapActivity::loop() {
       suppressConfirmRelease_ = true;
     }
     const bool justClosed = popupWasActive && !optionPopup_.isActive();
-    if (justClosed && mapMenuModeChanged_) {
+    // A row callback that queued the next popup (PinPopup, NearbyPopup) closed
+    // this one as a *step* inside one dialog, not as a dismissal: loop() opens
+    // the next one a few lines from here, over the same rect. Putting the map
+    // back in between is wrong twice over -- the map appears for one frame,
+    // which reads as the dialog flickering on the way in, and
+    // restoreMenuBackdrop() drops the backdrop it just spent, so the popup that
+    // followed had none and *its* close paid a full re-render off the card.
+    //
+    // Measured on the T5 S3 Pro 2026-09-07: menu -> Pins -> Back rendered the
+    // viewport from scratch, 2,331 ms with the busy badge up, while the log
+    // showed the backdrop had been taken normally at menu open (19,100 bytes,
+    // 119 kB free). Nothing was failing; the backdrop had simply been used up
+    // one popup too early.
+    //
+    // A chained handler that draws a real frame instead of a popup
+    // (showPinOnMap(), savePin()) drops the backdrop itself, so keeping it here
+    // cannot strand a stale one.
+    const bool chaining = pendingPinPopup_ != PinPopup::None || pendingNearbyPopup_ != NearbyPopup::None;
+    if (justClosed && chaining) {
+      // Deliberately nothing: the popup's pixels stay on the panel until the
+      // next one draws over them.
+    } else if (justClosed && mapMenuModeChanged_) {
       // The Mode row cycled mode_ while the menu stayed open (openMapMenu()'s
       // modeIdx is exempt from OptionPopup's auto-close) -- however the menu
       // just closed, Back or a tap outside, menuBackdrop_ is the frame from
@@ -3051,20 +3072,33 @@ bool MapActivity::restoreMenuBackdrop() {
     LOG_ERR(kLogTag, "menu backdrop write rejected: %d,%d %dx%d", rect.x, rect.y, rect.width, rect.height);
     return false;
   }
-  // The popup drew its own four hints over the map's, in the band below the
-  // dialog. Repaint ours, and refresh from the dialog's top down to the bottom
-  // of the panel so the one window covers both.
+  // The popup drew its own four hints over the map's, in the band at the bottom
+  // of the panel. Repaint ours.
   drawMapButtonHints();
-  const int x = 0;
-  const int y = rect.y;
-  const int w = renderer.getScreenWidth();
-  const int h = renderer.getScreenHeight() - y;
-  // A dialog tall enough to reach y == 0 makes this "one window" the whole
-  // panel, which is exactly what the comment below says aborts the device.
-  // Nothing bounded it until 2026-08-22.
-  if (!windowRefreshAffordable(w, h) || !renderer.displayBufferWindow(x, y, w, h)) {
-    LOG_ERR(kLogTag, "menu close window rejected: %d,%d %dx%d", x, y, w, h);
+  // Two windows, not one band from the dialog's top edge to the bottom of the
+  // panel. The band was the cheaper thing to write and the more expensive thing
+  // to run: the driver allocates (w/8)*h bytes for a window, and a full-width
+  // band from a centred dialog is (ScreenW/8) * (ScreenH + DialogH)/2 -- 45,696
+  // bytes on a 540x960 T5 S3 Pro, past what windowRefreshAffordable() will allow
+  // on a map screen. Refused, every close fell back to a full re-render, which
+  // is exactly the redraw the backdrop exists to avoid.
+  //
+  // The popup only ever dirties three places: its own frame, the hint band, and
+  // the side-hint strip below. Refreshing those three costs a third of the band
+  // and nothing in between them was touched.
+  const Rect hints = GUI.buttonHintsRect(renderer);
+  if (!windowRefreshAffordable(rect.width, rect.height) ||
+      !renderer.displayBufferWindow(rect.x, rect.y, rect.width, rect.height)) {
+    LOG_ERR(kLogTag, "menu close window rejected: %d,%d %dx%d", rect.x, rect.y, rect.width, rect.height);
     return false;
+  }
+  // Empty when the panel is locked and the band carries the padlock strip
+  // instead -- drawMapButtonHints() drew that, and it lives in the same rect,
+  // so an empty rect here means there is genuinely nothing to refresh.
+  if (hints.width > 0 && hints.height > 0) {
+    if (!renderer.displayBufferWindow(hints.x, hints.y, hints.width, hints.height)) {
+      LOG_ERR(kLogTag, "menu close hint window rejected: %d,%d %dx%d", hints.x, hints.y, hints.width, hints.height);
+    }
   }
   // A popup with row actions drew the two side-hint boxes, and those sit outside
   // the dialog -- on the right edge, at the theme's own y. drawMapButtonHints()
@@ -3079,10 +3113,12 @@ bool MapActivity::restoreMenuBackdrop() {
   // bad_alloc -> terminate, with 38 KB free and a 34 KB largest block).
   if (popupDrewSideHints_) {
     popupDrewSideHints_ = false;
-    const Rect hints = GUI.sideButtonHintsRect(renderer);
-    if (hints.width > 0 && hints.height > 0 && hints.y < y) {
-      if (!renderer.displayBufferWindow(hints.x, hints.y, hints.width, hints.height)) {
-        LOG_ERR(kLogTag, "side hint window rejected: %d,%d %dx%d", hints.x, hints.y, hints.width, hints.height);
+    const Rect side = GUI.sideButtonHintsRect(renderer);
+    // No `y` test any more: the dialog window above covers only the dialog, so
+    // the side strip needs its own refresh wherever it sits.
+    if (side.width > 0 && side.height > 0) {
+      if (!renderer.displayBufferWindow(side.x, side.y, side.width, side.height)) {
+        LOG_ERR(kLogTag, "side hint window rejected: %d,%d %dx%d", side.x, side.y, side.width, side.height);
       }
     }
   }
@@ -3327,14 +3363,14 @@ void MapActivity::openMapMenu() {
     keepOpen[static_cast<size_t>(modeIdx)] = 1;
     optionPopup_.setKeepOpenRows(std::move(keepOpen));
   }
-  // After show() (the layout the rect comes from needs the rows) and before
-  // the first draw (the framebuffer still holds the map).
-  //
-  // The size is recorded here too: every pins list opens at exactly this size, so
-  // it lands as the next step of this menu and not as a differently shaped box --
-  // and so this same backdrop still covers it.
-  menuDialogWidth_ = optionPopup_.dialogWidth(renderer);
-  menuVisibleRows_ = optionPopup_.visibleRows(renderer);
+  // The menu box, and every list opened from it, is the same rect (setSize()).
+  // Two things follow: a list lands as the next step of this menu rather than as
+  // a differently shaped box, and this one backdrop stays valid for the whole
+  // chain -- menu, pin list, confirmation -- because the confirm box is smaller
+  // and centred inside it.
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
+  // After show() (which resets the size class) and before the first draw: the
+  // framebuffer still holds the map, which is what the backdrop is.
   captureMenuBackdrop();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -3513,7 +3549,7 @@ void MapActivity::openPinsOffscreenList() {
     pinsOffscreenRow_ = static_cast<uint8_t>(idx);
     pendingPinPopup_ = PinPopup::Offscreen;
   });
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -3730,7 +3766,7 @@ void MapActivity::openNearbyMenu() {
     pendingNearbyPopup_ = NearbyPopup::Category;
   });
   optionPopup_.setIcons(std::move(icons));
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -3767,7 +3803,7 @@ void MapActivity::openNearbyCategoryList(uint8_t category) {
                                 pendingNearbyArg_ = static_cast<uint8_t>(idx - 1);
                                 pendingNearbyPopup_ = NearbyPopup::Detail;
                               });
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -3806,7 +3842,7 @@ void MapActivity::openNearbyPointDetail(uint8_t hitIndex) {
   // make every POI look conditional.
   const bool hasCondition = (hit.flags & (kPointFlaggedOnMapMask | kPointUnstaffed | kPointOpenSided)) != 0;
   if (hasCondition) optionPopup_.setNote(I18N.get(nearbyConditionLabel(hit.category, hit.flags)));
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4030,7 +4066,7 @@ void MapActivity::openPinsMenu() {
   // Same size as the menu it came out of: a differently sized box in the middle
   // of the previous one reads as a different kind of dialog rather than the next
   // step of the same one, and matching it keeps the menu backdrop valid.
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4078,7 +4114,7 @@ void MapActivity::openPinsAddList() {
     pendingPinPopup_ = PinPopup::ConfirmSet;
   });
   optionPopup_.setIcons(std::move(icons));
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Menu);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4130,7 +4166,7 @@ void MapActivity::confirmPinReplaceSlot(size_t slot) {
   // popup opener sets it) is why the confirm box used to compute its own
   // narrower size from just "Cancel"/"Replace" instead of matching the
   // Add/Replace or Pins list behind it. Reported on the S8 2026-08-24.
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Confirm);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
@@ -4157,7 +4193,7 @@ void MapActivity::confirmPinDelete(size_t slot) {
   });
   // Same missing size hint as confirmPinReplaceSlot() above, after show() for
   // the same reason -- same fix.
-  optionPopup_.setSizeHint(menuDialogWidth_, menuVisibleRows_);
+  optionPopup_.setSize(BaseTheme::OptionPopupSize::Confirm);
   dropBackdropIfPopupOutgrew();
   optionPopup_.processRender(renderer, mappedInput);
 }
