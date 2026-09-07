@@ -4,9 +4,11 @@ ExplorInk inherited CrossPoint's whole e-reader Settings screen. Most of it
 configures books. This file says which rows went, which stayed, why, and what a
 later pass still owes.
 
-Status: **built, not flashed.** `pio run -e default` (X4) and `-e simulator`
-both link clean. Nothing here has been looked at on a device panel yet. The
-simulator captures in `qa-artifacts/settings-facade/` are host renders.
+Status: **built and seen in the simulator, not flashed.** `pio run -e default`
+(X4) and `-e simulator` both link clean, and a headless simulator run captured
+all four tabs at 480x800 (`qa-artifacts/settings-facade/tab0..3.png`,
+gitignored). Those are host renders on the X4 profile. Nothing here has been
+looked at on a device panel yet.
 
 ## The staged removal, and why nothing is deleted yet
 
@@ -99,6 +101,13 @@ Three mechanics behind `disabled` (`SettingsActivity.h:59`):
   (`BaseTheme.cpp:259`). No button, no promise.
 - `toggleCurrentSetting()` returns early, so both the button path and the
   touch-tap path are inert.
+
+**Only the label dims, not the value.** The simulator capture shows "Screen
+Orientation" in dither grey with "Portrait" beside it in solid black:
+`drawList()` applies the dither to the row title and draws the value at full
+weight. It reads acceptably — the label is the part that says whether the row
+is live — but it is not deliberate, and a hardware pass should say whether the
+mixed weight is confusing on the panel.
 
 **`RoundedRaffTheme` ignores `rowDimmed` entirely** (`RoundedRaffTheme.cpp:284`,
 `(void)rowDimmed;`). Under that theme the row looks ordinary and only the
