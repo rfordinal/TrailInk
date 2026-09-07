@@ -248,7 +248,8 @@ logging and one press settles it in a minute; a build and a flash do not.
 
 ## The remap, 2026-09-07: BOOT taps Back, the hold cycles the light
 
-**Written 2026-09-07, not yet run on hardware.** Maintainer's call. Three
+**Written and confirmed on hardware 2026-09-07.** Maintainer's call, and the
+maintainer used it on the panel afterwards: "funguje". Three
 changes, all in `src/main.cpp`:
 
 | input | gesture | before | now |
@@ -329,16 +330,26 @@ next to the one that already exists.
 both switches, so the old name was a lie. Same install site, same synthetic-click
 machinery, now shared by the two gestures through `beginSyntheticClick()`.
 
-**What a hardware pass has to check:**
+**Confirmed by use on the panel, 2026-09-07**: the buttons do what this section
+says. The maintainer flashed the build, used the four gestures and answered
+"funguje". That is a use report, not an instrumented run.
 
-- A BOOT tap steps back on every screen, and does not also sleep.
-- A BOOT hold still sleeps, and 1500 ms feels right rather than long.
-- A wake press does not leave a stray Back behind it.
-- One long hold walks `10 -> 30 -> 60 -> 100 -> off` on its own, about half a
-  second a rung, and stops on the rung the thumb let go at.
-- The level survives a reboot (`CMD:LIGHT` answers the stored value), and the
-  hold produced one card write, not five.
-- The extra `digitalRead` per input poll disturbs neither touch nor a refresh.
+**Still not separately measured**, and worth a capture when one is cheap:
+
+- That a wake press leaves no stray Back behind it. The guard is written (the
+  hook adopts the BOOT level on its first poll) and nothing odd was seen, but
+  nobody watched a log across a wake.
+- That one long hold produces exactly one card write rather than five. The
+  deferral is written (`frontlightHoldActive`); the evidence would be one
+  `[SET]` line per hold in a serial capture.
+- That the extra `digitalRead` per input poll disturbs neither touch nor a
+  refresh. Nothing misbehaved in use; no timing was taken.
+
+**A wrong claim this section carried for one build.** The first version said a
+hold cycles the light and it did not: it stepped once. The repeat had been
+written, built and never flashed, and the report of "it does not work" matched
+the firmware that was actually on the board. Rule: after any "it does not work",
+check which binary is running before reading the code.
 
 
 
