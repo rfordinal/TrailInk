@@ -137,8 +137,13 @@ void toggleFrontlight(const char* source) {
 // press means Back (boardButtonHook() below), so the two gestures share one
 // number and it has to be long enough to tap deliberately with gloves on:
 // 400 ms, the setting's own answer, is a window a rider misses and sleeps the
-// device instead of stepping back. Wake uses the same number
-// (verifyPowerButtonWakeup), so a tap that does not wake also does not sleep.
+// device instead of stepping back.
+//
+// Wake is passed the same number, but it does not mean the same thing:
+// verifyPowerButtonWakeup() subtracts the time already spent booting
+// (HalGPIO.cpp:212-213), so what a wake actually requires is that the button is
+// still down when setup() reaches that check -- 1 ms of it if boot took longer
+// than 1500 ms. Sleep is the only gesture this number really gates.
 uint16_t powerHoldDurationMs() {
 #if FREEINK_DEVICE_LILYGO
   if (BoardConfig::ACTIVE.board == BoardConfig::Board::LilyGoT5S3) return 1500;
