@@ -4,13 +4,11 @@ ExplorInk inherited CrossPoint's whole e-reader Settings screen. Most of it
 configures books. This file says which rows went, which stayed, why, and what a
 later pass still owes.
 
-Status on this branch (`release/lilygo-t5-s3-pro`): **built, not flashed.**
-Cherry-picked from the `develop`-side branch and rebased onto this branch's
-`origin` tip, where `pio run -e t5s3pro` builds clean. On the `develop` side
-`pio run -e default` (X4) and `-e simulator` both link clean, and a headless
-simulator run captured all four tabs at 480x800
-(`qa-artifacts/settings-facade/tab0..3.png`, gitignored, X4 profile). Nothing
-has been looked at on a device panel yet.
+Status on this branch (`release/lilygo-t5-s3-pro`): **flashed and read on a
+LilyGo T5 S3 Pro, 2026-09-07.** All four tabs were grabbed off the panel with
+`CMD:SCREENSHOT` at the board's own 540x960. The `develop` side is built only:
+`pio run -e default` (X4) and `-e simulator` link clean, and the simulator's
+480x800 captures are host renders on the X4 profile.
 
 ## The staged removal, and why nothing is deleted yet
 
@@ -98,11 +96,38 @@ Three mechanics behind `disabled` (`SettingsActivity.h:59`):
   (`BaseTheme.cpp:532`).
 - **The dither is skipped on the selected row** (`BaseTheme.cpp:532`, `i !=
   selectedIndex`), so dimming alone tells a rider standing on the row nothing.
-  The Confirm hint is therefore blanked for a disabled row, and
-  `drawButtonHints()` draws no box at all for an empty label
-  (`BaseTheme.cpp:261`). No button, no promise.
+  The Confirm hint is therefore blanked for a disabled row.
+- **What an empty hint label draws is per theme, and the device does not run
+  the plain one.** `BaseTheme::drawButtonHints()` skips an empty label and
+  draws nothing (`BaseTheme.cpp:261`). `LyraTheme` — the default, and what the
+  T5 S3 Pro was running — draws a **short stub box** with no text instead
+  (`LyraTheme.cpp:399-404`), so the slot is not empty, it is visibly shorter
+  than its neighbours. Seen on the panel 2026-09-07.
+- **The stub is not tappable.** `rememberFrontLabels()` records only non-empty
+  labels (`BaseTheme.cpp:384-387`), `frontBoxActive()` gates the hit test on
+  that flag (`BaseTheme.cpp:394`), and `frontHintBox()` refuses to return a
+  rect for an inactive slot. So in BUTTONS touch mode the stub is drawn and
+  dead, which is the behaviour wanted — but it was arrived at by accident, not
+  designed.
 - `toggleCurrentSetting()` returns early, so both the button path and the
   touch-tap path are inert.
+
+**Confirmed on the panel, 2026-09-07.** Four tabs, cycling Display -> Map ->
+Controls -> System -> Display. Refresh Frequency gone from Display; KOReader
+Sync, OPDS Servers and Clear Reading Cache gone from System. Screen
+Orientation draws last in Display, dithered. With the cursor parked on it,
+Confirm pressed three times changed nothing and opened no popup, and the
+maintainer's reading of the panel was "riadok je mrtvy" — the row reads as
+dead. Two absences are not this change and were checked as such: Sunlight
+Fading Fix (dropped on any touch board) and Check for updates (OTA is gated on
+`!hasTouch`).
+
+**Still open: `settings.json` was not read back.** The hidden rows keep being
+serialised in theory, and the visible settings did survive the flash with the
+rider's own values rather than defaults — but `CMD:SETTING` is a four-key
+allow-list (`main.cpp:1335-1352`) and none of the hidden keys is in it, so
+nothing was actually read off the device. Pulling the card or reaching it over
+WebDAV would settle it.
 
 **Only the label dims, not the value.** The simulator capture shows "Screen
 Orientation" in dither grey with "Portrait" beside it in solid black:
