@@ -5,10 +5,12 @@ configures books. This file says which rows went, which stayed, why, and what a
 later pass still owes.
 
 Status on this branch (`release/lilygo-t5-s3-pro`): **built, not flashed.**
-Cherry-picked from the `develop`-side branch, where `pio run -e default` (X4)
-and `-e simulator` both link clean. Nothing here has been looked at on a device
-panel yet. The `STR_TOUCH_MODE` row the develop version hides does not exist on
-this branch, so nothing was hidden in its place.
+Cherry-picked from the `develop`-side branch and rebased onto this branch's
+`origin` tip, where `pio run -e t5s3pro` builds clean. On the `develop` side
+`pio run -e default` (X4) and `-e simulator` both link clean, and a headless
+simulator run captured all four tabs at 480x800
+(`qa-artifacts/settings-facade/tab0..3.png`, gitignored, X4 profile). Nothing
+has been looked at on a device panel yet.
 
 ## The staged removal, and why nothing is deleted yet
 
@@ -21,7 +23,7 @@ That distinction matters because `getSettingsList()` does two jobs:
 
 - it builds the Settings screen (`SettingsActivity.cpp:52`), and
 - it drives `settings.json` serialisation, both ways
-  (`CrossPointSettings.cpp:66` writes, `:130` reads).
+  (`CrossPointSettings.cpp:66` writes, `:140` reads).
 
 Delete an entry and the field stops being saved, so every device carrying a
 stored value silently resets it on the next boot. So a hidden row keeps its
@@ -48,7 +50,7 @@ reachable from it:
 The status bar those 11 rows configure is the **reader's**. The map screen
 draws its own header row and reads none of them — it takes the time from the
 phone's BLE packet and ignores `SETTINGS.clockFormat` outright
-(`MapActivity.cpp:1876-1878`, and `map-header-status.md`).
+(`MapActivity.cpp:2151-2153`, and `map-header-status.md`).
 
 `TextSettingsActivity`, `StatusBarSettingsActivity`, `KOReaderSettingsActivity`
 and `OpdsServerListActivity` are all still compiled and still constructible.
@@ -63,7 +65,7 @@ citation is the consumer, not the definition.
 |---|---|---|
 | Refresh Frequency | Display | `ReaderActivity.cpp:34` — it counts pages of a book |
 | Touch Reader Controls | Controls | `ReaderUtils.h` |
-| Orient front buttons | Controls | `MappedInputManager.cpp:47`, keyed on the reader's orientation |
+| Orient front buttons | Controls | `MappedInputManager.cpp:48`, keyed on the reader's orientation |
 | Long-press button behavior | Controls | `EpubReaderActivity`, `XtcReaderActivity` |
 | Long-press Menu | Controls | `EpubReaderActivity.cpp` — options are KOReader sync, bookmark, dictionary |
 | Quick-return from footnotes | Controls | `ReaderUtils.h` — footnotes are an EPUB concept |
@@ -92,17 +94,24 @@ do not. Offering it would rotate nothing the rider is looking at.
 Three mechanics behind `disabled` (`SettingsActivity.h:59`):
 
 - The row draws dimmed through `drawList()`'s `rowDimmed` callback
-  (`BaseTheme.h:253`), a checkerboard dither on the text
-  (`BaseTheme.cpp:437`).
-- **The dither is skipped on the selected row** (`BaseTheme.cpp:437`, `i !=
+  (`BaseTheme.h:316`), a checkerboard dither on the text
+  (`BaseTheme.cpp:532`).
+- **The dither is skipped on the selected row** (`BaseTheme.cpp:532`, `i !=
   selectedIndex`), so dimming alone tells a rider standing on the row nothing.
   The Confirm hint is therefore blanked for a disabled row, and
   `drawButtonHints()` draws no box at all for an empty label
-  (`BaseTheme.cpp:233`). No button, no promise.
+  (`BaseTheme.cpp:261`). No button, no promise.
 - `toggleCurrentSetting()` returns early, so both the button path and the
   touch-tap path are inert.
 
-**`RoundedRaffTheme` ignores `rowDimmed` entirely** (`RoundedRaffTheme.cpp:282`,
+**Only the label dims, not the value.** The simulator capture shows "Screen
+Orientation" in dither grey with "Portrait" beside it in solid black:
+`drawList()` applies the dither to the row title and draws the value at full
+weight. It reads acceptably — the label is the part that says whether the row
+is live — but it is not deliberate, and a hardware pass should say whether the
+mixed weight is confusing on the panel.
+
+**`RoundedRaffTheme` ignores `rowDimmed` entirely** (`RoundedRaffTheme.cpp:284`,
 `(void)rowDimmed;`). Under that theme the row looks ordinary and only the
 missing Confirm hint gives it away. Open — either that theme learns to dim, or
 the row needs a second cue.
