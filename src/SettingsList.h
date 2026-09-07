@@ -222,10 +222,14 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_HIDE_BATTERY, &CrossPointSettings::hideBatteryPercentage,
                           {StrId::STR_NEVER, StrId::STR_IN_READER, StrId::STR_ALWAYS}, "hideBatteryPercentage",
                           StrId::STR_CAT_DISPLAY),
+        // Hidden: it counts *pages of a book* between full refreshes and has
+        // exactly one consumer, ReaderActivity.cpp:34. The map screen decides
+        // its own refresh cadence.
         SettingInfo::Enum(
             StrId::STR_REFRESH_FREQ, &CrossPointSettings::refreshFrequency,
             {StrId::STR_PAGES_1, StrId::STR_PAGES_5, StrId::STR_PAGES_10, StrId::STR_PAGES_15, StrId::STR_PAGES_30},
-            "refreshFrequency", StrId::STR_CAT_DISPLAY),
+            "refreshFrequency", StrId::STR_CAT_DISPLAY)
+            .withHidden(),
         SettingInfo::Enum(StrId::STR_UI_THEME, &CrossPointSettings::uiTheme,
                           {StrId::STR_THEME_CLASSIC, StrId::STR_THEME_LYRA, StrId::STR_THEME_LYRA_EXTENDED,
                            StrId::STR_THEME_ROUNDEDRAFF},
@@ -360,10 +364,18 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Toggle(StrId::STR_HYPHENATION, &CrossPointSettings::hyphenationEnabled, "hyphenationEnabled",
                             StrId::STR_CAT_READER)
             .withTextSettings(),
+        // Moved out of the dead Reader tab and left in Display as a dimmed
+        // placeholder. Today the field rotates the *reader* only
+        // (EpubReaderActivity, TxtReaderActivity, SleepActivity read it; the
+        // map and the rest of the UI do not), so offering it here would rotate
+        // nothing the rider is looking at. It stays visible because a
+        // handlebar mount wants a real screen orientation and this is the
+        // field that will carry it — see docs/settings-menu.md.
         SettingInfo::Enum(
-            StrId::STR_ORIENTATION, &CrossPointSettings::orientation,
+            StrId::STR_SCREEN_ORIENTATION, &CrossPointSettings::orientation,
             {StrId::STR_PORTRAIT, StrId::STR_LANDSCAPE_CW, StrId::STR_ORIENTATION_INVERTED, StrId::STR_LANDSCAPE_CCW},
-            "orientation", StrId::STR_CAT_READER),
+            "orientation", StrId::STR_CAT_DISPLAY)
+            .withDisabled(),
         SettingInfo::Toggle(StrId::STR_EXTRA_SPACING, &CrossPointSettings::extraParagraphSpacing,
                             "extraParagraphSpacing", StrId::STR_CAT_READER)
             .withTextSettings(),
@@ -377,10 +389,14 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
                           {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED}, "sideButtonLayout",
                           StrId::STR_CAT_CONTROLS),
+        // Hidden: reader-only tap zones (ReaderUtils.h). The map has its own
+        // touch handling and does not read this.
         SettingInfo::Enum(StrId::STR_TOUCH_READER_CONTROLS, &CrossPointSettings::touchReaderControls,
-                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS),
+                          {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS)
+            .withHidden(),
         // Touch policy. Dropped below on a board with no digitizer, where it
-        // would offer a choice between identical behaviours.
+        // would offer a choice between identical behaviours. Stays visible --
+        // this one is the device's own input policy, not the reader's.
         //
         // Two values, not three: OFF is deliberately unreachable from here. A
         // rider who picked it could not get back to Settings to undo it, and on
@@ -390,35 +406,56 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         SettingInfo::Enum(StrId::STR_TOUCH_MODE, &CrossPointSettings::touchMode,
                           {StrId::STR_TOUCH_MODE_ANYWHERE, StrId::STR_TOUCH_MODE_BUTTONS}, "touchMode",
                           StrId::STR_CAT_CONTROLS),
+        // Hidden: it rotates the front-button mapping to follow
+        // CrossPointSettings::orientation, which is the *reader's* orientation
+        // (MappedInputManager.cpp:48). With the reader row gone there is
+        // nothing left to follow.
         SettingInfo::Toggle(StrId::STR_FRONT_BTN_FOLLOW_ORIENTATION, &CrossPointSettings::frontButtonFollowOrientation,
-                            "frontButtonFollowOrientation", StrId::STR_CAT_CONTROLS),
+                            "frontButtonFollowOrientation", StrId::STR_CAT_CONTROLS)
+            .withHidden(),
+        // Hidden: skip-chapter and rotate-the-page, both consumed only by the
+        // reader activities (EpubReaderActivity, XtcReaderActivity).
         SettingInfo::Enum(StrId::STR_LONG_PRESS_BEHAVIOR, &CrossPointSettings::longPressButtonBehavior,
                           {StrId::STR_LONG_PRESS_BEHAVIOR_OFF, StrId::STR_LONG_PRESS_BEHAVIOR_SKIP,
                            StrId::STR_LONG_PRESS_BEHAVIOR_ORIENTATION},
-                          "longPressButtonBehavior", StrId::STR_CAT_CONTROLS),
+                          "longPressButtonBehavior", StrId::STR_CAT_CONTROLS)
+            .withHidden(),
+        // Hidden: every option (KOReader sync, bookmark, dictionary) is a book
+        // action, and EpubReaderActivity.cpp is the only reader of the field.
         SettingInfo::Enum(StrId::STR_LONG_PRESS_MENU, &CrossPointSettings::longPressMenuFunction,
                           {StrId::STR_KOSYNC, StrId::STR_DISABLED, StrId::STR_BOOKMARK_OPTION, StrId::STR_DICTIONARY},
-                          "longPressMenuFunction", StrId::STR_CAT_CONTROLS),
+                          "longPressMenuFunction", StrId::STR_CAT_CONTROLS)
+            .withHidden(),
         SettingInfo::Enum(
             StrId::STR_SHORT_PWR_BTN, &CrossPointSettings::shortPwrBtn,
             {StrId::STR_IGNORE, StrId::STR_SLEEP, StrId::STR_PAGE_TURN, StrId::STR_FORCE_REFRESH, StrId::STR_FOOTNOTES},
             "shortPwrBtn", StrId::STR_CAT_CONTROLS),
+        // Hidden: footnotes are an EPUB concept.
         SettingInfo::Toggle(StrId::STR_PWR_BTN_FOOTNOTE_BACK, &CrossPointSettings::pwrBtnFootnoteBack,
-                            "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS),
+                            "pwrBtnFootnoteBack", StrId::STR_CAT_CONTROLS)
+            .withHidden(),
+        // Hidden: the file browser is the book library's entry point
+        // (ReaderUtils.h).
         SettingInfo::Toggle(StrId::STR_BACK_SHORT_TO_FILE_BROWSER, &CrossPointSettings::backShortToFileBrowser,
-                            "backShortToFileBrowser", StrId::STR_CAT_CONTROLS),
+                            "backShortToFileBrowser", StrId::STR_CAT_CONTROLS)
+            .withHidden(),
 
         // --- System ---
         SettingInfo::Value(
             StrId::STR_TIME_TO_SLEEP, &CrossPointSettings::sleepTimeoutMinutes,
             {CrossPointSettings::MIN_SLEEP_TIMEOUT_MINUTES, CrossPointSettings::MAX_SLEEP_TIMEOUT_MINUTES, 1},
             "sleepTimeoutMinutes", StrId::STR_CAT_SYSTEM),
+        // Hidden, all three: the file browser's dotfile filter, the recent-books
+        // list, and moving a finished book to /read. Book-library housekeeping.
         SettingInfo::Toggle(StrId::STR_SHOW_HIDDEN_FILES, &CrossPointSettings::showHiddenFiles, "showHiddenFiles",
-                            StrId::STR_CAT_SYSTEM),
+                            StrId::STR_CAT_SYSTEM)
+            .withHidden(),
         SettingInfo::Toggle(StrId::STR_REMOVE_READ_FROM_RECENTS, &CrossPointSettings::removeReadBooksFromRecents,
-                            "removeReadBooksFromRecents", StrId::STR_CAT_SYSTEM),
+                            "removeReadBooksFromRecents", StrId::STR_CAT_SYSTEM)
+            .withHidden(),
         SettingInfo::Toggle(StrId::STR_MOVE_FINISHED_TO_READ, &CrossPointSettings::moveFinishedToReadFolder,
-                            "moveFinishedToReadFolder", StrId::STR_CAT_SYSTEM),
+                            "moveFinishedToReadFolder", StrId::STR_CAT_SYSTEM)
+            .withHidden(),
 
         // OPDS download folder: persisted + web-exposed, but category-less so it
         // is hidden from the on-device Settings screen (edited via OPDS UI).
@@ -514,9 +551,12 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
       // Insert after the short power button setting (end of Controls section)
       for (auto it = v.begin(); it != v.end(); ++it) {
         if (it->nameId == StrId::STR_SHORT_PWR_BTN) {
+          // Hidden: turning pages by tilting. The IMU itself may earn a map
+          // use later; this row is not it.
           v.insert(it + 1, SettingInfo::Enum(StrId::STR_TILT_PAGE_TURN, &CrossPointSettings::tiltPageTurn,
                                              {StrId::STR_STATE_OFF, StrId::STR_NORMAL, StrId::STR_INVERTED},
-                                             "tiltPageTurn", StrId::STR_CAT_CONTROLS));
+                                             "tiltPageTurn", StrId::STR_CAT_CONTROLS)
+                               .withHidden());
           break;
         }
       }

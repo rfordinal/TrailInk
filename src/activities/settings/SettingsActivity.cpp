@@ -27,13 +27,16 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 
-const StrId SettingsActivity::categoryNames[categoryCount] = {
-    StrId::STR_CAT_DISPLAY, StrId::STR_CAT_MAP, StrId::STR_CAT_READER, StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
+// Four tabs, not five: the Reader tab is gone. Its rows still exist in
+// getSettingsList() so settings.json keeps them and the reader keeps working
+// — they are simply not reachable from the device any more
+// (docs/settings-menu.md).
+const StrId SettingsActivity::categoryNames[categoryCount] = {StrId::STR_CAT_DISPLAY, StrId::STR_CAT_MAP,
+                                                              StrId::STR_CAT_CONTROLS, StrId::STR_CAT_SYSTEM};
 
 void SettingsActivity::rebuildSettingsLists() {
   displaySettings.clear();
   mapSettings.clear();
-  readerSettings.clear();
   controlsSettings.clear();
   systemSettings.clear();
 
@@ -48,15 +51,15 @@ void SettingsActivity::rebuildSettingsLists() {
 
   for (auto& setting : getSettingsList(&sdFontSystem.registry(), &dictionaries)) {
     if (setting.category == StrId::STR_NONE_OPT) continue;
+    // Reader-only rows that keep being persisted but are no longer offered.
+    if (setting.hiddenFromMenu) continue;
     if (setting.category == StrId::STR_CAT_DISPLAY) {
       displaySettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_MAP) {
       mapSettings.push_back(setting);
     } else if (setting.category == StrId::STR_CAT_READER) {
-      // Settings merged into "Text Settings"
-      // (they stay in the shared list for the web settings API)
-      if (setting.inTextSettings) continue;
-      readerSettings.push_back(setting);
+      // The Reader tab is gone; nothing collects these.
+      continue;
     } else if (setting.category == StrId::STR_CAT_CONTROLS) {
       if (setting.valuePtr == &CrossPointSettings::pwrBtnFootnoteBack &&
           SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
@@ -74,20 +77,19 @@ void SettingsActivity::rebuildSettingsLists() {
                             SettingInfo::Action(StrId::STR_REMAP_FRONT_BUTTONS, SettingAction::RemapFrontButtons));
   }
   systemSettings.push_back(SettingInfo::Action(StrId::STR_WIFI_NETWORKS, SettingAction::Network));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_KOREADER_SYNC, SettingAction::KOReaderSync));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_OPDS_SERVERS, SettingAction::OPDSBrowser));
-  systemSettings.push_back(SettingInfo::Action(StrId::STR_CLEAR_READING_CACHE, SettingAction::ClearCache));
+  // KOReader Sync, OPDS Servers and Clear Reading Cache used to sit here. All
+  // three are book plumbing — reading-position sync, an e-book catalogue, and
+  // the reader's own pagination cache. The activities are still built and still
+  // reachable from code; only the Settings rows are gone.
   // TODO: Touch devices need their own firmware update path/artifacts before OTA is exposed.
   if (!BoardConfig::hasTouch()) {
     systemSettings.push_back(SettingInfo::Action(StrId::STR_CHECK_UPDATES, SettingAction::CheckForUpdates));
   }
   systemSettings.push_back(SettingInfo::Action(StrId::STR_SD_FIRMWARE_UPDATE, SettingAction::SdFirmwareUpdate));
   systemSettings.push_back(SettingInfo::Action(StrId::STR_LANGUAGE, SettingAction::Language));
-  readerSettings.insert(readerSettings.begin(),
-                        SettingInfo::Action(StrId::STR_TEXT_SETTINGS, SettingAction::TextSettings));
-  readerSettings.insert(readerSettings.begin() + 1,
-                        SettingInfo::Action(StrId::STR_MANAGE_FONTS, SettingAction::DownloadFonts));
-  readerSettings.push_back(SettingInfo::Action(StrId::STR_CUSTOMISE_STATUS_BAR, SettingAction::CustomiseStatusBar));
+  // Text Settings, Manage Fonts and Customise Status Bar went with the Reader
+  // tab. The status bar they customise is the reader's; the map header draws
+  // its own row and reads none of those fields (docs/map-header-status.md).
 
   // Update currentSettings pointer and count for the active category.
   // Index order must match categoryNames[] above.
@@ -99,12 +101,9 @@ void SettingsActivity::rebuildSettingsLists() {
       currentSettings = &mapSettings;
       break;
     case 2:
-      currentSettings = &readerSettings;
-      break;
-    case 3:
       currentSettings = &controlsSettings;
       break;
-    case 4:
+    case 3:
       currentSettings = &systemSettings;
       break;
   }
@@ -149,12 +148,9 @@ void SettingsActivity::loop() {
         currentSettings = &mapSettings;
         break;
       case 2:
-        currentSettings = &readerSettings;
-        break;
-      case 3:
         currentSettings = &controlsSettings;
         break;
-      case 4:
+      case 3:
         currentSettings = &systemSettings;
         break;
     }
@@ -317,6 +313,12 @@ void SettingsActivity::toggleCurrentSetting() {
   }
 
   const auto& setting = (*currentSettings)[selectedSetting];
+  // A disabled row is a placeholder for work not done yet. It draws dimmed and
+  // Confirm does nothing — render() also blanks the Confirm hint, because the
+  // dimming itself is invisible on the selected row (BaseTheme.cpp:499 skips
+  // it) and a hint that promises an action which never comes is worse than no
+  // hint.
+  if (setting.disabled) return;
   const bool sleepScreenChanged = setting.valuePtr == &CrossPointSettings::sleepScreen;
   const bool quickResumeTimeoutChanged = setting.valuePtr == &CrossPointSettings::quickResumeSleepScreen;
 
@@ -541,15 +543,21 @@ void SettingsActivity::render(RenderLock&&) {
         }
         return valueText;
       },
-      true);
+      true, [&settings](int i) { return settings[i].disabled; });
 
   // Draw help text
-  const auto confirmLabel =
-      (selectedSettingIndex == 0)
-          ? I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount])
-          : (selectedSettingIndex > 0 && (*currentSettings)[selectedSettingIndex - 1].nameId == StrId::STR_TIME_TO_SLEEP
-                 ? tr(STR_SELECT)
-                 : tr(STR_TOGGLE));
+  const char* confirmLabel = nullptr;
+  if (selectedSettingIndex == 0) {
+    confirmLabel = I18N.get(categoryNames[(selectedCategoryIndex + 1) % categoryCount]);
+  } else {
+    const auto& selected = (*currentSettings)[selectedSettingIndex - 1];
+    // Empty label draws no button at all (BaseTheme::drawButtonHints() skips
+    // empty strings), which is the only honest hint for a row that ignores
+    // Confirm.
+    confirmLabel = selected.disabled          ? ""
+                   : selected.nameId == StrId::STR_TIME_TO_SLEEP ? tr(STR_SELECT)
+                                                                 : tr(STR_TOGGLE);
+  }
 
   const auto labels = mappedInput.mapLabels(tr(STR_BACK), confirmLabel, tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);

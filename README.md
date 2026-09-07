@@ -259,6 +259,11 @@ to do -- the three modes (whole screen live, only the on-screen button boxes,
 touch off), how a tap on a box becomes a press of the hardware button it names,
 and how the six boxes are placed on a panel that is not an X4.
 
+[`docs/settings-menu.md`](./docs/settings-menu.md) is which Settings rows the
+rider still sees. The e-reader half of the menu is hidden rather than deleted,
+because the same list drives `settings.json`; that file says what went, what
+proves each row was reader-only, and why one row is drawn dimmed.
+
 [`docs/build-environments.md`](./docs/build-environments.md) is which of the five
 build environments can be published and which two are missing Bluetooth, plus the
 three flash offsets verified against a real device's own dump.
