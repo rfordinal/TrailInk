@@ -84,10 +84,10 @@ bool frontlightStateChanged = false;
 // for a level the rider is still choosing.
 bool frontlightHoldActive = false;
 
-// The rungs a hold walks through, off included. A cycle rather than an on/off
-// toggle because the panel needs very different amounts of light at dusk and in
-// full dark, and there is no other control for it on this board: no frontlight
-// row in Settings, and touch is what gloves defeat.
+// The rungs a held user button walks through, off included. A cycle rather than
+// an on/off toggle because the panel needs very different amounts of light at
+// dusk and in full dark, and there is no other control for it on this board: no
+// frontlight row in Settings, and touch is what gloves defeat.
 //
 // 10 % is the bottom rung on purpose: it is enough to read the panel in a dark
 // tent and it is the one setting a rider can leave on for hours. 100 % costs
@@ -95,8 +95,9 @@ bool frontlightHoldActive = false;
 // so the top rung is a look-at-it-now rung, not a ride setting.
 constexpr uint8_t FRONTLIGHT_RUNGS[] = {0, 10, 30, 60, 100};
 
-// Both of this board's programmable inputs land here, so the gesture means the
-// same thing whichever one the rider used (side switch or capacitive home key).
+// The user button's hold. The home key keeps its own plain on/off below: the two
+// inputs deliberately do different things now, because the key is the one a
+// glove cannot reach and "give me light" is the gesture worth having there.
 //
 // Steps to the first rung strictly above the current brightness, wrapping to
 // off. Comparing against the live brightness rather than a stored index is what
@@ -113,6 +114,21 @@ void cycleFrontlight(const char* source) {
     }
   }
   frontlight.setBrightness(next);
+  frontlightStateChanged = true;
+  LOG_INF("BTN", "%s: frontlight %u%%", source, static_cast<unsigned>(frontlight.brightness()));
+}
+
+// The home key's hold: off from anywhere, on at the level in Settings. It reads
+// SETTINGS.frontlightBrightness rather than FrontlightManager's own remembered
+// level, so the Settings row and the user button's rungs are the only things
+// that decide how bright "on" is -- one number, three ways to set it.
+void toggleFrontlight(const char* source) {
+  if (!frontlight.present()) return;
+  if (frontlight.brightness() > 0) {
+    frontlight.setBrightness(0);
+  } else {
+    frontlight.setBrightness(SETTINGS.frontlightBrightness);
+  }
   frontlightStateChanged = true;
   LOG_INF("BTN", "%s: frontlight %u%%", source, static_cast<unsigned>(frontlight.brightness()));
 }
@@ -171,7 +187,7 @@ uint16_t powerHoldDurationMs() {
 //
 //   home key tap        -> Confirm (Select), after the double-tap window
 //   home key double tap -> lock / unlock the touch panel (toggleTouchLock)
-//   home key hold       -> the next frontlight rung (cycleFrontlight)
+//   home key hold       -> frontlight on / off (toggleFrontlight)
 //
 // Why the light hangs off a physical hold and not a touch control: gloves defeat
 // the capacitive panel, and the light is exactly what a rider reaches for with
@@ -1157,7 +1173,7 @@ void loop() {
   // locked the panel, opened the map, and lit the frontlight when the map
   // finished rendering (measured 2026-09-05).
   if (mappedInputManager.wasHomeKeyLongPress()) {
-    cycleFrontlight("Home key hold");
+    toggleFrontlight("Home key hold");
   }
 #if FREEINK_DEVICE_LILYGO
   // The third gesture on the same key: a double tap locks or unlocks the panel.
@@ -1168,6 +1184,15 @@ void loop() {
     toggleTouchLock();
   }
 #endif
+  // The Settings row writes the level straight into SETTINGS, so the light has
+  // to be told. Only while it is on: changing the level must not turn it on.
+  static uint8_t appliedFrontlightBrightness = SETTINGS.frontlightBrightness;
+  if (SETTINGS.frontlightBrightness != appliedFrontlightBrightness) {
+    appliedFrontlightBrightness = SETTINGS.frontlightBrightness;
+    if (frontlight.present() && frontlight.brightness() > 0) {
+      frontlight.setBrightness(appliedFrontlightBrightness);
+    }
+  }
   if (frontlightStateChanged && !frontlightHoldActive) {
     frontlightStateChanged = false;
     SETTINGS.frontlightOn = frontlight.brightness() > 0 ? 1 : 0;

@@ -257,7 +257,7 @@ changes, all in `src/main.cpp`:
 | BOOT | hold | sleep at 400 ms | sleep at **1500 ms** |
 | user button (S3, `IO12`) | tap | Confirm | Confirm, unchanged |
 | user button | hold 600 ms | frontlight on/off | **next frontlight rung, and another every 500 ms while held** |
-| home key (GT911) | hold 700 ms | frontlight on/off | **next frontlight rung** |
+| home key (GT911) | hold 700 ms | frontlight on/off | on/off at the Settings level |
 
 **Why Back at all.** Until now this board could go forward and never back
 without touch: the only synthesised key was Confirm. A rider in gloves could
@@ -304,12 +304,26 @@ is nothing to read on the panel and nothing to undo. The card write waits for
 the release (`frontlightHoldActive`), or a hold would be one SD write per step,
 on the input path, for a level still being chosen.
 
-**The home key hold does not repeat**: the SDK reports one long-press event per
-press (`InputManager::serviceTouch`), so that gesture steps one rung. Repeating
-it would mean a second hold recogniser next to the one that already exists.
+**One number, three ways to set it.** `SETTINGS.frontlightBrightness` is the
+level, 10 to 100 %, and **off is never stored in it** -- off is a state the
+buttons produce, and storing it would lose the level the rider chose. The
+Settings row (Display -> Frontlight, `SettingType::VALUE`, 10..100 step 10)
+sets it, the user button's hold walks it across the rungs, and the home key's
+hold switches the light off and back on at whatever it says. `loop()` applies a
+level changed in Settings immediately, but only while the light is on: choosing
+a level must not turn the light on.
 
-**Both holds still land in one function**, now `cycleFrontlight()`, so the
-gesture cannot come to mean two things depending on which input was used.
+The row carries **no JSON key**. `frontlightOn` and `frontlightBrightness` are
+serialised by hand in `CrossPointSettings.cpp`, and a list entry with a key
+would write the same field a second time.
+
+**The home key keeps its plain on/off** (`toggleFrontlight()`), and the two
+inputs stop meaning the same thing. That was the 2026-09-02 rule -- try each in
+real use before splitting them up -- and real use split them: the key is the one
+a glove cannot reach, so "give me light, now" belongs there, while walking the
+rungs is a deliberate act with a bare thumb. The SDK also reports one long-press
+event per press, so a repeat on that key would need a second hold recogniser
+next to the one that already exists.
 
 **The hook is `boardButtonHook()` now, not `userButtonHook()`** -- it recognises
 both switches, so the old name was a lie. Same install site, same synthetic-click
