@@ -1,7 +1,8 @@
 # Windowed / partial refresh on the T5 S3 Pro
 
 How to make `displayWindow()` actually cost less than a whole-panel frame on
-the LilyGo T5 S3 4.7" Pro. Written 2026-09-07 from a read of our own driver,
+the LilyGo T5 S3 4.7" Pro -- for **speed** and for **battery**, which turn out
+to need different changes (section 3b). Written 2026-09-07 from a read of our own driver,
 of LovyanGFX's `Panel_EPD` (the engine we already run on this board), and of
 the two projects that solved a version of this on the same panel: **FastEPD**
 (bitbank2, <https://github.com/bitbank2/FastEPD>; notes in
@@ -192,6 +193,100 @@ Anyone who quotes a bigger number has not counted step 4.
 one map session, read off the serial log. That measurement should come before
 the work, not after -- it says whether step 3 or step 4 is the wall.
 
+## 3b. Power, which is a different question with a different answer
+
+Speed and battery are the two reasons this work exists, and **they are not
+bought by the same change.** Five consumers in one refresh, each scaling with
+something else:
+
+| consumer | scales with | cut by |
+|---|---|---|
+| TPS65185 rail cycle -- `epdPowerOn()` / `epdPowerOff()` | **number of refreshes** | fewer refreshes (T-274), or amortising a burst |
+| rails up through the scan (the -15/+22 V charge pumps) | **number of LUT passes** | shorter tables (T-273) |
+| ink actually moved | number of **changed pixels** | already differential; scoping adds little |
+| MCU + PSRAM prep (fill, push, arm) | **rectangle area** | scoping (T-271, T-272) |
+| `blit_dmabuf` inside each pass | **nothing** -- reads the whole 1,036.8 kB step framebuffer every pass | fewer passes (T-273) |
+
+**So scoping the rectangle is mostly a speed fix, not a power fix.** It removes
+MCU and PSRAM work. It does not shorten the rail-on time by one microsecond,
+because the gate scan clocks every row whatever the rectangle says (section 2c).
+The power items in the plan are **T-273** (pass count: 9 today where a real
+`epd_fastest` table would be 6, and 34 on a clean frame that runs LovyanGFX's
+untuned default) and **T-274** (how often a refresh happens at all).
+
+### The rail cycle is not free, and partial refresh tempts you into more of them
+
+`epdPowerOn()` is six PCA9535 expander writes over I2C, a `delay(1)`, a poll of
+`TPS_PWR_GOOD` with a 400 ms ceiling, a TPS enable, a VCOM register write, and a
+second ready-poll with another 400 ms ceiling
+(`freeink-sdk/libs/hardware/BoardT5S3/src/LilyGoT5S3LgfxConfig.cpp:117-150`).
+`task_update` runs that on the way into a refresh and drops the rails again the
+moment no pixel has steps left (`Panel_EPD.cpp:1068`).
+
+That cost is **per refresh and flat**. It does not care about the rectangle and
+it does not care about the pass count. **The trap is the obvious one: once a
+window refresh is cheap, the temptation is to do many more of them, and a
+hundred cheap refreshes can cost more energy than ten expensive ones.** Whatever
+comes out of T-271 has to be judged against refresh *count*, not only against
+per-refresh milliseconds.
+
+There is a knob nobody has turned: `Bus_EPD::powerControl` is already
+state-guarded, so holding the rails up across a burst of marker moves would
+amortise one rail cycle over several frames. That runs straight into the vendor
+guidance in [`refresh-modes.md`](refresh-modes.md), "What each mode leaves the
+panel's rails doing" (BUG-023, T-515 in the parent repo), which says a panel
+left powered can be damaged. **Open, and it needs a measurement, not an
+argument.**
+
+### How much of the wall clock the panel path actually owns `[measured]`
+
+Off `docs/power-runs/run6-2026-09-04.csv` in the parent repo, build
+`0.2.0-t5s3pro`, seven boots longer than fifteen minutes:
+
+| boot | length | panel busy | refreshes (window / fast / half) | mean per refresh |
+|---|---|---|---|---|
+| 35 | 3,123 s | **21.3 %** | 1205 / 95 / 3 | 510 ms |
+| 37 | 1,741 s | 11.4 % | 278 / 77 / 0 | 559 ms |
+| 40 | 11,541 s | 12.3 % | 1412 / 159 / 3 | 905 ms |
+| 54 | 1,981 s | 2.6 % | 35 / 3 / 9 | 1,113 ms |
+| 59 | 2,945 s | 11.1 % | 285 / 57 / 7 | 934 ms |
+| 60 | 18,932 s | 4.8 % | 867 / 40 / 5 | 991 ms |
+| 43 | 2,521 s | 0.1 % | 0 / 3 / 1 | 764 ms |
+
+**The panel path owns 5 % to 21 % of wall clock on a real session.** That is the
+number that makes this worth doing at all, and it is a counter rather than a
+voltage, so it is trustworthy.
+
+It also **corrects the doc's own framing above**: 1,081 ms is one walk's average,
+not a constant. The same build spans **510 to 1,113 ms** per refresh across
+boots. Something varies by more than a factor of two and nothing here says what.
+The obvious candidate is that a frame with nothing armed short-circuits after a
+single pass, which would make the mean a function of how many redraws were
+genuine -- unverified, and T-269 should answer it.
+
+### What the existing telemetry cannot answer, and what would
+
+`batt_mv` cannot attribute energy to the panel. Fitting drain against panel duty
+over those same seven boots gives a **negative** slope, and the boot with the
+lowest duty (43, at 0.1 %) shows the **highest** drain at 117 mV/h, while the
+boot with the highest duty (35, at 21.3 %) shows zero. The cell sits on its
+voltage plateau, the boots are short, and the ADC resolution swamps the signal.
+**Do not quote a per-refresh energy figure off `power.csv`. It is not in there.**
+
+The instrument that would answer it already exists on this board and is already
+reachable from our code: the **BQ27220 fuel gauge at I2C `0x55`**, whose
+`Current()` register `0x0C` is a signed mA reading
+(`lib/hal/HalGPIO.h:26-29`, `lib/hal/HalGPIO.cpp:33`). `power.csv` has no
+current column today -- run6's header stops at `ble` and `build`. Adding one,
+plus a sample taken deliberately during a refresh and between refreshes, turns
+every claim in this section into a number. That is T-275.
+
+The cell-side series meter that would settle it absolutely is **not available**:
+both our T5 S3 Pro units are enclosed, and `docs/hardware-policy.md`, "What
+instruments remain", limits an enclosed unit to firmware self-measurement, a
+USB-side VBUS meter and the gauge over I2C. A bare board from LilyGo would
+reopen that path.
+
 ## 4. What the two reference projects say
 
 ### FastEPD (drives this exact panel, `BB_PANEL_LILYGO_T5PRO`)
@@ -241,6 +336,13 @@ the work, not after -- it says whether step 3 or step 4 is the wall.
 
 ## 5. The plan, cheapest first
 
+Two goals, and section 3b says they do not share a fix: **speed** comes from
+T-271 and T-272, **battery** comes from T-273 and T-274. T-275 is the instrument
+that makes the battery half arguable at all. If only one thing gets built,
+T-271 is the one the rider feels; if the battery is the reason, build T-273
+first -- it is data, not code, and it is the only item that shortens rail-on
+time.
+
 **T-269. Instrument the frame.** `micros()` brackets in `pushCanvas` around the
 three phases. One build, one session. No behaviour change. This decides whether
 the rest is worth it and gives every later claim a baseline.
@@ -288,13 +390,23 @@ not code. FastEPD's `gray_matrix_editor` is the prior art for the iteration loop
 — live edit, live redraw, dump source -- and it is the same shape as
 `tools/style_watch.py`.
 
+**T-275. Put a current reading in `power.csv`.** The BQ27220 at I2C `0x55`
+already answers `Current()` in signed mA (`lib/hal/HalGPIO.h:26-29`,
+`lib/hal/HalGPIO.cpp:33`) and nothing samples it into the log -- run6's header
+stops at `ble`, `build`. Add the column, and take one sample deliberately inside
+a refresh and one between refreshes. Without it every power claim about this
+panel stays an argument, because `batt_mv` demonstrably cannot carry it
+(section 3b). Independent of everything else and needed before T-273 or T-274
+can be judged.
+
 **T-274. A scrub policy, from OpenTrailPaper's, not from a counter.** Scoped
 clean on named transitions: entering the map, a popup closing over it, a page
 flip. Deferred until input goes quiet. Two-phase through white where the region
 is dithered. Explicitly not a `ghostClearInterval`.
 
-Order matters: T-269 before anything, T-270 is free and independent, T-271 is the
-actual feature, T-272 follows from it, T-273 and T-274 are policy on top.
+Order matters: T-269 and T-275 are the two instruments and both come before any
+claim; T-270 is free and independent; T-271 is the actual feature; T-272 follows
+from it; T-273 and T-274 are the ones that touch battery.
 
 ## 6. Traps, written down before anyone hits them
 
@@ -326,7 +438,10 @@ actual feature, T-272 follows from it, T-273 and T-274 are policy on top.
 
 Everything in sections 1, 2 and 6 is **read off the source**, cited above, at
 `release/lilygo-t5-s3-pro` `aa831fcb` and M5GFX as vendored in
-`.pio/libdeps/t5s3pro` on 2026-09-07. The 1,081 ms is **measured on the T5 S3
+`.pio/libdeps/t5s3pro` on 2026-09-07. The panel-duty table in 3b is
+**measured**, off `docs/power-runs/run6-2026-09-04.csv`, seven boots of build
+`0.2.0-t5s3pro`; the failed drain fit in the same section is **measured and
+negative**, which is why no per-refresh energy figure appears anywhere here. The 1,081 ms is **measured on the T5 S3
 Pro** (one 4 h 36 min walk, 2,608 refreshes, instrument named in section 1). The 8.4 ms bus
 figure per pass is **derived** from `busHz`, row count and `write_len`. The
 93 % CPU share and the 300-400 ms projected window cost are **derived and
