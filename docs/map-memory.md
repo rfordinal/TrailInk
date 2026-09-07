@@ -57,6 +57,38 @@ Two more measured facts from the same capture:
 - **Fragmentation is ~4.4 KB.** 49,460 free but the largest block is 42,996–45,044,
   so a single allocation above ~43 KB fails on a screen that reports 49 KB free.
 
+## The T5 S3 Pro is not the X4's heap
+
+Every number above is an **X4** number (ESP32-C3). Measured on a **LilyGo T5 S3
+Pro** (ESP32-S3) 2026-09-07, over USB serial, map screen up, one BLE central
+subscribed, the CONFIRM menu opened:
+
+| | X4 (C3) | T5 S3 Pro (S3) |
+|---|---|---|
+| Total heap | 246,260 | 305,468 |
+| Free, map screen | 49,460 | 120,784 |
+| Min free since boot | 37,764 | 120,720 |
+| MaxAlloc (largest block) | 42,996 | 77,812 |
+
+Source: `main.cpp`'s `MEM` line, `[20042] [INF] [MEM] Free: 120784 bytes, Total:
+305468 bytes, Min Free: 120720 bytes, MaxAlloc: 77812 bytes`. The menu backdrop
+in the same capture logged `menu backdrop 19100 bytes (382x388), free heap
+119388`.
+
+So the S3 board has **2.4x the free heap and 1.8x the largest block**, on a
+panel whose framebuffer is *bigger* (540x960 = 64,800 bytes against the X4's
+48,000). A window refresh that `windowRefreshAffordable()` would refuse on an X4
+can be affordable here, and a buffer sized against 45 kB leaves this board idle.
+
+The rule that follows: **anything quoting "the largest block" or "free heap on
+the map screen" names the board** (`CLAUDE.md`, measurements name the device).
+One C3 binary drives X4 and X3 and a separate S3 binary drives this one, so a
+build string does not say which hardware produced a number either.
+
+Not measured on the S3: what the map session itself allocates, the BLE share, or
+whether the ~11.7 KB transient below has a counterpart here. Only the totals
+above were read.
+
 ## Measured: what one map session allocates
 
 From `MapActivity::onEnter()`'s own before/after log (`MapActivity.cpp:1197-1219`):
