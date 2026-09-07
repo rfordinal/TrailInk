@@ -104,6 +104,10 @@ class HalGPIO {
 
   WakeupReason getWakeupReason() const;
 
+  // For logs and the boot record (BootLog). Lives next to the enum so a new
+  // value cannot be added without this switch failing to compile.
+  static const char* name(WakeupReason reason);
+
   // Button indices
   static constexpr uint8_t BTN_BACK = 0;
   static constexpr uint8_t BTN_CONFIRM = 1;

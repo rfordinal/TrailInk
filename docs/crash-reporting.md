@@ -74,6 +74,17 @@ Tracked as T-234. Note also that the task watchdog sets `g_panic_abort = true`
 directly instead of calling `panic_abort()`, so even if the reset reason were
 accepted, the reason string would still be empty.
 
+**This gap is not hypothetical.** A coredump pulled from a T5 S3 Pro on
+2026-09-07 held a task-watchdog trigger on `loopTask` and had left nothing at
+all on the SD card. It was found only because somebody read the partition by
+hand.
+
+`/trailink/boot.csv` now names the reset reason on every boot, so a watchdog
+reset is visible without a coredump reader --
+[`boot-reason-log.md`](boot-reason-log.md) has the format and the separate
+problem it was written for: a boot that parks the device again before it ever
+writes the panel, which on e-ink is indistinguishable from a freeze.
+
 ## Reading the coredump
 
 Enabled on every environment: `partitions.csv:7` puts a 64 kB `coredump`

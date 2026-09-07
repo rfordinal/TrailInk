@@ -252,6 +252,20 @@ bool HalGPIO::isUsbConnected() const {
   return digitalRead(BoardConfig::ACTIVE.usbDetect) == HIGH;
 }
 
+const char* HalGPIO::name(WakeupReason reason) {
+  switch (reason) {
+    case WakeupReason::PowerButton:
+      return "PowerButton";
+    case WakeupReason::AfterFlash:
+      return "AfterFlash";
+    case WakeupReason::AfterUSBPower:
+      return "AfterUSBPower";
+    case WakeupReason::Other:
+      return "Other";
+  }
+  return "Other";
+}
+
 HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
   const auto wakeupCause = esp_sleep_get_wakeup_cause();
   const auto resetReason = esp_reset_reason();

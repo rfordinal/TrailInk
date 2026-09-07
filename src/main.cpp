@@ -21,8 +21,8 @@
 
 #include <cstring>
 
+#include "BootLog.h"
 #include "CrossPointSettings.h"
-#include "TouchPolicy.h"
 #include "CrossPointState.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
@@ -31,6 +31,7 @@
 #include "PowerLog.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "TouchPolicy.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
@@ -392,17 +393,28 @@ void setup() {
   ButtonNavigator::setMappedInputManager(mappedInputManager);
 
   const auto wakeupReason = gpio.getWakeupReason();
+  // Both branches below park the device again without ever writing the panel --
+  // setupDisplayAndFonts() is further down -- so e-ink keeps whatever frame was
+  // on it before the reset. To a rider that is indistinguishable from a freeze:
+  // a stale map, no touch, no USB, no BLE, and no crash report. Three such
+  // events were reported before this record existed and none of them could be
+  // told apart afterwards, so every exit from here says which it was
+  // (docs/boot-reason-log.md).
+  const char* const wakeupName = HalGPIO::name(wakeupReason);
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
       LOG_DBG("MAIN", "Verifying power button press duration");
       if (!gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
                                         SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP)) {
+        // Recorded before the call, not after: startDeepSleep() does not return.
+        BootLog::record(wakeupName, /*parked=*/true);
         powerManager.startDeepSleep(gpio);
       }
       break;
     case HalGPIO::WakeupReason::AfterUSBPower:
       // If USB power caused a cold boot, go back to sleep
       LOG_DBG("MAIN", "Wakeup reason: After USB Power");
+      BootLog::record(wakeupName, /*parked=*/true);
       powerManager.startDeepSleep(gpio);
       break;
     case HalGPIO::WakeupReason::AfterFlash:
@@ -411,6 +423,10 @@ void setup() {
     default:
       break;
   }
+
+  // Reached only when the switch above let the boot through, so this row and a
+  // parked one are mutually exclusive.
+  BootLog::record(wakeupName, /*parked=*/false);
 
   // Recovery firmware mode: hold left side button (BTN_UP) together with the power button at
   // boot to skip directly to the SD-card firmware update screen. Useful on devices where USB
