@@ -78,17 +78,50 @@ namespace {
 // path and block every other poll behind it.
 bool frontlightStateChanged = false;
 
+// The rungs a hold walks through, off included. A cycle rather than an on/off
+// toggle because the panel needs very different amounts of light at dusk and in
+// full dark, and there is no other control for it on this board: no frontlight
+// row in Settings, and touch is what gloves defeat.
+//
+// 10 % is the bottom rung on purpose: it is enough to read the panel in a dark
+// tent and it is the one setting a rider can leave on for hours. 100 % costs
+// about 43 mA off the cell at 40 % already (docs/devices/lilygo-t5-s3-pro.md),
+// so the top rung is a look-at-it-now rung, not a ride setting.
+constexpr uint8_t FRONTLIGHT_RUNGS[] = {0, 10, 30, 60, 100};
+
 // Both of this board's programmable inputs land here, so the gesture means the
 // same thing whichever one the rider used (side switch or capacitive home key).
-void toggleFrontlight(const char* source) {
+//
+// Steps to the first rung strictly above the current brightness, wrapping to
+// off. Comparing against the live brightness rather than a stored index is what
+// keeps a value that is on no rung -- a settings.json from an older build, or a
+// CMD:LIGHT during bring-up -- from stalling the cycle: 50 % steps to 60 %.
+void cycleFrontlight(const char* source) {
   if (!frontlight.present()) return;
-  if (frontlight.brightness() > 0) {
-    frontlight.off();
-  } else {
-    frontlight.on();
+  const uint8_t current = frontlight.brightness();
+  uint8_t next = 0;
+  for (const uint8_t rung : FRONTLIGHT_RUNGS) {
+    if (rung > current) {
+      next = rung;
+      break;
+    }
   }
+  frontlight.setBrightness(next);
   frontlightStateChanged = true;
   LOG_INF("BTN", "%s: frontlight %u%%", source, static_cast<unsigned>(frontlight.brightness()));
+}
+
+// How long BOOT must be held before it means sleep. On the T5 S3 Pro a shorter
+// press means Back (boardButtonHook() below), so the two gestures share one
+// number and it has to be long enough to tap deliberately with gloves on:
+// 400 ms, the setting's own answer, is a window a rider misses and sleeps the
+// device instead of stepping back. Wake uses the same number
+// (verifyPowerButtonWakeup), so a tap that does not wake also does not sleep.
+uint16_t powerHoldDurationMs() {
+#if FREEINK_DEVICE_LILYGO
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::LilyGoT5S3) return 1500;
+#endif
+  return SETTINGS.getPowerButtonDuration();
 }
 }  // namespace
 
@@ -105,11 +138,13 @@ void toggleFrontlight(const char* source) {
 //
 // | Physical            | Schematic       | Reaches the MCU as    | Firmware job     |
 // |---------------------|-----------------|-----------------------|------------------|
-// | BOOT, left, top     | S2, net IO0     | GPIO0 = input.power   | Power: wake/sleep|
+// | BOOT, left, top     | S2, net IO0     | GPIO0 = input.power   | tap = Back       |
+// |                     |                 |                       | hold 1500ms =    |
+// |                     |                 |                       |  sleep, wake too |
 // | IO48 silkscreen,    | S3, net BUTTON  | PCA9535 U1 (0x20)     | tap = Confirm    |
-// |   left, bottom      |                 |   pin IO1_0, polled   | hold 600ms =     |
-// |   ("the user        |                 |   by userButtonHook() |   frontlight     |
-// |    button")         |                 |   below               |                  |
+// |   left, bottom      |                 |   pin IO1_0, polled   | hold 600ms = the |
+// |   ("the user        |                 |   by boardButtonHook()|   next frontlight|
+// |    button")         |                 |   below               |   rung           |
 // | RST, right, top     | S1, net RST/EN  | nothing -- it is the  | none, and never  |
 // |                     |                 |   hardware reset pin  |   readable       |
 // | PWR, right, bottom  | S4, BQ25896 QON | nothing -- no MCU or  | none, and never  |
@@ -130,12 +165,16 @@ void toggleFrontlight(const char* source) {
 //
 //   home key tap        -> Confirm (Select), after the double-tap window
 //   home key double tap -> lock / unlock the touch panel (toggleTouchLock)
-//   home key hold       -> toggle the frontlight (toggleFrontlight)
+//   home key hold       -> the next frontlight rung (cycleFrontlight)
 //
 // Why the light hangs off a physical hold and not a touch control: gloves defeat
 // the capacitive panel, and the light is exactly what a rider reaches for with
-// gloves on. Why the lock hangs off a double tap: nothing else on this board can
-// stop the glass reacting to a bag, a palm or rain, and the single tap was worth
+// gloves on. Why Back is on BOOT (2026-09-07): without it this board has no way
+// out of a screen except touch, which is the input a glove removes, and BOOT's
+// short press was doing nothing here -- shortPwrBtn defaults to IGNORE. Sleep
+// and Back are now the same press told apart by how long it is held, which is
+// what powerHoldDurationMs() above sets. Why the lock hangs off a double tap:
+// nothing else on this board can stop the glass reacting to a bag, a palm or rain, and the single tap was worth
 // keeping as Select. The cost is that Select through this key waits out the
 // double-tap window -- a single tap cannot be known to be single until then.
 namespace {
@@ -158,32 +197,47 @@ void toggleTouchLock() {
   LOG_INF("BTN", "Home key: touch %s", SETTINGS.touchLocked != 0 ? "locked" : "unlocked");
 }
 
-// The tap is reported as a synthetic Confirm press *after* the button is
-// released, because a press edge at touch-down would let the activity act
-// before the hold could still turn out to mean the frontlight.
-//
-// It has to survive InputManager's debounce, which commits a state change only
-// once two update() calls at least DEBOUNCE_DELAY (5 ms) apart saw the same
-// state (InputManager.cpp, update()). Counting polls rather than wall time is
-// what makes this survive a panel refresh: a millisecond window would expire
-// unobserved while the main loop sits in a multi-second redraw, and the tap
-// would be silently dropped. Both conditions must hold, so the pulse is long
-// enough in time AND seen often enough.
-constexpr uint8_t USER_BUTTON_CLICK_POLLS = 3;
-constexpr unsigned long USER_BUTTON_CLICK_MS = 20;
+// A synthetic press has to survive InputManager's debounce, which commits a
+// state change only once two update() calls at least DEBOUNCE_DELAY (5 ms)
+// apart saw the same state (InputManager.cpp, update()). Counting polls rather
+// than wall time is what makes this survive a panel refresh: a millisecond
+// window would expire unobserved while the main loop sits in a multi-second
+// redraw, and the tap would be silently dropped. Both conditions must hold, so
+// the pulse is long enough in time AND seen often enough.
+constexpr uint8_t SYNTHETIC_CLICK_POLLS = 3;
+constexpr unsigned long SYNTHETIC_CLICK_MS = 20;
+
+// One synthetic press in flight at a time, as a key bitmask. Two gestures cannot
+// overlap on a board with two buttons and one thumb, and if they did, the newer
+// one is the one the rider meant.
+uint8_t syntheticClickMask = 0;
+uint8_t syntheticClickPolls = 0;
+unsigned long syntheticClickSince = 0;
+
+// Both taps are reported *after* release, never on the press edge: on either
+// button the press could still turn out to be a hold, and an activity that acted
+// at touch-down would have acted before the gesture was known.
+void beginSyntheticClick(uint8_t button, unsigned long now) {
+  syntheticClickMask = static_cast<uint8_t>(1U << button);
+  syntheticClickPolls = 0;
+  syntheticClickSince = now;
+}
 
 bool userButtonDown = false;
 bool userButtonLongFired = false;
 unsigned long userButtonDownAt = 0;
-bool userButtonClickPending = false;
-uint8_t userButtonClickPolls = 0;
-unsigned long userButtonClickSince = 0;
+
+bool powerButtonLevelKnown = false;
+bool powerButtonDown = false;
+unsigned long powerButtonDownAt = 0;
 
 // Runs inside InputManager::update() (one call per poll), i.e. in whatever task
 // drives the main loop. Reads one PCA9535 input register over I2C; BoardT5S3
 // takes the bus mutex for us, so this is safe next to the panel's own expander
-// writes.
-uint8_t userButtonHook() {
+// writes. The BOOT read is a plain digitalRead of the same pin and polarity
+// InputManager samples for BTN_POWER (InputManager.cpp, getDigitalState()) --
+// this only adds a meaning to it, it does not take the power button away.
+uint8_t boardButtonHook() {
   const unsigned long now = millis();
   const bool down = BoardT5S3::readButton();
 
@@ -193,28 +247,47 @@ uint8_t userButtonHook() {
     userButtonDownAt = now;
     // Drop a tap still being reported: a second press starting inside that
     // window would otherwise be seen as Confirm held down.
-    userButtonClickPending = false;
+    syntheticClickMask = 0;
   } else if (down && !userButtonLongFired && now - userButtonDownAt >= USER_BUTTON_HOLD_MS) {
-    // Fires the moment the hold is long enough, not on release: the light comes
-    // on under the thumb, which is the feedback that says "let go now".
+    // Fires the moment the hold is long enough, not on release: the light
+    // changes under the thumb, which is the feedback that says "let go now".
     userButtonLongFired = true;
-    toggleFrontlight("User button hold");
+    cycleFrontlight("User button hold");
   } else if (!down && userButtonDown) {
     userButtonDown = false;
-    if (!userButtonLongFired) {
-      userButtonClickPending = true;
-      userButtonClickPolls = 0;
-      userButtonClickSince = now;
+    if (!userButtonLongFired) beginSyntheticClick(InputManager::BTN_CONFIRM, now);
+  }
+
+  const bool powerDown =
+      digitalRead(BoardConfig::ACTIVE.input.power) == (BoardConfig::ACTIVE.input.powerActiveHigh ? HIGH : LOW);
+  if (!powerButtonLevelKnown) {
+    // The first poll after install lands while the button that woke the device
+    // may still be held. Adopt the level instead of calling it a press edge, or
+    // every wake would end in a Back the rider never asked for.
+    powerButtonLevelKnown = true;
+    powerButtonDown = powerDown;
+  } else if (powerDown && !powerButtonDown) {
+    powerButtonDown = true;
+    powerButtonDownAt = now;
+  } else if (!powerDown && powerButtonDown) {
+    powerButtonDown = false;
+    // A hold long enough to sleep never reaches here: loop() calls
+    // enterDeepSleep() at the threshold, while the button is still down. The
+    // check is for the case where it could not -- the two-second post-boot
+    // sleep guard (allowSleepAt), or a screenshot combo -- where a long press
+    // must not turn into a Back on release.
+    if (now - powerButtonDownAt < powerHoldDurationMs()) {
+      beginSyntheticClick(InputManager::BTN_BACK, now);
     }
   }
 
-  if (!userButtonClickPending) return 0;
-  ++userButtonClickPolls;
-  if (userButtonClickPolls > USER_BUTTON_CLICK_POLLS && now - userButtonClickSince >= USER_BUTTON_CLICK_MS) {
-    userButtonClickPending = false;
+  if (!syntheticClickMask) return 0;
+  ++syntheticClickPolls;
+  if (syntheticClickPolls > SYNTHETIC_CLICK_POLLS && now - syntheticClickSince >= SYNTHETIC_CLICK_MS) {
+    syntheticClickMask = 0;
     return 0;
   }
-  return static_cast<uint8_t>(1U << InputManager::BTN_CONFIRM);
+  return syntheticClickMask;
 }
 // --- Deselect the LoRa radio before the card comes up ----------------------
 //
@@ -807,8 +880,9 @@ void setup() {
     if (!BoardT5S3::pca9535Present()) BoardT5S3::beginI2C();
     if (BoardT5S3::pca9535Present()) {
       BoardT5S3::setPca9535PinMode(PCA9535_IO12_BUTTON, INPUT);
-      InputManager::setButtonHook(userButtonHook);
-      LOG_INF("BTN", "User button: tap = Confirm, hold %lu ms = frontlight", USER_BUTTON_HOLD_MS);
+      InputManager::setButtonHook(boardButtonHook);
+      LOG_INF("BTN", "User button: tap = Confirm, hold %lu ms = frontlight rung; BOOT: tap = Back, hold %u ms = sleep",
+              USER_BUTTON_HOLD_MS, static_cast<unsigned>(powerHoldDurationMs()));
     } else {
       LOG_ERR("BTN", "PCA9535 not answering: user button stays dead");
     }
@@ -873,7 +947,7 @@ void setup() {
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
       LOG_DBG("MAIN", "Verifying power button press duration");
-      if (!gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
+      if (!gpio.verifyPowerButtonWakeup(powerHoldDurationMs(),
                                         SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP)) {
         powerManager.startDeepSleep(gpio);
       }
@@ -1063,7 +1137,7 @@ void loop() {
   // locked the panel, opened the map, and lit the frontlight when the map
   // finished rendering (measured 2026-09-05).
   if (mappedInputManager.wasHomeKeyLongPress()) {
-    toggleFrontlight("Home key hold");
+    cycleFrontlight("Home key hold");
   }
 #if FREEINK_DEVICE_LILYGO
   // The third gesture on the same key: a double tap locks or unlocks the panel.
@@ -1987,7 +2061,7 @@ void loop() {
   }
 
   if (millis() >= allowSleepAt && gpio.isPressed(HalGPIO::BTN_POWER) &&
-      gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
+      gpio.getPowerButtonHeldTime() > powerHoldDurationMs()) {
     // If the screenshot combination is potentially being pressed, don't sleep
     if (gpio.isPressed(HalGPIO::BTN_DOWN)) {
       return;
@@ -1998,7 +2072,17 @@ void loop() {
   }
 
   // Refresh screen when power button is short-pressed with FORCE_REFRESH setting.
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
+  //
+  // Not on a board where the short press is already Back (boardButtonHook()):
+  // the setting would then fire a full refresh on every step back, and the
+  // rider has no way to see that the two are the same press.
+  const bool shortPowerIsBack =
+#if FREEINK_DEVICE_LILYGO
+      BoardConfig::ACTIVE.board == BoardConfig::Board::LilyGoT5S3;
+#else
+      false;
+#endif
+  if (!shortPowerIsBack && SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
       mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
     LOG_DBG("MAIN", "Manual screen refresh triggered");
     if (!activityManager.handleForcedRefresh()) {
