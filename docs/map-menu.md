@@ -152,7 +152,9 @@ This is also where the double render went: the opener no longer paints, and
 `BaseTheme::optionPopupGeometry()` decides how many rows are on screen at once
 and caps it two ways: `kOptionPopupMaxVisibleRows` (6) and
 `kOptionPopupMaxHeightPercent` (50% of panel height). Rows past the window
-scroll; the dialog itself never grows or moves. The title line carries an
+scroll; the dialog itself never grows or moves. Both caps are for `Auto`
+dialogs only -- a fixed box budgets rows against its own height instead (see
+"Two fixed boxes, defined per board"). The title line carries an
 `n/m` counter whenever the list does not fit, so a scrolled list does not read
 as a short list that lost rows.
 
@@ -210,33 +212,119 @@ is one word or a short static phrase, well under the budget, so this changes
 nothing for them: `titleLineCount` stays 1 and the loop draws once, same as
 the old single `drawCenteredText()` call.
 
-### A hinted dialog needs the exact inverse formula, not an approximation
+## Two fixed boxes, defined per board
 
-The fixed budget above is right for a dialog with no size hint. A dialog
-opened with `setSizeHint()` (`OptionPopupSpec::minDialogWidth` -- "match the
-list this replaces") needs the title to wrap to *that* width instead, or the
-title decides `maxTextWidth` on its own and the hint never gets a chance to
-bind. The first cut of this clamp was `minDialogWidth - innerPadding * 2`,
-which is not the inverse of `dialogW`'s actual formula:
+**Every popup the map opens is one of two boxes, and each box is the same rect
+every time.** `BaseTheme::OptionPopupSize` (`src/components/themes/BaseTheme.h`)
+names them:
 
-```
-dialogW = (maxTextWidth + innerPadding*2 + selectionHPadding*2) * widthPercent / 100
-```
+- `Menu` -- the browsing box. The CONFIRM menu, the pin lists, the Nearby
+  screens.
+- `Confirm` -- the yes/no box, smaller on purpose, so a confirmation reads as a
+  different kind of dialog and not as the next list.
+- `Auto` -- measure the content, the historical behaviour. Every screen outside
+  the map still uses it.
 
-Missing `selectionHPadding*2` and the `widthPercent` scaling meant a title
-that "fit" the approximate clamp still pushed `dialogW` past the hint once
-that formula added the same padding back on top a second time. Measured on
-the S8 2026-08-24: the Add/Replace list at 280px, a one-line confirm title at
-363px even with the clamp in place, both hinted at 280. The exact inverse --
+The sizes are theme metrics, as a percent of the panel the HAL reports:
+`optionPopupMenuWidthPercent` / `optionPopupMenuHeightPercent` and the
+`Confirm` pair (`ThemeMetrics`, same file). Percent, not pixels: the number is
+per board without being written per board, so a wider panel gets a box of the
+same proportion rather than an X4 pixel count. `optionPopupFixedBox()` resolves
+one, centres it, and clamps the width to the panel's side margins.
 
-```
-hintedTitleMax = minDialogWidth * 100 / widthPercent - innerPadding*2 - selectionHPadding*2
-```
+Today: `Menu` 70% x 40%, `Confirm` 60% x 30%. On a 480x800 panel that is
+336x320 and 288x240; on a 540x960 T5 S3 Pro, 378x384 and 324x288.
 
--- forces a second wrapped line when the hint genuinely has no room for one,
-and the two now land on the same width exactly. Same fix, same reasoning, in
-both `optionPopupGeometry()` and `drawOptionPopup()` again -- they still have
-to agree, and now they agree on the right number.
+The first cut was 92% wide and it was wrong on the panel: 494 px of box for
+rows whose longest label and value together need barely 300 (screenshot, T5 S3
+Pro, 2026-09-06). A fixed box does not get to be as wide as a dialog may be --
+it has to be as wide as the content usually is, because it no longer shrinks.
+
+**Why a fixed box and not a floor.** The mechanism before this was
+`setSizeHint()`: "be no smaller than the dialog you replaced". It was not
+enough. A floor does not stop a popup with wider content growing past it, does
+not stop a popup with more rows growing taller, and a dialog is centred -- so
+any change of height moves the top edge. A moved edge is a different refresh
+window and a dead backdrop, which is a full re-render (tiles off the card, a
+whole-panel waveform, seconds). The fixed box removes all three: menu, list and
+confirmation share one rect, `captureMenuBackdrop()` is taken once at the
+`Menu` box, and `Confirm` sits inside it because it is smaller on both axes and
+centred the same way. `dropBackdropIfPopupOutgrew()` stays as the guard, and
+with these metrics it never fires.
+
+**The close refreshes three small windows, not one band.**
+`restoreMenuBackdrop()` used to refresh the full width of the panel from the
+dialog's top edge down to the bottom, so that one window covered both the
+dialog and the button hints under it. That is `ceil(W/8) * (ScreenH + DialogH)/2`
+bytes, and the driver wants it as one block:
+
+| | X4 480x800 | T5 S3 Pro 540x960 |
+|---|---|---|
+| old full-width band | 33,600 B | 45,696 B |
+| dialog window now | 42 x 324 = 13,608 B | 48 x 388 = 18,624 B |
+| hint band now | 60 x 40 = 2,400 B | 68 x 40 = 2,720 B |
+
+`windowRefreshAffordable()` refuses anything that does not leave 4 kB under the
+largest free block, which on a map screen was measured at 43 to 45 kB on the X4.
+The T5 S3 Pro band sat right on that line, and a refused window means a full
+re-render -- the exact redraw the backdrop exists to avoid. The popup only ever
+dirties three places (its frame, the hint band, the side-hint strip a pin list
+takes), so refreshing those three costs a third of the band and nothing between
+them was touched anyway.
+
+**A chained popup is one dialog, so the backdrop is not spent on the way in.**
+Picking `Pins` in the menu closes the menu popup and queues the pin list
+(`PinPopup`, opened from `loop()` -- a row callback may not `show()` from inside
+`handleInput()`). The close path treated that as a dismissal: it restored the
+map, which flashed the map onto the panel for one frame before the pin list
+drew, and `restoreMenuBackdrop()` drops the backdrop it uses -- so the pin list
+had none, and closing *it* re-rendered the viewport from the card.
+
+Measured on the T5 S3 Pro 2026-09-07, serial log: `menu backdrop 19100 bytes
+(382x388), free heap 119388` at menu open, then `render 2331 ms` with the busy
+badge on the Back out of the pin list. Nothing failed -- no rejected window, no
+refused capture. The backdrop had been spent one popup too early.
+
+So the close does nothing at all while `pendingPinPopup_` or
+`pendingNearbyPopup_` names a follow-up: the popup's pixels stay up until the
+next popup draws over the same rect, and the backdrop waits for whoever closes
+the chain. A chained handler that draws a real frame instead of a popup
+(`showPinOnMap()`, `savePin()`) drops the backdrop itself.
+
+This one is not new. It predates the fixed boxes -- with `setSizeHint()` the
+pin list matched the menu's size, so the same double-restore happened and the
+same full re-render followed. What the fixed box changed is that the flicker
+became obvious: the two boxes are now identical, so the map blinking between
+them has nothing to hide behind.
+
+**What still adapts.** The row count. The title may wrap to two or three lines
+and eat a row, so `optionPopupGeometry()` budgets the rows against the box's own
+height instead of `kOptionPopupMaxHeightPercent`, and drops
+`kOptionPopupMaxVisibleRows`: the cap exists to stop a dialog growing with its
+list, and a box that cannot grow needs no second brake. Rows past what the box
+holds scroll, same as before. Space left under the last row stays empty -- that
+emptiness is what keeps the rect constant.
+
+**The title wraps to the box, in both passes.** `optionPopupGeometry()` and
+`drawOptionPopup()` each compute the same budget from the box's width, and each
+reserves the `n/m` counter corner unconditionally in fixed mode. Reserving
+always costs a slightly narrower title on a list that turns out to fit;
+guessing costs a counter drawn over the title's last word, because whether the
+list scrolls is not known until after the title is wrapped, and the draw pass
+must reach the identical number without knowing it either.
+
+That last part is the lesson the size hint paid for on the S8, 2026-08-24: a
+title wrapped to the full-screen budget wins `maxTextWidth` on its own and
+drags the dialog wider than the box it was told to match. The wrap budget has
+to be the box's, or the box is not a box.
+
+Verified on the T5 S3 Pro 2026-09-06, first cut: the `Menu` box is one rect and
+the map menu draws in it (screenshot, 494x382 measured against 496x384
+computed), and it was too wide -- hence 70%. Still open: whether the narrower
+box reads right, and whether the three-window close is visibly cheap. The
+"leaving Pins re-renders the screen" report is what the window split above is
+for; the band refusal is the arithmetic's explanation for it and has not been
+read off the device log.
 
 ## The hint says "Options", not "Select"
 

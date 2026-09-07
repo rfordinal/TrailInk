@@ -311,19 +311,19 @@ in both `optionPopupGeometry()` (so the dialog reserves the right height) and
 every `OptionPopup` title, not pin-specific.
 
 **And even wrapped, the confirm box still came out wider than the list it
-replaces.** `confirmPinReplaceSlot()`/`confirmPinDelete()` were missing
-`setSizeHint()` entirely at first (fixed the same day), but adding it was not
-enough on its own: the title's wrap budget, when a size hint is present, has
-to be the exact inverse of the `dialogW` formula --
-`(maxTextWidth + innerPadding*2 + selectionHPadding*2) * widthPercent/100` --
-not just `minDialogWidth - innerPadding*2`. The first cut of that clamp forgot
-`selectionHPadding*2` and the `widthPercent` scaling, so a title that "fit"
-its own budget still pushed `dialogW` past the hint once that formula added
-the same padding back on top a second time. Measured on the S8: the Add/Replace
-list at 280px, a one-line "Replace Base here?" confirm at 363px even with the
-tightened clamp, both hinted at 280 -- fixed by the exact inverse, which lets
-the wrap force a second line when the hint genuinely has no room for one, and
-now both land on 280px exactly.
+replaces.** The mechanism then was `setSizeHint()`, a floor -- "be no smaller
+than the dialog you replaced" -- and a floor cannot hold a title that wants
+more: a title wrapped to the full-screen budget won `maxTextWidth` on its own
+and dragged the dialog past the hint. Measured on the S8 2026-08-24: the
+Add/Replace list at 280px, a one-line "Replace Base here?" confirm at 363px,
+both hinted at 280.
+
+**Superseded.** The hint is gone. Every popup the map opens now asks for one of
+two fixed boxes instead (`OptionPopup::setSize()`, `Menu` for the lists,
+`Confirm` for `confirmPinReplaceSlot()`/`confirmPinDelete()`), and the title
+wraps to the box's own width in both the layout and the drawing pass. See
+`docs/map-menu.md`, "Two fixed boxes, defined per board" -- it carries the
+reasoning and the metrics.
 
 **Saving to a never-touched catalogue slot was broken until 2026-08-24** --
 every save of an empty slot (including the plain, no-warning case above)

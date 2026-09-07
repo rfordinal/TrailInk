@@ -260,6 +260,24 @@ binary that was confirmed working on an X4 rather than a build made for the
 release: same bytes, same SHA-256. A published build nobody ran on hardware is
 worse than no build.
 
+## `SPI.h: No such file` means another session's build, not a broken include path
+
+A build that worked minutes ago can fail like this:
+
+```
+freeink-sdk/libs/display/FreeInkDisplay/include/FreeInkDisplay.h:17:10:
+fatal error: SPI.h: No such file or directory
+```
+
+The include path is fine. `framework-arduinoespressif32-libs/<chip>/` is shared
+mutable state -- whichever build ran last rewrites it, in any session -- and a
+parallel build in another worktree swapped it mid-compile. Seen 2026-09-06 on
+`t5s3pro` while another session was building the same environment.
+
+**Re-run the same build.** It succeeds. Do not "repair" the framework directory:
+deleting or hand-editing anything in it breaks every other build on the machine,
+and there was never anything wrong with it.
+
 ## `file format not recognized` from objdump is a corrupt object, not a broken tree
 
 Three builds failed 2026-09-05 on

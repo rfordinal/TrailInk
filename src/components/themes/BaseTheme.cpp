@@ -1227,12 +1227,36 @@ BaseTheme::OptionPopupSpacing BaseTheme::optionPopupSpacing(const ThemeMetrics& 
                             100};
 }
 
+Rect BaseTheme::optionPopupFixedBox(const GfxRenderer& renderer, const ThemeMetrics& metrics,
+                                    const OptionPopupSize size) {
+  if (size == OptionPopupSize::Auto) return Rect{0, 0, 0, 0};
+  const int pageWidth = renderer.getScreenWidth();
+  const int pageHeight = renderer.getScreenHeight();
+  const int widthPercent =
+      size == OptionPopupSize::Menu ? metrics.optionPopupMenuWidthPercent : metrics.optionPopupConfirmWidthPercent;
+  const int heightPercent =
+      size == OptionPopupSize::Menu ? metrics.optionPopupMenuHeightPercent : metrics.optionPopupConfirmHeightPercent;
+  // The side margin is the panel's own limit, not a preference: a dialog wider
+  // than this has no frame left on one edge.
+  const int maxWidth = std::max(1, pageWidth - metrics.optionPopupDialogSideMargin * 2);
+  const int w = std::min(maxWidth, std::max(1, pageWidth * widthPercent / 100));
+  const int h = std::min(pageHeight, std::max(1, pageHeight * heightPercent / 100));
+  return Rect{(pageWidth - w) / 2, (pageHeight - h) / 2, w, h};
+}
+
 BaseTheme::OptionPopupGeometry BaseTheme::optionPopupGeometry(const GfxRenderer& renderer,
                                                               const OptionPopupSpec& spec) const {
   const auto& metrics = UITheme::getInstance().getMetrics();
   const auto spacing = optionPopupSpacing(metrics, spec.compact);
   const int pageWidth = renderer.getScreenWidth();
   const int pageHeight = renderer.getScreenHeight();
+  // A size class fixes the whole rect -- width, height and position. Everything
+  // below that measures content then feeds a width or a height is skipped for
+  // it; only the row count still comes from measurement, because that is the one
+  // thing a fixed box cannot decide for a caller (the title may wrap to two
+  // lines and eat a row).
+  const Rect fixedBox = optionPopupFixedBox(renderer, metrics, spec.size);
+  const bool fixed = fixedBox.width > 0 && fixedBox.height > 0;
 
   const int optionFontId = metrics.optionPopupUseSmallFont ? UI_10_FONT_ID : UI_12_FONT_ID;
   const EpdFontFamily::Style optionStyle =
@@ -1265,35 +1289,22 @@ BaseTheme::OptionPopupGeometry BaseTheme::optionPopupGeometry(const GfxRenderer&
   // height budget, is what forces most lists to scroll); reserving space on a
   // false positive just centres the title a little less perfectly, not
   // wrongly.
+  //
+  // A fixed box reserves the corner unconditionally. Whether it scrolls depends
+  // on how many rows are left under the wrapped title, which is not known yet
+  // here -- and drawOptionPopup() has to reach the identical number without
+  // knowing it either, or the two wrap the title differently. Reserving always
+  // costs a slightly narrower title on a list that turns out to fit; guessing
+  // costs a counter drawn over the title's last word.
   int counterReserve = 0;
-  if (optionCount > kOptionPopupMaxVisibleRows) {
+  if (fixed ? optionCount > 0 : optionCount > kOptionPopupMaxVisibleRows) {
     char counter[12];
     snprintf(counter, sizeof(counter), "%d/%d", spec.selectedIndex + 1, optionCount);
     counterReserve = renderer.getTextWidth(UI_10_FONT_ID, counter) + spacing.itemSpacing;
   }
-  int titleMaxWidth = pageWidth - metrics.optionPopupDialogSideMargin * 2 - spacing.innerPadding * 2 - counterReserve;
-  // A caller with a size hint (setSizeHint(), e.g. a confirmation replacing a
-  // list) wants THIS dialog no wider than that hint, not merely no narrower --
-  // minDialogWidth is a floor everywhere else in this function (a caller with
-  // more content than the hint still gets the room it needs), but the title is
-  // the one thing that otherwise has no natural width of its own to fall back
-  // on: with nothing to wrap to, a long dynamic title (a replace confirmation
-  // with an age suffix) wrapped to the full screen budget and won the dialog
-  // width outright, so the confirmation came out far wider than the list it
-  // was replacing instead of matching it. Reported on the S8 2026-08-24.
-  if (spec.minDialogWidth > 0) {
-    // Exact inverse of the dialogW formula below (maxTextWidth + padding*2 +
-    // selectionHPadding*2) * widthPercent/100 -- has to be, or a title that
-    // "fits" this budget still pushes dialogW past minDialogWidth once that
-    // formula adds the same padding and selection padding back on top a
-    // second time. First cut of this fix forgot both terms and still left the
-    // confirm box wider than the list, even with a short single-line title
-    // (measured on the S8: AddR list 280px, confirm dialog 363px, both hinted
-    // at 280).
-    const int hinted = spec.minDialogWidth * 100 / spacing.widthPercent - spacing.innerPadding * 2 -
-                       spacing.selectionHPadding * 2 - counterReserve;
-    if (hinted > 0 && hinted < titleMaxWidth) titleMaxWidth = hinted;
-  }
+  int titleMaxWidth = fixed ? fixedBox.width - spacing.innerPadding * 2 - counterReserve
+                            : pageWidth - metrics.optionPopupDialogSideMargin * 2 - spacing.innerPadding * 2 -
+                                  counterReserve;
   const std::vector<std::string> titleLines =
       spec.title != nullptr ? wrapOptionPopupTitle(renderer, spec.title, titleMaxWidth) : std::vector<std::string>{};
   const int titleLineCount = static_cast<int>(std::max<size_t>(1, titleLines.size()));
@@ -1329,33 +1340,31 @@ BaseTheme::OptionPopupGeometry BaseTheme::optionPopupGeometry(const GfxRenderer&
   // Anything past the window scrolls.
   const int titleBlockHeight = titleLineHeight * titleLineCount;
   const int chromeHeight = titleBlockHeight + spacing.titleGap + noteBlock + spacing.innerPadding * 2;
-  const int heightBudget = pageHeight * kOptionPopupMaxHeightPercent / 100;
+  // A fixed box budgets against itself, and the row cap does not apply to it:
+  // the cap is there to stop a dialog growing with its list, and a box that
+  // cannot grow at all needs no second brake. Rows past what the box holds
+  // scroll, same as everywhere else.
+  const int heightBudget = fixed ? fixedBox.height : pageHeight * kOptionPopupMaxHeightPercent / 100;
   int visibleRows = optionCount;
   if (rowStep > 0 && optionCount > 0) {
     const int fits = (heightBudget - chromeHeight + spacing.itemSpacing) / rowStep;
-    visibleRows = std::min(optionCount, std::min(kOptionPopupMaxVisibleRows, std::max(1, fits)));
-  }
-
-  // A caller can ask for a floor on both, so a popup that replaces another one
-  // keeps its size instead of shrinking to its own content -- see
-  // OptionPopupSpec::minVisibleRows. The ceilings above still win: the floor can
-  // never grow the dialog past the row cap or the panel's side margins.
-  if (spec.minVisibleRows > visibleRows) {
-    const int fitsCap = rowStep > 0 ? (heightBudget - chromeHeight + spacing.itemSpacing) / rowStep : visibleRows;
-    visibleRows = std::min(spec.minVisibleRows, std::min(kOptionPopupMaxVisibleRows, std::max(1, fitsCap)));
+    visibleRows = fixed ? std::min(optionCount, std::max(1, fits))
+                        : std::min(optionCount, std::min(kOptionPopupMaxVisibleRows, std::max(1, fits)));
   }
 
   const int listHeight = visibleRows > 0 ? rowHeight * visibleRows + spacing.itemSpacing * (visibleRows - 1) : 0;
   int dialogW =
       std::min((maxTextWidth + spacing.innerPadding * 2 + spacing.selectionHPadding * 2) * spacing.widthPercent / 100,
                pageWidth - metrics.optionPopupDialogSideMargin * 2);
-  if (spec.minDialogWidth > dialogW) {
-    dialogW = std::min(spec.minDialogWidth, pageWidth - metrics.optionPopupDialogSideMargin * 2);
-  }
   const int dialogH = titleBlockHeight + spacing.titleGap + noteBlock + listHeight + spacing.innerPadding * 2;
 
   OptionPopupGeometry geometry;
-  geometry.dialog = Rect{(pageWidth - dialogW) / 2, (pageHeight - dialogH) / 2, dialogW, dialogH};
+  // The fixed box is taken whole, including its height: leftover space under the
+  // last row stays empty rather than pulling the box up. That emptiness is what
+  // makes the rect constant, and the constant rect is what makes the close one
+  // cheap window refresh instead of a full re-render.
+  geometry.dialog = fixed ? fixedBox : Rect{(pageWidth - dialogW) / 2, (pageHeight - dialogH) / 2, dialogW, dialogH};
+  dialogW = geometry.dialog.width;
   geometry.rowX = geometry.dialog.x + spacing.innerPadding;
   geometry.rowWidth = dialogW - spacing.innerPadding * 2;
   geometry.noteY =
@@ -1401,31 +1410,22 @@ void BaseTheme::drawOptionPopup(const GfxRenderer& renderer, const OptionPopupSp
   int y = dialog.y + spacing.innerPadding;
   // Same budget optionPopupGeometry() wrapped the title to -- both have to
   // agree, or the dialog's reserved height and what actually gets drawn into
-  // it drift apart. That includes the counter reserve and the minDialogWidth
-  // clamp: without the clamp here too, a hinted dialog (setSizeHint()) sized
-  // to match the list it replaces still wrapped its title to the full-screen
-  // budget and drew it wider than the dialog actually is.
+  // it drift apart. That includes the counter reserve, and for a fixed box the
+  // dialog's own width: wrapping the title to the full-screen budget draws it
+  // wider than the box actually is (seen on the S8 2026-08-24, when the
+  // confirmation's title ran off both edges).
+  // The size class decides both, exactly as in optionPopupGeometry(): a fixed
+  // box always reserves the counter corner and wraps to its own width.
+  const bool fixed = spec.size != OptionPopupSize::Auto;
   int counterReserve = 0;
-  if (optionCount > kOptionPopupMaxVisibleRows) {
+  if (fixed ? optionCount > 0 : optionCount > kOptionPopupMaxVisibleRows) {
     char counter[12];
     snprintf(counter, sizeof(counter), "%d/%d", spec.selectedIndex + 1, optionCount);
     counterReserve = renderer.getTextWidth(UI_10_FONT_ID, counter) + spacing.itemSpacing;
   }
-  int titleMaxWidth =
-      renderer.getScreenWidth() - metrics.optionPopupDialogSideMargin * 2 - spacing.innerPadding * 2 - counterReserve;
-  if (spec.minDialogWidth > 0) {
-    // Exact inverse of the dialogW formula below (maxTextWidth + padding*2 +
-    // selectionHPadding*2) * widthPercent/100 -- has to be, or a title that
-    // "fits" this budget still pushes dialogW past minDialogWidth once that
-    // formula adds the same padding and selection padding back on top a
-    // second time. First cut of this fix forgot both terms and still left the
-    // confirm box wider than the list, even with a short single-line title
-    // (measured on the S8: AddR list 280px, confirm dialog 363px, both hinted
-    // at 280).
-    const int hinted = spec.minDialogWidth * 100 / spacing.widthPercent - spacing.innerPadding * 2 -
-                       spacing.selectionHPadding * 2 - counterReserve;
-    if (hinted > 0 && hinted < titleMaxWidth) titleMaxWidth = hinted;
-  }
+  int titleMaxWidth = fixed ? dialog.width - spacing.innerPadding * 2 - counterReserve
+                            : renderer.getScreenWidth() - metrics.optionPopupDialogSideMargin * 2 -
+                                  spacing.innerPadding * 2 - counterReserve;
   const std::vector<std::string> titleLines =
       spec.title != nullptr ? wrapOptionPopupTitle(renderer, spec.title, titleMaxWidth) : std::vector<std::string>{};
   for (const std::string& line : titleLines) {
