@@ -7,6 +7,7 @@
 
 #include "MapBleConsole.h"
 #include "MapCommandConsole.h"
+#include "MapPins.h"
 #include "MapTilePath.h"
 #include "MapTransferReceiver.h"
 #include "activities/Activity.h"
@@ -109,6 +110,11 @@
 // - its own `MapConsoleState` plus a BLE console over it, because the phone
 //   answers in the same ASCII the map console takes: `missing` to read the list,
 //   `skip` to give up on a tile
+// - its own `MapPins` (own `PinStore`, rebuilt from the card in `onEnter()`), so
+//   `pin set`/`pin del`/`pin list`/`pin log` answer here exactly as they do on
+//   the map screen. No popup for it -- the rider manages pins from the phone at
+//   home, over the same wire this screen already runs for tile sync
+//   (`MapCommandParser.h`, `docs/pins.md`).
 //
 // It deliberately does not share MapActivity's console state. Two screens are
 // never up at once, and a shared state would put this screen's skip tally and
@@ -232,13 +238,14 @@ class TileSyncActivity final : public Activity,
   bool drawParent(int px, int py, int size, uint16_t pc, uint16_t pr);
   // One square per file this run is still waiting for, laid out plainly.
   //
-  // **An announced batch has a count and no coordinates.** `push <n>` says how
-  // many files are coming and nothing about where they are, because the phone
-  // is sending ground the device has never drawn and therefore never recorded
-  // -- there is no missing-tile list behind it and nothing to place on a map.
-  // So the squares are the count, drawn in the same mark the real grid uses so
-  // one screen reads the same either way: a square standing means one file
-  // still to come, and it goes out when a file lands.
+  // **Only before the first tile's position is known.** `push <n>` says how
+  // many files are coming and nothing about where they are -- there is no
+  // missing-tile list behind it and nothing to place on a map yet. So the
+  // squares are the count, not geography, until the first file's own BEGIN
+  // frame names a real tile (trackPushTiles()); from that point on
+  // interestCount() is nonzero and drawGrid() draws the real grid instead, so
+  // this is only ever seen in the gap between a batch being announced and its
+  // first byte arriving.
   void drawAnnouncedGrid(int gx, int gy, int gw, int gh);
 
   // Clears MissingTilesStore entries for tiles that have landed.
@@ -294,7 +301,10 @@ class TileSyncActivity final : public Activity,
   // (docs/zoom-rungs.md), so this is a shift down, never up.
   static void parentOf(const MapTileCoord& tile, uint16_t& pc, uint16_t& pr);
   // Places the viewport over the densest patch of the snapshot. Called once per
-  // run, from armRun() -- see the header comment.
+  // run, from armRun() -- see the header comment. Returns without touching the
+  // window (and without setting windowChosen_) when interestCount() == 0 at
+  // armRun() time -- choosePushWindow() gets the first word on a run that
+  // starts with nothing known.
   void chooseWindow();
 
   // Stale tiles this visit, for the ping-pong guard and the log. Not persisted
@@ -378,9 +388,46 @@ class TileSyncActivity final : public Activity,
   // Files the phone has announced with `push <n>` for this run and not yet
   // delivered a count for. Zeroed by armRun(), because a re-ask is a new run.
   //
-  // **Not rows.** There is no snapshot behind it and there cannot be: the phone
-  // never says which tiles. So it is a total and nothing else -- the grid it
-  // feeds is drawn from the number (drawAnnouncedGrid).
+  // **Not rows -- not in advance.** The phone never says which tiles a push
+  // will carry, only how many, so there is no snapshot to take when the batch
+  // is announced. But each file's own BEGIN frame does name a tile
+  // (`MapTransferReceiver::Status::activeTile`), and that is real geography the
+  // device learns for free as the transfer runs. `trackPushTiles()` (called
+  // from loop()) watches for a tile this run has not seen before and appends it
+  // here -- so a burst grows the same real grid a fetch shrinks, one square per
+  // file, instead of the placeholder count `drawAnnouncedGrid()` falls back to
+  // before the first one is known.
+  //
+  // Heap, not a member array, same reasoning as rows_ above, and allocated only
+  // once a push is actually seen. 128 entries at ~14 bytes each is ~1.75 KB:
+  // generous headroom over the 48 z11 parents the window can ever show at once
+  // (kMaxWindowCols * kMaxWindowRows), even if a burst mixes in some z13-leaf
+  // entries alongside whole z11 parents. Past the cap, a newly discovered tile
+  // is simply not added -- the numeric bar (`runTotal()`/`announced_`) still
+  // counts it, only the grid undercounts. Freed in onExit().
+  static constexpr uint32_t kMaxPushRows = 128;
+  std::unique_ptr<Row[]> pushRows_;
+  uint32_t pushRowCount_ = 0;
+  // Called once, by whichever of chooseWindow() (real interest already known
+  // at armRun()) or choosePushWindow() (seeded from the first push tile
+  // discovered live) sets a real window first. Guards against the window
+  // silently staying at a previous run's stale value: chooseWindow() returns
+  // early when interestCount() == 0 at armRun() time, which used to be
+  // harmless because drawGrid() never read windowCols_/windowRows_ in that
+  // case either -- but a live-discovered push tile now can make
+  // interestCount() go from 0 to nonzero mid-run, and at that point the window
+  // has to mean something.
+  bool windowChosen_ = false;
+  // Watches transfer_.status().activeTile for a coordinate not already in
+  // rows_ or pushRows_, and appends it. See pushRows_ above.
+  void trackPushTiles();
+  // Seeds the window from one point instead of chooseWindow()'s
+  // densest-cluster search over a whole snapshot -- there is only one point to
+  // go on the first time a push tile's position is known. Centres the same
+  // kMaxWindowCols x kMaxWindowRows box on that tile's z11 parent, clamped so
+  // it never reaches a negative parent coordinate.
+  void choosePushWindow(const MapTileCoord& tile);
+
   uint32_t announced_ = 0;
   // Set by onPushAnnounced(), consumed by loop(), for the reason
   // freshnessAskPending_ exists: the observer runs inside the console's
@@ -444,32 +491,39 @@ class TileSyncActivity final : public Activity,
   static constexpr int kMaxDotPx = 16;
   static constexpr int kMinDotPx = 8;
 
-  // Every tile this screen still owes the rider an answer about, in three
+  // Every tile this screen still owes the rider an answer about, in four
   // groups, drawn as one grid:
   //
   //   [0, rowCount_)                 missing, being fetched      outlined square
-  //   then every unsettled held tile queued for a freshness check    dot
-  //   then every stale tile awaiting its replacement                 dot
+  //   then every stale tile awaiting its replacement              outlined square
+  //   then every push tile discovered live (pushRows_)            outlined square
+  //   then every unsettled held tile queued for a freshness check     dot
   //
-  // A dot means "not settled yet", whichever half of the work it is waiting on.
-  // It goes out when the phone answers that the tile is current, or -- for one
-  // that came back stale -- when the replacement has actually landed. So the
-  // grid empties as the check works through it, which is the thing worth
-  // watching on this screen.
+  // A dot means "not settled yet", waiting on an answer rather than on bytes.
+  // It goes out when the phone answers that the tile is current. A frame means
+  // waiting on bytes -- missing, stale or a burst's own discovery all read the
+  // same, and it goes out the same way: gone from the source that is tracking
+  // it (MissingTilesStore, StaleTilesList, or -- for a push tile -- never; see
+  // pushRows_ above). So the grid empties as a fetch works through it and
+  // fills in as a burst runs, which is the thing worth watching on this
+  // screen either way.
   //
-  // The three cannot overlap: a missing tile has no content_id so it is never
-  // in the held store (HeldTilesStore::record ignores content_id 0), and a
-  // stale tile has already been settled in the store by the `checked` that
-  // reported it, so it is no longer pending.
+  // The four cannot overlap: a missing tile has no content_id so it is never
+  // in the held store (HeldTilesStore::record ignores content_id 0), a stale
+  // tile has already been settled in the store by the `checked` that reported
+  // it so it is no longer pending, and a push tile is only ever added once its
+  // own BEGIN frame names it -- which is also the moment MissingTilesStore
+  // would already have it if it were a missing tile, so trackPushTiles() skips
+  // anything already in rows_.
   //
   // interestAt() walks the held store to find the nth pending entry, so it is
   // O(store) per call. chooseWindow()'s O(n^2) placement pass is the only
   // caller that could feel that, and only on the rare path where the tiles are
   // spread wider than the window; the common clustered case exits early.
   size_t interestCount() const;
-  // The head of that sequence: missing tiles then stale ones, i.e. everything
-  // waiting on bytes rather than on an answer. Drawn as frames; the rest as
-  // dots.
+  // The head of that sequence: missing tiles, stale ones, then push tiles --
+  // i.e. everything waiting on bytes rather than on an answer. Drawn as
+  // frames; the rest (held) as dots.
   size_t downloadCount() const;
   // The denominator of the "N / M" line: every tile this visit will pull down.
   // **Not rowCount_.** A stale tile's replacement lands in transfer.completed
@@ -549,4 +603,9 @@ class TileSyncActivity final : public Activity,
   MapConsoleState consoleState_;
   MapBleConsole ble_{consoleState_};
   MapTransferReceiver transfer_;
+
+  // Same object MapActivity uses, rebuilt independently here: no heap, ~450
+  // bytes, one PinStore per screen (MapPins.h). Two screens are never up at
+  // once, so there is never a second copy of the active set in RAM.
+  MapPins pins_;
 };

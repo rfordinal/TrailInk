@@ -1320,9 +1320,11 @@ a warning appears.
 
 `push <n>` gives a count and no coordinates -- the phone is sending ground the
 device never drew and therefore never recorded, so there is no missing-tile list
-behind it and nothing to place on a map.
+behind it and nothing to place on a map **before the first file's own BEGIN
+frame arrives**. See "Live geography for a burst" below for what happens once
+one does.
 
-So `drawAnnouncedGrid()` (`TileSyncActivity.cpp:956`) draws the count: one
+So `drawAnnouncedGrid()` (`TileSyncActivity.cpp:1054`) draws the count: one
 square per file still to come, in the squarest layout that fits, rubbed out from
 the end as files land. Same mark as a missing tile's square, because it means
 the same thing -- not on the card yet -- and one screen should read the same
@@ -1333,9 +1335,67 @@ either way. The layout is fixed by the run's total and never reflows.
 - Below `kMinAnnouncedCellPx` (8 px) no grid is drawn at all. A smear of grit is
   a worse toy and no better instrument; the bar is the number anyway.
 - A run that has **both** -- a missing-tile fetch the phone announced more files
-  into -- keeps the true geographic grid, and the announced files are counted by
-  the bar. `drawGrid()` only reaches the announced path when there is no real
-  geography left to show (`TileSyncActivity.cpp:1024`).
+  into -- keeps the true geographic grid from the start, and the announced files
+  are counted by the bar. `drawGrid()` only reaches the announced path when
+  `interestCount() == 0` (`TileSyncActivity.cpp:1114`) -- no real geography known
+  yet, from any source.
+
+### Live geography for a burst
+
+Added 2026-09-06, after a burst-only run shipped with nothing but the
+placeholder above for its whole duration and read as "a dumb list of squares"
+next to the real grid's nested z11/z12/z13 frames.
+
+**The phone never says which tiles are in a batch, but each file says which
+tile it is.** `push <n>` carries only a count (see above), but the transfer
+channel's own BEGIN frame for each file names a real `z/col/row`
+(`MapTransferReceiver::Status::activeTile`) -- the same field
+`formatActiveFile()` already reads for the per-file status line. That is real
+geography the device learns for free, one file at a time, with no new wire
+message and no extra round trip.
+
+`trackPushTiles()` (`TileSyncActivity.cpp:862`, called from `loop()`) watches
+`activeTile` each tick. A coordinate this run has not seen before -- not
+already in `rows_` (a normal fetch tile), not already in `pushRows_` (an
+earlier BEGIN this run) -- gets appended to `pushRows_` and drawn by
+`drawParent()` with **the exact same frame** a missing or stale tile gets. No
+new visual language: a push tile is something the device wants, exactly like a
+missing tile, just discovered opportunistically instead of upfront.
+
+The window has no snapshot to place itself against on a pure burst, so
+`choosePushWindow()` (`TileSyncActivity.cpp:843`) seeds it centred on the first
+tile discovered, at the same `kMaxWindowCols` x `kMaxWindowRows` size
+`chooseWindow()` would use for a real snapshot. Chosen once and guarded by
+`windowChosen_` -- a run that already had real interest at `armRun()` time (a
+fetch a phone pushes more files into) keeps that window; only a run that starts
+with nothing known lets the first push tile choose one.
+
+**The two grids read oppositely, and that is not a bug.** A fetch's grid
+shrinks: every tile was known at the start, and squares vanish as they land. A
+burst's live grid grows: nothing is known until it is discovered, so squares
+accumulate as files are revealed, capped at `kMaxPushRows` (128, ~1.75 KB, heap,
+allocated only once a push is actually seen and freed in `onExit()`) and never
+removed for the rest of the run. Past the cap a file still downloads
+normally -- only the grid stops adding new squares for it; the bar
+(`runTotal()`/`announced_`) is unaffected either way.
+
+**Verified: read off the code, compiled clean, `env:default` and
+`env:simulator`... except `env:simulator` did not build.** The simulator
+(`https://github.com/rfordinal/explorink-simulator#explorink`, pinned at
+`f349db3`, matching the local checkout in `firmware/explorink-simulator`)
+fails this build with `MappedInputManager.cpp:135:29: error: 'class HalGPIO'
+has no member named 'updateSequence'` -- unrelated to this feature (this
+change touches no input code), and present before this change too. `develop`'s
+`HalGPIO` grew `updateSequence()` for the touch-modes work merged the same day
+(`f106dff5`) and the simulator's HAL shim has not been given a matching stub
+yet. So `tools/sim_push_test.py`'s `case_city_grid` -- built exactly to
+photograph this batch-visualisation question -- could not run this pass.
+**Open, needs**: add an `updateSequence()` stub to `explorink-simulator`'s
+`HalGPIO`, then `pio run -e simulator` and `python3 tools/sim_push_test.py
+--firmware <this worktree>` to get the `06-batch-*-partial.bmp` screenshot and
+the `push tile discovered live` log lines this feature was written to produce.
+Not measured on hardware either -- no device available this session (see
+`docs/PROGRESS.md`).
 
 ### Verified vs assumed (the announced batch)
 

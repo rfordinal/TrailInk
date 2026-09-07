@@ -351,6 +351,24 @@ advertised as an X4. Every name here is matched by Android's
 companion-device pairing dialog -- adding a board on either side means adding
 its name on the other in the same change.
 
+**On an S3 that name is fixed at compile time, and it is the cheapest check that
+the right branch is on the board.** The only `selectDevice()` calls are in
+`lib/hal/HalGPIO.cpp` inside `#if FREEINK_MCU_C3`, so a T5 S3 Pro never runs the
+runtime swap and keeps whatever `DEFAULT_DEVICE` gave it. `DEFAULT_DEVICE`
+(`freeink-sdk/libs/hardware/BoardConfig/include/BoardConfig.h`, "Compile-time
+default device") picks `LILYGO_T5S3` only when the build defines
+`FREEINK_DEVICE_LILYGO`; a build without it falls through the `#if` chain to
+`XTEINK_X4`.
+
+So **a `develop` build flashed onto a T5 S3 Pro advertises `XteinkX4Map` and runs
+with X4 pins, X4 panel and X4 battery paths on LilyGo hardware.** Seen 2026-09-06:
+the same MAC `7C:2C:67:8A:4C:B5` advertised `LilyGoT5S3Map` at 18:40 and
+`XteinkX4Map` at 18:43 after a reflash from `develop`. It booted, drew maps and
+served BLE over the whole window, so nothing else looked wrong -- the name was the
+only symptom. That board forks from `release/lilygo-t5-s3-pro`
+([`branching.md`](branching.md)), and reading the advertised name off the phone
+catches a wrong-branch flash in a second, with no cable.
+
 **Every device of the *same* board still advertises the same name and the same
 service UUID.** Nothing on the air distinguishes one X4 from a second X4 in
 range -- the per-board name above answers "what kind of device is this",
@@ -371,8 +389,14 @@ present.
   read). One device answered: `14:63:93:F4:8A:36  local_name='XteinkX4Map'
   rssi=-53  uuids=['5a1e6d00-73a4-4f1e-9b8f-2c6e1a8f0001']`. Before this change
   the same scan returned the service UUID and `local_name=None`.
-- The name showing in Android's companion pairing dialog: **not measured**. Needs
-  a phone. Same scan data underneath, so it is likely, not proven.
+- **The per-board name reaches the phone app -- measured 2026-09-06.** The app's
+  own status line rendered `connected to LilyGoT5S3Map` and, after a reflash from
+  `develop`, `connected to XteinkX4Map`, for the same MAC. That is `BleLink`
+  reading the scan result, so the name survives the whole path from advertising
+  to the rider's screen.
+- The name showing in Android's **companion pairing dialog**: **still not
+  measured**. That dialog is a different surface from the status line above, and
+  nobody has watched it. Same scan data underneath, so it is likely, not proven.
 - Per-board naming (`bleDeviceNameForActiveBoard()`): **measured on a LilyGo
   T5S3 Pro, 2026-09-01.** Built and flashed `t5s3pro` (cherry-picked onto
   `release/lilygo-t5-s3-pro`, since the T5S3 build env is not on `develop`
