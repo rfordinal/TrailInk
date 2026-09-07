@@ -78,6 +78,12 @@ namespace {
 // path and block every other poll behind it.
 bool frontlightStateChanged = false;
 
+// True while a held button is still walking the frontlight rungs. loop() waits
+// for it to clear before it writes the level to the card: a hold steps every
+// 500 ms and each step would otherwise be its own SD write, on the input path,
+// for a level the rider is still choosing.
+bool frontlightHoldActive = false;
+
 // The rungs a hold walks through, off included. A cycle rather than an on/off
 // toggle because the panel needs very different amounts of light at dusk and in
 // full dark, and there is no other control for it on this board: no frontlight
@@ -179,6 +185,12 @@ uint16_t powerHoldDurationMs() {
 // double-tap window -- a single tap cannot be known to be single until then.
 namespace {
 constexpr unsigned long USER_BUTTON_HOLD_MS = 600;
+// A held button keeps stepping the light at this rate. Slow enough to let go on
+// the rung you meant (five rungs take 2.6 s end to end), fast enough that
+// walking the whole cycle is not a chore. There is no SD write per step: the
+// hold sets a flag (frontlightHoldActive) and loop() saves the level once, once
+// the button is up.
+constexpr unsigned long USER_BUTTON_REPEAT_MS = 500;
 
 void toggleTouchLock() {
   // One flag, flipped. Nothing has to be remembered across it: the mode the
@@ -226,6 +238,7 @@ void beginSyntheticClick(uint8_t button, unsigned long now) {
 bool userButtonDown = false;
 bool userButtonLongFired = false;
 unsigned long userButtonDownAt = 0;
+unsigned long userButtonRungAt = 0;
 
 bool powerButtonLevelKnown = false;
 bool powerButtonDown = false;
@@ -248,13 +261,20 @@ uint8_t boardButtonHook() {
     // Drop a tap still being reported: a second press starting inside that
     // window would otherwise be seen as Confirm held down.
     syntheticClickMask = 0;
-  } else if (down && !userButtonLongFired && now - userButtonDownAt >= USER_BUTTON_HOLD_MS) {
+  } else if (down && now - userButtonDownAt >= USER_BUTTON_HOLD_MS &&
+             (!userButtonLongFired || now - userButtonRungAt >= USER_BUTTON_REPEAT_MS)) {
     // Fires the moment the hold is long enough, not on release: the light
     // changes under the thumb, which is the feedback that says "let go now".
+    // Then it keeps stepping while the button stays down, so a rider walks to
+    // the rung they want with one press instead of four -- the light itself is
+    // the readout, and letting go is how they stop.
     userButtonLongFired = true;
+    userButtonRungAt = now;
+    frontlightHoldActive = true;
     cycleFrontlight("User button hold");
   } else if (!down && userButtonDown) {
     userButtonDown = false;
+    frontlightHoldActive = false;
     if (!userButtonLongFired) beginSyntheticClick(InputManager::BTN_CONFIRM, now);
   }
 
@@ -1148,7 +1168,7 @@ void loop() {
     toggleTouchLock();
   }
 #endif
-  if (frontlightStateChanged) {
+  if (frontlightStateChanged && !frontlightHoldActive) {
     frontlightStateChanged = false;
     SETTINGS.frontlightOn = frontlight.brightness() > 0 ? 1 : 0;
     if (frontlight.brightness() > 0) SETTINGS.frontlightBrightness = frontlight.brightness();

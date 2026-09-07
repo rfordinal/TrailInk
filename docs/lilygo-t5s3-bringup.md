@@ -256,7 +256,7 @@ changes, all in `src/main.cpp`:
 | BOOT (GPIO0, the power button) | tap | nothing (`shortPwrBtn` = `IGNORE`) | **`BTN_BACK`** |
 | BOOT | hold | sleep at 400 ms | sleep at **1500 ms** |
 | user button (S3, `IO12`) | tap | Confirm | Confirm, unchanged |
-| user button | hold 600 ms | frontlight on/off | **next frontlight rung** |
+| user button | hold 600 ms | frontlight on/off | **next frontlight rung, and another every 500 ms while held** |
 | home key (GT911) | hold 700 ms | frontlight on/off | **next frontlight rung** |
 
 **Why Back at all.** Until now this board could go forward and never back
@@ -297,6 +297,17 @@ during bring-up) steps to the next rung above it instead of stalling. 10 % is th
 rung a rider can leave on for hours; 100 % costs real current (43 mA off the cell
 at 40 %, `../../docs/devices/lilygo-t5-s3-pro.md`).
 
+**A held user button keeps stepping**, one rung per 500 ms after the first at
+600 ms, so the whole cycle is 2.6 s end to end and the rider stops by letting
+go. The light is its own readout, which is what makes a repeat safe here: there
+is nothing to read on the panel and nothing to undo. The card write waits for
+the release (`frontlightHoldActive`), or a hold would be one SD write per step,
+on the input path, for a level still being chosen.
+
+**The home key hold does not repeat**: the SDK reports one long-press event per
+press (`InputManager::serviceTouch`), so that gesture steps one rung. Repeating
+it would mean a second hold recogniser next to the one that already exists.
+
 **Both holds still land in one function**, now `cycleFrontlight()`, so the
 gesture cannot come to mean two things depending on which input was used.
 
@@ -309,8 +320,10 @@ machinery, now shared by the two gestures through `beginSyntheticClick()`.
 - A BOOT tap steps back on every screen, and does not also sleep.
 - A BOOT hold still sleeps, and 1500 ms feels right rather than long.
 - A wake press does not leave a stray Back behind it.
-- Four holds walk `10 -> 30 -> 60 -> 100 -> off`, and the level survives a
-  reboot (`CMD:LIGHT` answers the stored value).
+- One long hold walks `10 -> 30 -> 60 -> 100 -> off` on its own, about half a
+  second a rung, and stops on the rung the thumb let go at.
+- The level survives a reboot (`CMD:LIGHT` answers the stored value), and the
+  hold produced one card write, not five.
 - The extra `digitalRead` per input poll disturbs neither touch nor a refresh.
 
 
