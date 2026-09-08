@@ -103,8 +103,9 @@ reader's pagination cache).
 under a new label, `STR_SCREEN_ORIENTATION` ("Screen Orientation"), and is
 drawn **disabled**.
 
-It is not hidden because a handlebar mount will want a real screen
-orientation, and this is the field that will carry it. It is not active
+It is not hidden because a device carried in landscape — on a mount or in a
+hand — will want a real screen orientation, and this is the field that will
+carry it. It is not active
 because today the field rotates the reader only — `EpubReaderActivity`,
 `TxtReaderActivity` and `SleepActivity` read it, the map and the rest of the UI
 do not. Offering it would rotate nothing the rider is looking at.
@@ -128,7 +129,10 @@ Three mechanics behind `disabled` (`SettingsActivity.h:59`):
   that flag (`BaseTheme.cpp:394`), and `frontHintBox()` refuses to return a
   rect for an inactive slot. So in BUTTONS touch mode the stub is drawn and
   dead, which is the behaviour wanted — but it was arrived at by accident, not
-  designed.
+  designed. **Read, not measured.** The hardware pass ran with Touch Screen on
+  Buttons only, where no list row is tappable at all, so the tap path was never
+  exercised — only the Confirm button was. Setting touch to Anywhere and
+  tapping the row would settle it.
 - `toggleCurrentSetting()` returns early, so both the button path and the
   touch-tap path are inert.
 
