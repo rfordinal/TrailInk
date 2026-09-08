@@ -130,8 +130,25 @@ altogether -- the fork's JSON socket (`docs/simulator.md`).
 - `test/debug_input` -- nine host tests over the frame shape: press and release
   edges, hold, two taps not merging, queue order, a full queue refused, a
   double pump in one frame, name parsing. `ctest` runs them with the rest.
-- **Not run on hardware yet.** What a device pass has to check: a press
-  actually moves the selection on Home, a `--hold 1500` back in the reader goes
-  Home rather than one page, `power` short-press force-refreshes and does not
-  sleep, and the injected presses keep the device awake through a walk longer
-  than the sleep timeout.
+- **Verified on the LilyGo T5 S3 Pro, 2026-09-08**, build `db651273`, env
+  `t5s3pro`, over `/dev/ttyACM0` with `tools/press.py`. A whole walk ran from
+  the laptop with no thumb on the board: `down` moved the Home selection from
+  Trips to Sync (the disabled Pins and Wallet rows skipped, as a thumb would),
+  `up confirm` opened Explore, `confirm` opened the map menu, `confirm` again
+  entered Look around, and `back back` came out to Home. Each step was read
+  back with `CMD:SCREENSHOT`.
+- **The hold works.** In Look around, `--hold 1500 up` zoomed the map one rung
+  (scale bar 500 m to 200 m) instead of panning, which is the
+  `getHeldTime() >= kObserveZoomHoldMs` path (600 ms, `MapActivity.cpp`). A
+  tap there pans. So the injected held time reaches a real long-press check.
+- **`power` cannot sleep the device.** An injected `power` press left the map
+  on screen and the port up, as the direct-`HalGPIO` table above predicts.
+- **It counts as user input.** Every injected press logged
+  `[PWR] Restoring normal CPU frequency`. That is the `userInput` flag in
+  `loop()`, and the auto-sleep deadline reads the same flag one line later, so
+  the sleep timer is reset by the same press. Not separately timed out to
+  sleep -- the map screen holds `preventAutoSleep()` anyway, so that test needs
+  a Home screen and a full timeout of pressing.
+- **Not run on an X4 or X4 Pro** (C3). The injection point is board-agnostic
+  `src/` code, but the C3 envs (`default`, `sticky`) have not been flashed with
+  it.
