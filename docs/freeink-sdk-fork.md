@@ -117,6 +117,14 @@ that BUG-037 confirmed on hardware 2026-09-03.
   SHA and why. A gitlink is one line in a diff and `--stat` shows it as one
   changed file, so nothing else makes it visible in review.
 
+**Verified on hardware, 2026-09-08.** LilyGo T5 S3 Pro (MAC
+`7c:2c:67:8a:4c:b4`), env `t5s3pro`, pin back at `55a49587`, flashed over
+`/dev/ttyACM0`. The device booted to Home and the map screen drew real tile
+linework, which is an SD read -- the thing BUG-037's dummy chip select killed.
+Free heap 185708 bytes of 305340 at idle. Archived as
+`docs/firmware-builds/2026-09-08-t5s3pro-sdk-pin-089d1d42.bin` in the parent
+repo.
+
 Screen any pin against the fork before trusting it:
 
 ```
