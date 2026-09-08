@@ -151,6 +151,27 @@ Keys: `BACK`, `ENTER`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `POWER`, `SLEEP`, `HOME`,
 `QUIT`. Screenshots are BMP at the host's drawable resolution. Upstream's
 `README.md` has the touch actions, the sleep/wake pair and the heap overrides.
 
+**Key events need room between them.** A script with 200 ms between `DOWN`
+presses moved the Home selector not at all: the run went straight into whatever
+row was already selected, and nothing in the log said a key had been dropped.
+600 ms apart works. Measured 2026-09-07.
+
+**Home skips its disabled rows.** Pins and Wallet are drawn but not selectable
+(`HomeActivity::nextSelectable()`), so from a fresh boot the Settings row is
+**four** `DOWN` presses away, not six. A full Settings-tab sweep, one run per
+tab:
+
+```bash
+SDL_VIDEODRIVER=dummy SDL_RENDER_DRIVER=software \
+CROSSPOINT_SIM_INPUT_SCRIPT='4000:DOWN;4600:DOWN;5200:DOWN;5800:DOWN;6600:ENTER;7600:ENTER;13000:QUIT' \
+CROSSPOINT_SIM_SCREENSHOTS='11000:./qa-artifacts/tab1.bmp' \
+  ./.pio/build/simulator/program
+```
+
+One `ENTER` after the Settings one per tab to advance, 700 ms apart -- the tab
+row is selected on entry, so `ENTER` there cycles the category rather than
+opening a row.
+
 **Headless: `SDL_VIDEODRIVER=dummy`.** A scripted run then takes no focus from
 whatever the desktop is doing (a Wayland desktop ignores SDL's focus hint, so
 this is the only lever). Until 2026-09-06 a dummy run drew nothing and said

@@ -275,3 +275,20 @@ pio run -e <env>
 Under three minutes. Deleting the whole `.pio/build/<env>` also works and costs
 about four times that, which is what the first two recoveries paid before
 anybody ran objdump by hand.
+
+## Building a second environment in one worktree wipes the first one's build
+
+`pio run -e default` run after `pio run -e simulator` in the same worktree left
+`.pio/build/` holding only `default`. The simulator binary was gone, and the
+scripted screenshot run that followed failed with
+`No such file or directory` -- which reads like a build that never happened
+rather than a build that was deleted.
+
+PlatformIO keys the build directory on a project checksum that the environment
+is part of, so switching environment invalidates it. Nothing warns.
+
+Build one environment, use its artefact, and only then switch. When two
+environments are needed at once -- a device binary and a simulator run against
+the same commit, say -- give each its own worktree.
+
+Measured 2026-09-07, `settings-facade` on `develop`, `default` and `simulator`.

@@ -59,3 +59,44 @@ T5 S3 Pro with no X4 available, then merged straight into `develop` as
 ## Existing branches
 
 - `release/lilygo-t5-s3-pro` — created 2026-08-31 from `develop`.
+
+## Fork from `origin/release/<device>`, never from the local ref
+
+The local `release/<device>` branch is usually checked out in some other
+session's worktree, pinned wherever that session left it. On 2026-09-07 the
+local `release/lilygo-t5-s3-pro` was **136 commits behind origin and 0 ahead**,
+and a branch taken from it built cleanly and was minutes from being flashed
+against a stale base.
+
+What caught it was the pre-flash check (`../../CLAUDE.md`, "Only flash a
+rebased branch") -- run against `origin/release/<device>` rather than against
+`develop`, which is the wrong target for a device branch:
+
+```
+git -C firmware/explorink fetch origin
+git -C <worktree> log --oneline origin/release/<device> ^HEAD
+```
+
+Empty means current. Anything listed means rebase, rebuild, then flash.
+
+The same stale ref makes `git branch -d` lie. It compares against the local
+branch and answers `not fully merged` for a branch that is fully merged into
+origin. Check the real question, then force:
+
+```
+git -C firmware/explorink merge-base --is-ancestor <branch> origin/release/<device>
+git -C firmware/explorink branch -D <branch>
+```
+
+## Carrying one change onto a device branch is a cherry-pick, not a merge
+
+A `git merge` of a `develop`-based branch drags every `develop` commit the
+device branch has not taken -- 54 of them on 2026-09-07, against a device
+branch that was itself 93 commits ahead. The hardware pass that follows then
+measures all of it instead of measuring the change.
+
+Cherry-pick the commits instead, resolve the conflicts against what the device
+branch actually has, and leave the `develop` sync as its own decision with its
+own hardware pass. The 2026-09-07 case is a worked example: the release branch
+had no `STR_TOUCH_MODE` row at the time, so the conflict resolution kept the
+device branch's shape rather than importing a `develop` feature sideways.
