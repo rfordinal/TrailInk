@@ -20,9 +20,11 @@ The person carrying it finds the device unresponsive: the map still on the glass
 USB port on the host, no BLE, and no crash report on the card. Pressing the
 power button boots it, and it lands on Home rather than back in the map.
 
-Reported three times up to 2026-09-07, twice on a walk. None of the three could
-be explained afterwards, because **nothing the device kept said how the previous
-boot ended**.
+Reported four times up to 2026-09-08 -- twice on a walk, once on a flight. The
+first three could not be explained afterwards, because **nothing the device kept
+said how the previous boot ended**. **The fourth was explained**, from
+`power.csv` plus the settings file rather than from anything this record wrote:
+it was an ordinary auto-sleep, and the section below has it.
 
 **The first of them is written up: `docs/PROGRESS.md`, 2026-09-05, "A device
 dead after a walk"** (parent repo). A T5 S3 Pro came back from a 4 h 36 min walk
@@ -42,6 +44,63 @@ Every one of those symptoms is also what a healthy deep sleep looks like:
   `lib/hal/HalPowerManager.cpp`) so the host's port disappears **[repo]**
 - it then calls `powerDownRailsForSleep()`, which cuts the touch rail -- the
   comment there says it outright: *"Trade-off: no touch-to-wake"* **[repo]**
+
+## A GNSS session has nothing holding it awake
+
+**This is what the fourth occurrence turned out to be, measured 2026-09-08, and
+it is a defect rather than a mystery.** The device was asleep, not dead.
+
+`MapActivity::preventAutoSleep()` returns
+`freeink::BlePositionServer::getInstance().isRunning()` and nothing else. So the
+only thing that keeps the map screen awake is **a phone**. On the device's own
+GNSS nothing does, because `lastActivityTime` is reset only by a button, by
+touch while touch is enabled, and by the tilt sensor (`src/main.cpp`, the
+`userInput` line) -- **an arriving GNSS fix is not input**. After
+`sleepTimeoutMinutes` with no hands on it, a device that is tracking perfectly
+deep-sleeps and cuts its own track. **[repo]**, and **[measured]** below.
+
+### The evidence
+
+`power.csv` off the device's own web server ([`../../docs/device-log-forensics.md`](../../docs/device-log-forensics.md)).
+The run ended at uptime **10,233 s** (2 h 50 min):
+
+| at the last row | |
+| --- | --- |
+| `gnss_run` / `gnss_tracked` | 1 / 8 -- receiver running, eight satellites |
+| `ble` | 0 -- BLE stack down, so `preventAutoSleep()` was false |
+| `batt_mv` / `batt_pct` | 3,813 / 58 %, slope flat (3,816 to 3,813 over six minutes) |
+| `heap` / `min_heap` | 174,076 B, unmoved through the whole tail |
+| `ref_window` | 828 and climbing -- the map was still redrawing |
+| rows | 171, continuous, no gap over 75 s |
+
+Nothing crashed: the coredump partition read afterwards was **byte-identical**
+to a read four days earlier, so no panic and no watchdog fired. And the next run
+began on battery with no charge in between, so a button press woke it.
+
+Settings that complete the picture: `sleepTimeoutMinutes=10`, `sleepScreen=6`
+(`QUICK_RESUME`), `lastSleepActivity=1` (`SLEEP_ACTIVITY_MAP`).
+
+### Why it reads as a dead device
+
+Two things hide the sleep, and both are working as designed:
+
+- **`QUICK_RESUME` keeps the frame.** `SleepActivity::renderLastScreenSleepScreen()`
+  leaves the map on the glass and adds only a moon icon bottom-left. Nothing
+  announces the sleep.
+- **The frontlight cannot wake it.** The light is a hold on the user button or on
+  the GT911 home key, and **neither is a deep-sleep wake source** -- only
+  `BOOT`/ext1 is armed (`freeink::PowerManager::deepSleepUntilPowerButton()`).
+  So reaching for the light is guaranteed to fail on a sleeping device. That is
+  how this occurrence was found, and it is why "no button responded" was
+  reported.
+
+So the honest description is not "the device froze". It is: **it slept, said
+nothing, and the button a person reaches for first is the one that cannot wake
+it.**
+
+Tracked as **T-283**, which also carries the warning against the obvious fix:
+simply OR-ing `Gnss::isRunning()` in makes a receiver left switched on hold the
+device awake until the cell is flat.
 
 ## Why the boot path parks the device
 
@@ -157,8 +216,16 @@ are archived under the parent repo's `docs/crashes/undated-t5s3-loop-task-wdt/`.
 
 ## What is still open
 
-- **The three reported events are unexplained.** Ruled out so far: a panic or
-  watchdog reset for the 2026-09-07 event (the coredump in flash predates the
+- **The fourth event is explained** (auto-sleep, above). **The first three are
+  not, and are not proven to be the same thing.** Auto-sleep is consistent with
+  all of them -- it explains the stale frame, the dead touch and the absent USB
+  port equally well -- but one detail does not fit yet: the 2026-09-07 wake
+  booted `Boot` then `Home`, while a `QUICK_RESUME` sleep clears
+  `showBootScreen` and should have resumed into the map. Either an extra boot
+  intervened, or that one had a different cause. **What would settle it:** a
+  `boot.csv` row per occurrence, which is the whole point of this file.
+  Ruled out for 2026-09-07: a panic or
+  watchdog reset (the coredump in flash predates the
   running build, and overwrite is enabled, so no panic has happened since), and
   plugging USB as the trigger (**[measured]** 2026-09-07: uptime ran unbroken
   across an unplug and replug, so a cable does not power-cycle this board).

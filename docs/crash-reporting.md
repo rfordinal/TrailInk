@@ -74,6 +74,25 @@ Tracked as T-234. Note also that the task watchdog sets `g_panic_abort = true`
 directly instead of calling `panic_abort()`, so even if the reset reason were
 accepted, the reason string would still be empty.
 
+**But five seconds is the configured figure, not an observed one, and
+`power.csv` disagrees with it.** Three separate T5 S3 Pro runs recorded a
+`loop_max_ms` of **17,029**, **17,040** and **5,969 ms**, and all three kept
+running for hours afterwards with no panic and no coredump
+`[measured, 2026-09-08, off the device's own power.csv]`. A 17-second stall
+against a 5 s timeout should have aborted twice over.
+
+**Do not conclude the timeout is above 17 s from that** -- it would contradict
+the 15.97 s `loopTask` abort recorded on `release/lilygo-t5-s3-pro`. The safe
+reading is that `loop_max_ms` and the window the watchdog actually watches are
+**not the same quantity**: something inside the long operation may be feeding the
+watchdog, or the two are measured over different spans. Neither number can be
+used to infer the other. Settle it by printing the effective timeout and
+`esp_task_wdt_status(nullptr)` once at boot.
+
+**One consequence to carry regardless:** *"no coredump, therefore no watchdog"*
+is not a safe inference. It rules out a panic path that **completed**, and
+nothing more.
+
 **This gap is not hypothetical.** A coredump pulled from a T5 S3 Pro on
 2026-09-07 held a task-watchdog trigger on `loopTask` and had left nothing at
 all on the SD card. It was found only because somebody read the partition by
