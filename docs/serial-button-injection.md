@@ -54,7 +54,7 @@ an injected press.**
 
 | what | where | effect |
 |---|---|---|
-| long-press-to-sleep | `src/main.cpp`, `getPowerButtonHeldTime()` | `CMD:BUTTON power 5000` does not sleep the device |
+| long-press-to-sleep | `src/main.cpp`, `getPowerButtonHeldTime()` | `CMD:BUTTON power 5000` cannot sleep the device -- **read off the code, not measured** |
 | POWER+DOWN screenshot combo | `src/main.cpp` | not reachable; `CMD:SCREENSHOT` already is |
 | the reader's own POWER+DOWN check | `src/activities/reader/EpubReaderActivity.cpp` | not reachable |
 
@@ -102,6 +102,11 @@ and `simulator`, absent from `gh_release`, `gh_release_rc` and `slim`. The relea
 build has no injector compiled in at all -- `DebugInput.cpp` is empty there and
 the call sites inline to `false`.
 
+**Measured 2026-09-08**, not only reasoned from the `#ifdef`: a `gh_release`
+build carries no `BUTTON_OK` or `BUTTON_ERR` string and no `DebugInput` symbol,
+while the archived devel build carries one and three. So the check could have
+failed.
+
 The reason is the standing one: the device gets lost or stolen, and the person
 holding it can plug in USB. A press injector is a thumb for that person -- walk
 the menus, open the rider's books, read their pins, all without touching the
@@ -120,8 +125,9 @@ The command reveals nothing by itself: the reply is the button name back.
 
 `src/` is shared, so the simulator build carries `DebugInput` and the injection
 point. It has no way to send a command: its `HardwareSerial::available()`
-returns 0 (`src/HardwareSerial.h` in the simulator fork), so nothing ever
-reaches `main.cpp`'s `CMD:` branch there. Driving the simulator's UI from a
+returns 0 (`src/HardwareSerial.h` in the simulator fork) -- read off that
+header, never tried -- so nothing ever reaches `main.cpp`'s `CMD:` branch
+there. Driving the simulator's UI from a
 script needs a serial-input path in the fork first, or a different door
 altogether -- the fork's JSON socket (`docs/simulator.md`).
 
@@ -139,22 +145,30 @@ altogether -- the fork's JSON socket (`docs/simulator.md`).
   back with `CMD:SCREENSHOT`.
 - **All seven names were pressed.** `left` and `right` pan the Look around view
   east and west: `right` then `left` came back to the same frame, 16 differing
-  pixels out of 518,400 and all of them inside one label's bounding box, so the
-  two steps really are one step each and symmetric.
+  pixels out of 518,400, in two clusters on map linework (around x=325 y=362
+  and x=330 y=556, listed pixel by pixel and looked at zoomed), so the two
+  steps really are one step each and symmetric. The first write-up called those
+  pixels a label's bounding box; that was inferred from the box and never
+  looked at. A bounding box drawn around two clusters says nothing about what
+  is inside them.
 - **The hold works, and a tap is not a hold.** In Look around, `--hold 1500 up`
   zoomed the map one rung (scale bar 500 m to 200 m) instead of panning, which
   is the `getHeldTime() >= kObserveZoomHoldMs` path (600 ms,
   `MapActivity.cpp`). A plain `up` on the same screen panned north with the
   zoom unchanged. So the injected held time lands on both sides of a real
   600 ms threshold.
-- **`power` cannot sleep the device.** An injected `power` press left the map
-  on screen and the port up, as the direct-`HalGPIO` table above predicts.
-- **It counts as user input.** Every injected press logged
-  `[PWR] Restoring normal CPU frequency`. That is the `userInput` flag in
-  `loop()`, and the auto-sleep deadline reads the same flag one line later, so
-  the sleep timer is reset by the same press. Not separately timed out to
-  sleep -- the map screen holds `preventAutoSleep()` anyway, so that test needs
-  a Home screen and a full timeout of pressing.
+- **`power` was pressed, but not held.** The run sent a 0 ms tap, which no real
+  button would have slept either, so that check could not have failed. It left
+  the map on screen and the port up. The sleep path reads `HalGPIO` directly
+  and an injected press never reaches it -- read off `main.cpp`, and open until
+  a `--hold 5000 power` run says otherwise (T-286 in the parent repo).
+- **It counts as user input.** Both runs whose log was captured (`press.py -v`)
+  logged `[PWR] Restoring normal CPU frequency` on the press. That is the
+  `userInput` flag in `loop()`; the auto-sleep deadline reads the same flag one
+  line later, so the same press resets the sleep timer -- **read off
+  `main.cpp`**, not timed out on hardware. The map screen holds
+  `preventAutoSleep()` anyway, so timing it out needs the Home screen and a
+  full timeout of pressing (T-286).
 - **Not run on an X4 or X4 Pro** (C3). The injection point is board-agnostic
   `src/` code, but the C3 envs (`default`, `sticky`) have not been flashed with
   it.
