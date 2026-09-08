@@ -22,6 +22,9 @@ scripts/upstream_review.sh
 | Last shared commit | `1a7f5a9e`, 2026-07-31 |
 | Our divergence since | 372 files, +86,066 / -12,762 |
 | **Files conflicting on `git merge upstream/develop`** | **46** |
+| Measured between | `7ff9e5e8` (our `develop`) and `7db14a01` (`upstream/develop`) |
+
+A conflict count means nothing without both tips, so they are part of the number.
 
 The conflicts are not in the reader code we never touch. They are in the files
 both sides rewrote: `platformio.ini`, three workflows, `scripts/git_branch.py`,
@@ -51,6 +54,16 @@ commit's paths:
 | Mixed: partly in strippable paths | **51** |
 | Untouched by any strip | **67** |
 
+**These three numbers are only as good as the path list.** They come from
+classifying every commit's touched paths against: `lib/Epub/`,
+`src/activities/reader/`, `lib/I18n/translations/`, `lib/EpdFont/builtinFonts/`,
+`src/activities/dictionary`, `src/activities/opds`, `lib/Dictionary`,
+`src/network/KOReader`, `lib/KOReaderSync/`, `src/activities/settings/Opds`,
+`src/activities/settings/Font`, `lib/Txt/`, `lib/Xtc/`, `lib/expat/`,
+`lib/MiniBidi/`, `lib/InflateReader/`, `test/epubs/`, `test/hyphenation`. A
+narrower strip moves them toward 67 and a wider one away from it, so the list is
+part of the claim.
+
 So the strip removes about a sixth outright and thins half of the rest. **It does
 not make the merge free** -- 67 commits are genuinely in our own surface -- but it
 turns every future modify/delete into "keep deleted", and it is on the roadmap
@@ -60,6 +73,18 @@ fork strips the e-reader stack over time).
 Order matters: **strip first, merge second.** Stripping during a conflict
 resolution is how you delete something upstream had just fixed for a reason you
 never read.
+
+## One thing this pass got wrong about itself
+
+The pass reported the `sticky` env break as three weeks nobody noticed. **Half of
+that is false.** The same defect on the three release envs was found 2026-09-02,
+written into [`build-environments.md`](build-environments.md) and tracked as T-240
+in the parent repo. What was genuinely unreported is the `sticky` half: that pass
+was hunting a release binary and never built the S3 env.
+
+Kept here because the session that found the fix also wrote the wrong story about
+it, and the story is the part that travels. **Read the topic doc before claiming a
+finding is new.**
 
 ## The review pass, step by step
 

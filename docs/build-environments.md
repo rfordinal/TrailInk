@@ -136,7 +136,7 @@ image SHA256 that follows from them (67 bytes at offsets 177-208, 1576669,
 1578089 and the trailing 32) -- the block was excluded there before, via
 `-UENABLE_SERIAL_LOG`, and is excluded now, via the absent flag.
 
-## `gh_release` does not compile at all right now
+## The release envs did not compile from 2026-08-17 to 2026-09-08
 
 And the other two release envs almost certainly do not either. **Measured** on
 `gh_release`. `gh_release_rc` and `slim` are **read**, not measured: they carry
@@ -156,10 +156,36 @@ which is `default` alone, for the reason in the section above. `gh_release`,
 `gh_release_rc` and `slim` all fail on that line. It arrived with the power
 work (`c0c8ef09`, `8f44dbc2`), and it is a separate defect from the
 `FREEINK_CAP_BLE_PERIPHERAL` gap: that one makes a release binary useless, this
-one stops it existing. Tracked as T-237 in the parent repo's `docs/TODO.md`.
+one stops it existing. Tracked in the parent repo's `docs/TODO.md` as T-240 (and fixed, see below).
 
 The gate measurement above was taken with the include path lent to the release
 envs through a throwaway `platformio.local.ini`, nothing committed.
+
+**Fixed 2026-09-08.** `HalPowerManager.cpp` now guards the include with
+`__has_include(<esp_bt.h>)` and skips the controller question when the header is
+absent -- where the BT component is not built no controller can exist, so the floor
+answers itself and the guard cannot hide a wrong clock. **Measured after the fix, in
+a fresh worktree with no `platformio.local.ini`:**
+
+| Env | Chip | RAM | Flash |
+|---|---|---|---|
+| `gh_release` | ESP32-C3 | 16.1 %, 52,812 B | 57.5 %, 3,768,871 B |
+| `gh_release_rc` | ESP32-C3 | 16.1 %, 52,812 B | 57.5 %, 3,768,867 B |
+| `slim` | ESP32-C3 | 16.1 %, 52,788 B | 56.8 %, 3,720,817 B |
+| `sticky` | ESP32-S3 | 19.2 %, 62,844 B | 55.0 %, 3,606,343 B |
+
+So the "almost certainly" above was right: all three release envs failed, and so did
+**`sticky`**, the only S3 env -- which nobody had reported, because the 2026-09-02
+pass was hunting a release binary and never built it. The dating is read off the
+commit that added the include plus a check that `sticky` carried no BLE dependency
+then either (`extends = base` and one log flag, at `8f44dbc2` and today), so the env
+could not have compiled from that commit onward.
+
+**Two consequences worth keeping.** The task was in the parent repo as **T-240**,
+not T-237 as the paragraph above used to say, and its compile half is now done; what
+remains of it is CI, tracked as T-280. And the lesson is the one the whole section
+demonstrates twice: **an env nobody builds is an env that is broken**, so a merge
+builds every env, not the one being worked in.
 
 ## `platformio.ini` states a range, not a version
 

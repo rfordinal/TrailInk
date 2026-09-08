@@ -114,8 +114,11 @@ git -C freeink-sdk fetch upstream
 git -C freeink-sdk push origin upstream/main:main     # fast-forward, ask first
 ```
 
-**Not done: that push needs the maintainer's word.** Until then the pin works and
-this paragraph is the record of why it is not clean.
+**Done 2026-09-08.** Our `main` was fast-forwarded to upstream (`2400379..7f6bd0f`)
+and the pin is now reachable from our own branch. It was verified as a real
+fast-forward before the push -- `git merge-base --is-ancestor origin/main upstream/main`
+held, so nothing of ours could be lost. Keep it that way: that one line is the check
+before any future push.
 
 ### The 2026-09-08 bump, and what it cost
 
