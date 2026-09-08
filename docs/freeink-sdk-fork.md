@@ -185,10 +185,24 @@ happened and both were found on 2026-09-08.
 **A commit that moves the gitlink without saying so.** `44fe2972` on
 `release/lilygo-t5-s3-pro` (2026-09-07, *"feat(t5s3): the frontlight level is a
 Settings row"*) moved that branch's pin backwards from `55a49587` to
-`e514a868`, the base `explorink` forks from. Its 17-line body does not mention
-the submodule. That dropped both patches on that branch, including the LoRa
+`e514a868`, the base `explorink` forks from. Its body does not mention the
+submodule at all. That dropped both patches on that branch, including the LoRa
 chip-select fix BUG-037 had confirmed on hardware 2026-09-03. Restored and
-verified on a T5 S3 Pro the next day.
+verified on a T5 S3 Pro the next day. The restore is `089d1d42`, merged as
+`1a816ff0`; the build it was confirmed with is the tag
+`good/2026-09-08-t5s3pro-sdk-pin` and the archived binary
+`docs/firmware-builds/2026-09-08-t5s3pro-sdk-pin-089d1d42.bin` in the parent
+repo.
+
+**What that hardware pass does and does not cover.** LilyGo T5 S3 Pro (MAC
+`7c:2c:67:8a:4c:b4`), env `t5s3pro`, flashed over `/dev/ttyACM0`, hash verified.
+The device booted to Home and the map screen drew live tile linework. That is an
+SD **read**: tiles have one source in this firmware
+(`src/activities/map/HalFileSource.cpp:13`, `Storage.open`) and nothing about the map
+survives a reset (`src/activities/map/MapActivity.h:47`), so the frame cannot be
+a stale panel or a cache. It does **not** cover SD **writes**, which is what
+BUG-037 actually failed at (`ERR mkdir failed`), and it does not exercise
+`readFileToStream`, which needs a large WebDAV GET.
 
 **A bump pass that lands on a mirror commit.** The 2026-09-08 SDK pass moved
 `develop` from `e514a868` to `cb9167d5`, 208 commits -- deliberate and measured, for the X4
