@@ -137,10 +137,16 @@ altogether -- the fork's JSON socket (`docs/simulator.md`).
   `up confirm` opened Explore, `confirm` opened the map menu, `confirm` again
   entered Look around, and `back back` came out to Home. Each step was read
   back with `CMD:SCREENSHOT`.
-- **The hold works.** In Look around, `--hold 1500 up` zoomed the map one rung
-  (scale bar 500 m to 200 m) instead of panning, which is the
-  `getHeldTime() >= kObserveZoomHoldMs` path (600 ms, `MapActivity.cpp`). A
-  tap there pans. So the injected held time reaches a real long-press check.
+- **All seven names were pressed.** `left` and `right` pan the Look around view
+  east and west: `right` then `left` came back to the same frame, 16 differing
+  pixels out of 518,400 and all of them inside one label's bounding box, so the
+  two steps really are one step each and symmetric.
+- **The hold works, and a tap is not a hold.** In Look around, `--hold 1500 up`
+  zoomed the map one rung (scale bar 500 m to 200 m) instead of panning, which
+  is the `getHeldTime() >= kObserveZoomHoldMs` path (600 ms,
+  `MapActivity.cpp`). A plain `up` on the same screen panned north with the
+  zoom unchanged. So the injected held time lands on both sides of a real
+  600 ms threshold.
 - **`power` cannot sleep the device.** An injected `power` press left the map
   on screen and the port up, as the direct-`HalGPIO` table above predicts.
 - **It counts as user input.** Every injected press logged
