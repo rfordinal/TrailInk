@@ -10,6 +10,8 @@ findings or the design:
   [`power-plan.md`](power-plan.md).
 - Findings (what is measured, what broke, why):
   [`power-management.md`](power-management.md).
+- The LoRa/GNSS rail on T5 S3 Pro (the L series, and the gauge-current
+  instrument it needs first): [`lora-idle-power.md`](lora-idle-power.md).
 
 Every run here uses the frozen baseline and its four conditions
 (`power-plan.md`, "The frozen baseline"). Experiment order, agreed 2026-08-19:
