@@ -72,3 +72,88 @@ driver, e-ink init and ghosting changes, UC8279C grayscale, a new X4C board,
 deep-sleep panel parking. Bumping the pin is a separate task with its own
 hardware pass on an X4 or X4 Pro. It does not ride along with a board bring-up
 fix. See [`branching.md`](branching.md).
+
+## Rule, 2026-09-08: the fork stays a mirror and the bump is its own pass
+
+**Maintainer's words:** track upstream closely and carry only small changes of our
+own. Two consequences, and the second one is new:
+
+- **Moving the SDK pointer is its own pass**, never folded into a CrossPoint sync.
+  The other track has its own file and its own rules
+  ([`upstream-crosspoint.md`](upstream-crosspoint.md)). The reason is diagnostic:
+  the SDK is a library whose API only grows, so a bump either builds or does not,
+  while a CrossPoint sync is a judgement call per commit. Bundled, a red build says
+  nothing about which half broke.
+- **A local SDK commit is a cost, not a feature.** The one patch this fork carried
+  on `explorink` (the T5 S3 Pro EPD config asserting the LoRa chip select) went
+  upstream as PR #73 and was **merged 2026-09-03**. So the right end state is what
+  we have: nothing of ours in the SDK line we pin.
+
+Measured 2026-09-08 through the GitHub compare API:
+
+| | Value |
+|---|---|
+| Our `main` | `24003795`, 2026-09-02, **zero commits of its own** -- a plain ancestor of upstream `main` |
+| Upstream `main` ahead of our `main` | 18 commits |
+| `explorink` branch | one patch, now redundant: PR #73 is upstream |
+
+### The pin has to sit on a branch of our own remote
+
+**Trap found 2026-09-08.** The pin `develop` now carries, `cb9167d5`, is **9 commits
+ahead of our fork's `main`**, so it is on no branch of `rfordinal/freeink-sdk`. It
+resolves only because GitHub keeps a fork network in one object store -- a property
+of the host, not of our repository. If that ever stops holding, a fresh clone fails
+`git submodule update` with a commit-not-found error that names nothing useful.
+
+The fix is one push, and it is the rule anyway: fast-forward our `main` to upstream
+`main`, then pin a commit that sits on it. Nothing can be lost -- our `main` has no
+commits of its own.
+
+```
+git -C freeink-sdk fetch upstream
+git -C freeink-sdk push origin upstream/main:main     # fast-forward, ask first
+```
+
+**Not done: that push needs the maintainer's word.** Until then the pin works and
+this paragraph is the record of why it is not clean.
+
+### The 2026-09-08 bump, and what it cost
+
+`e514a868` (2026-07-28) to `cb9167d5` (2026-09-04), 217 commits. What it is *for*:
+the **X4 Classic board profile** (`Board::XteinkX4Classic`, SDK
+`docs/xteink-x4c-support.md`, full pinout), which is what an S3 Xteink env needs.
+It also brings our own PR #73 in from upstream, so the `explorink` patch stops being
+load-bearing.
+
+Evidence, all from a laptop, none from a device:
+
+- **No header deleted, none renamed** (`git diff --name-status e514a868 cb9167d5 -- '*.h'`):
+  68 headers change, additive, +8548 lines, mostly FreeInkUI list, tile-grid and
+  sheet components we do not link. `BoardConfig.h` gains 780 lines.
+- **All six envs build**: `default`, `gh_release`, `gh_release_rc`, `slim` (C3),
+  `sticky` (S3), `simulator` (host).
+- **Host tests 437 of 437**, 2.73 s.
+- **Cost, measured by building the S3 env against each SDK commit in turn:**
+  RAM +296 B, flash +21,920 B (+21 kB) for 217 commits.
+
+| Env | Chip | RAM | Flash |
+|---|---|---|---|
+| `default` | ESP32-C3 | 18.0 %, 58,924 B | 61.5 %, 4,033,587 B |
+| `gh_release` | ESP32-C3 | 16.1 %, 52,812 B | 57.5 %, 3,768,871 B |
+| `gh_release_rc` | ESP32-C3 | 16.1 %, 52,812 B | 57.5 %, 3,768,867 B |
+| `slim` | ESP32-C3 | 16.1 %, 52,788 B | 56.8 %, 3,720,817 B |
+| `sticky` | ESP32-S3 | 19.2 %, 62,844 B | 55.0 %, 3,606,343 B |
+
+**None of that says the firmware runs.** A bump is trusted once a C3 device boots,
+draws a map and holds a BLE link on it.
+
+### Checklist for the next bump
+
+1. `git -C freeink-sdk fetch upstream`, then read what changed under
+   `libs/hardware/BoardConfig`, `libs/display` and `docs/`.
+2. Confirm no header was deleted or renamed.
+3. Pin a commit that is on our fork's `main`; fast-forward `main` first if it is not.
+4. Build every env, run the host tests, record RAM and flash for one C3 and one S3
+   env here.
+5. Say in the commit message what the bump is **for**. A pointer move with no reason
+   cannot be reverted with confidence.
