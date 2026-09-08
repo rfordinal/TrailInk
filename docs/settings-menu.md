@@ -54,6 +54,26 @@ phone's BLE packet and ignores `SETTINGS.clockFormat` outright
 and `OpdsServerListActivity` are all still compiled and still constructible.
 Only the rows that started them are gone.
 
+## Frontlight: a row added, on the boards that have one
+
+**Added 2026-09-07.** Display gained a **Frontlight** row, compiled in only where
+the board has one (`#if FREEINK_CAP_FRONTLIGHT` in `SettingsList.h`). It is a
+`SettingType::VALUE`, 10 to 100 % in tens, rendered with a `%` suffix (the
+`STR_FRONTLIGHT` case in `SettingsActivity.cpp`).
+
+Two things make it unusual and both are deliberate:
+
+- **It carries no JSON key.** `frontlightOn` and `frontlightBrightness` are
+  serialised by hand (`CrossPointSettings.cpp:109-110`, `:238-244`), so a list
+  entry with a key would write the same field a second time.
+- **Off is not one of its values.** Off is a state the buttons produce -- the
+  home key's hold toggles, the user button's hold walks the rungs -- and storing
+  it would lose the level the rider chose.
+
+`loop()` applies a change while the light is on and never turns it on: choosing a
+level is not a request for light. The gestures that share this number are in
+`docs/lilygo-t5s3-bringup.md`, "The remap, 2026-09-07".
+
 ## Rows hidden, and the consumer that proves them reader-only
 
 Each of these was hidden because its only consumer is a reader activity. The

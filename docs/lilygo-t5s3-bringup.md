@@ -271,9 +271,14 @@ press told apart by how long it is held, so the split has to be a duration a
 gloved thumb can aim at. `CrossPointSettings::getPowerButtonDuration()` answers
 400 ms, which is short enough that a deliberate tap sleeps the device instead of
 stepping back. `powerHoldDurationMs()` in `main.cpp` returns 1500 on this board
-and defers to the setting everywhere else, and **wake uses the same number**
-(`verifyPowerButtonWakeup`), so a press too short to wake is also too short to
-sleep.
+and defers to the setting everywhere else, and wake is handed the same
+number -- but **wake does not enforce 1500 ms**. `verifyPowerButtonWakeup()`
+subtracts the boot time already elapsed (`lib/hal/HalGPIO.cpp:212-213`), so the
+requirement collapses to *the button is still down when `setup()` reaches that
+check*, down to 1 ms once boot exceeds the threshold. Sleep is the only side
+this number gates. `[read]` -- **open:** how long boot takes to that point on
+this board is unmeasured, and one timestamped log line at the call site would
+settle whether a wake press has to be held at all.
 
 **The Back tap is emitted on release, and only if the press was short.** A hold
 long enough to sleep never reaches the release branch at all -- `loop()` calls
