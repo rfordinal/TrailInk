@@ -42,8 +42,8 @@
 #include <cstring>
 
 #include "CrossPointSettings.h"
-#include "TouchPolicy.h"
 #include "CrossPointState.h"
+#include "DebugInput.h"
 #include "GnssAccess.h"
 #include "GnssLog.h"
 #include "KOReaderCredentialStore.h"
@@ -53,6 +53,7 @@
 #include "PowerLog.h"
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
+#include "TouchPolicy.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
@@ -1167,6 +1168,11 @@ void loop() {
 
   gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
   gpio.update();
+  // One step of any injected button press, in the same frame the real buttons
+  // were read (DebugInput.h). Before the CMD: parser below, so a press queued
+  // this iteration starts on the next one and never lands mid-frame with the
+  // activity having already read its edges.
+  DebugInput::pump(gpio.updateSequence(), millis());
   // The second way to the light: a hold on the capacitive home key below the
   // panel, on any board that has one. Handled here rather than in an activity so
   // every screen has it, and before activityManager.loop() so the screen on top
@@ -1485,6 +1491,44 @@ void loop() {
           logSerial.printf("SETTING_OK:%s=%u\n", key.c_str(), static_cast<unsigned>(*target));
         }
 #endif  // ENABLE_SETTING_CMD
+#ifdef ENABLE_BUTTON_CMD
+      } else if (cmd == "BUTTON" || cmd.startsWith("BUTTON ")) {
+        // Press a hardware button from the host. Every screen that is not the
+        // map or the sync screen is reachable only by a thumb, so without this
+        // a laptop can put two activities on the panel and read the panel back
+        // but cannot walk from one screen to the next -- see DebugInput.h for
+        // why that keeps costing us reviews of screens nobody can reach.
+        //
+        //   CMD:BUTTON down          ->  BUTTON_OK:down:0
+        //   CMD:BUTTON back 1500     ->  BUTTON_OK:back:1500     (long press)
+        //   CMD:BUTTON middle        ->  BUTTON_ERR:unknown:back,confirm,...
+        //
+        // Devel builds only, and deliberately: a shipped injector is a thumb
+        // for whoever finds a lost device. Same gate shape as CMD:SETTING
+        // above, its own flag rather than a logging one.
+        String rest = cmd.length() > 6 ? cmd.substring(7) : String("");
+        rest.trim();
+        const int space = rest.indexOf(' ');
+        String name = space < 0 ? rest : rest.substring(0, space);
+        String holdArg = space < 0 ? String("") : rest.substring(space + 1);
+        name.trim();
+        holdArg.trim();
+        const uint8_t button = DebugInput::buttonFromName(name.c_str());
+        // A hold long enough to matter is a second or two. The cap is there so
+        // a typo (`1500000`) cannot park the queue for half an hour with the
+        // host waiting on presses that never run.
+        constexpr long kMaxHoldMs = 10000;
+        const long holdMs = holdArg.length() == 0 ? 0 : holdArg.toInt();
+        if (button == DebugInput::kNoButton) {
+          logSerial.printf("BUTTON_ERR:unknown:back,confirm,left,right,up,down,power\n");
+        } else if (holdMs < 0 || holdMs > kMaxHoldMs) {
+          logSerial.printf("BUTTON_ERR:hold:0-%ld\n", kMaxHoldMs);
+        } else if (!DebugInput::queue(button, static_cast<uint32_t>(holdMs))) {
+          logSerial.printf("BUTTON_ERR:busy\n");
+        } else {
+          logSerial.printf("BUTTON_OK:%s:%ld\n", DebugInput::kButtonNames[button], holdMs);
+        }
+#endif  // ENABLE_BUTTON_CMD
       } else if (cmd == "GOTO_MAP" || cmd.startsWith("GOTO_MAP ")) {
         // Power saving is already off for every CMD: above -- load-bearing here
         // in particular: NimBLEDevice::init() (MapActivity::onEnter() ->
@@ -2068,7 +2112,10 @@ void loop() {
   // spent the whole time on the throttled 50 ms loop, which also stretched the
   // key's own gesture timing.
   const bool homeKeyActivity = gpio.wasHomeKeyPressed() || gpio.wasHomeKeyTapped() || gpio.wasHomeKeyLongPressed();
-  const bool userInput = gpio.wasAnyPressed() || gpio.wasAnyReleased() || homeKeyActivity ||
+  // An injected press counts as user input for both deadlines. Without it a
+  // host walking the UI from a script would watch the device throttle and then
+  // auto-sleep under it, which drops the very port the script is driving.
+  const bool userInput = gpio.wasAnyPressed() || gpio.wasAnyReleased() || homeKeyActivity || DebugInput::active() ||
                          (TouchPolicy::touchActive() && gpio.wasTouchActivity()) || halTiltSensor.hadActivity();
   if (userInput || activityManager.preventAutoSleep()) {
     lastActivityTime = millis();
