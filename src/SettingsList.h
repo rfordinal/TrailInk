@@ -323,8 +323,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // placeholder. Today the field rotates the *reader* only
         // (EpubReaderActivity, TxtReaderActivity, SleepActivity read it; the
         // map and the rest of the UI do not), so offering it here would rotate
-        // nothing the rider is looking at. It stays visible because a
-        // handlebar mount wants a real screen orientation and this is the
+        // nothing the rider is looking at. It stays visible because a device
+        // carried in landscape wants a real screen orientation and this is the
         // field that will carry it — see docs/settings-menu.md.
         SettingInfo::Enum(
             StrId::STR_SCREEN_ORIENTATION, &CrossPointSettings::orientation,
