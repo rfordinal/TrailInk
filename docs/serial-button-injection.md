@@ -125,8 +125,15 @@ altogether -- the fork's JSON socket (`docs/simulator.md`).
 - `test/debug_input` -- nine host tests over the frame shape: press and release
   edges, hold, two taps not merging, queue order, a full queue refused, a
   double pump in one frame, name parsing. `ctest` runs them with the rest.
-- **Not run on hardware yet.** What a device pass has to check: a press
-  actually moves the selection on Home, a `--hold 1500` back in the reader goes
-  Home rather than one page, `power` short-press force-refreshes and does not
-  sleep, and the injected presses keep the device awake through a walk longer
-  than the sleep timeout.
+- **Verified on the LilyGo T5 S3 Pro, 2026-09-08**, but from the
+  `release/lilygo-t5-s3-pro` line, not from this one: the board is 200 commits
+  ahead of `develop` and a develop build would have dropped its bring-up. The
+  commit was cherry-picked there (`cmd-buttons-t5s3`, env `t5s3pro`) and the
+  whole run is written up in that branch's copy of this file. In short: a walk
+  from Home to the map and back, driven from the laptop with no thumb on the
+  board, all seven button names pressed, `--hold 1500 up` zooming in Look
+  around where a plain `up` pans, an injected `power` press unable to sleep the
+  device, and every press logging the CPU coming out of power saving.
+- **Not run on a C3** (X4, X4 Pro). The injection point is board-agnostic
+  `src/` code and the `default` build is clean, but no C3 has been flashed with
+  it.
