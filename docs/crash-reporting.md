@@ -87,6 +87,11 @@ writes the panel, which on e-ink is indistinguishable from a freeze.
 
 ## Reading the coredump
 
+**Check `app_elf_sha256` before anything else.** Both coredumps pulled in
+September 2026 belonged to a different build than the one running (`15463f308`
+on 2026-09-05, `277bbd45d` on 2026-09-07). A dump that is not from the event
+being chased decodes into a perfectly plausible answer to the wrong question.
+
 Enabled on every environment: `partitions.csv:7` puts a 64 kB `coredump`
 partition at `0xFF0000`, and the effective config sets
 `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH` with `..._DATA_FORMAT_ELF`.

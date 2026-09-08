@@ -58,7 +58,7 @@ const char* resetReasonName(esp_reset_reason_t reason) {
 // watchdog reset writes no crash_report.txt at all and does not trip the crash
 // screen, because HalSystem::isRebootFromPanic() tests only PANIC and
 // CPU_LOCKUP (docs/crash-reporting.md, "Gap 3"; T-234). Until this row existed
-// such a reset left no trace a rider could find.
+// such a reset left no trace the person carrying it could find.
 const char* wakeupCauseName(esp_sleep_wakeup_cause_t cause) {
   switch (cause) {
     case ESP_SLEEP_WAKEUP_UNDEFINED:

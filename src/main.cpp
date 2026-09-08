@@ -395,7 +395,7 @@ void setup() {
   const auto wakeupReason = gpio.getWakeupReason();
   // Both branches below park the device again without ever writing the panel --
   // setupDisplayAndFonts() is further down -- so e-ink keeps whatever frame was
-  // on it before the reset. To a rider that is indistinguishable from a freeze:
+  // on it before the reset. To whoever is carrying it, that is indistinguishable from a freeze:
   // a stale map, no touch, no USB, no BLE, and no crash report. Three such
   // events were reported before this record existed and none of them could be
   // told apart afterwards, so every exit from here says which it was

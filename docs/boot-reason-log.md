@@ -16,13 +16,23 @@ hardware, **[open]** nobody knows.
 
 ## The symptom
 
-A rider finds the device unresponsive: the map still on the glass, no touch, no
+The person carrying it finds the device unresponsive: the map still on the glass, no touch, no
 USB port on the host, no BLE, and no crash report on the card. Pressing the
 power button boots it, and it lands on Home rather than back in the map.
 
 Reported three times up to 2026-09-07, twice on a walk. None of the three could
 be explained afterwards, because **nothing the device kept said how the previous
 boot ended**.
+
+**The first of them is written up: `docs/PROGRESS.md`, 2026-09-05, "A device
+dead after a walk"** (parent repo). A T5 S3 Pro came back from a 4 h 36 min walk
+with no USB enumeration at all and the panel still holding a header. Battery was
+75 % / 3,922 mV and the heap was flat, so neither a flat cell nor a leak explains
+it. **That pass got further than this one on the cause and stopped one step short
+of the mechanism:** with both watchdogs set to panic it ruled out a hang and left
+brownout or the rail going away. What it did not explain is why the device then
+stays dead rather than rebooting -- which is what the park below does, and why
+`resolved` is a column.
 
 Every one of those symptoms is also what a healthy deep sleep looks like:
 
@@ -119,6 +129,10 @@ recording. **[repo]**
   them by eye.
 - **No card, no record.** `BootLog::record()` says so in the log when
   `Storage.ready()` is false.
+- **No previous-boot uptime.** T-262 asks for it and this does not record it, so
+  a row cannot say how long the device had been up before it died. That needs a
+  value persisted across the reset (RTC memory survives deep sleep and a
+  watchdog reset, not a power loss) and is still open.
 
 ## How this reads against a watchdog reset
 
@@ -148,6 +162,11 @@ are archived under the parent repo's `docs/crashes/undated-t5s3-loop-task-wdt/`.
   running build, and overwrite is enabled, so no panic has happened since), and
   plugging USB as the trigger (**[measured]** 2026-09-07: uptime ran unbroken
   across an unplug and replug, so a cable does not power-cycle this board).
+  Conditions on that measurement: the board was **awake with the map open** and
+  ran on battery across the unplug; uptime was continuous through both events
+  (674 s and climbing). **It says nothing about plugging into a board that is
+  already parked or unpowered**, which is the case the 2026-09-05 "rail going
+  away" hypothesis actually needs. One run, one board.
   Still possible: an ordinary auto-sleep timeout, or a momentary power loss
   resolved into a silent park.
 - **Whether a T5 S3 Pro ever actually reports `ESP_RST_POWERON` in the field.**
