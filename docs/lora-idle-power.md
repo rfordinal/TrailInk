@@ -35,6 +35,13 @@ The gauge already measures current directly. `BQ27220_CURRENT` is register
 `0x0C`, signed mA, and `BatteryMonitor.cpp` reads it today -- but only inside
 `isCharging()`, for the sign. Nothing logs the value.
 
+**Why the register and not the percentage.** `0x0C` is a sense-resistor
+measurement. State of charge is a *learned* quantity the gauge derives from a
+design capacity nobody here configured, which is why every mA in this campaign
+so far carries a plus-minus and a warning. Neither is trusted alone: the
+cross-check below compares an integral of the register against the steps of the
+percentage. **[read]**
+
 **L0, no device needed.** Log it.
 
 - Read `0x0C` from `BoardConfig::ACTIVE.batteryGauge.gaugeAddr` and add
@@ -121,14 +128,23 @@ Derived answers, each a subtraction of two rows:
 Recorded so the run can refute them rather than confirm a feeling.
 
 - **P1: `L2 - L1` = 20-30 mA**, nearly all of it the L76K. Quectel's L76K
-  Hardware Design V1.0 (2021-10-20) gives 29 mA for both acquisition and
-  tracking, 20 uA standby, 8 uA backup -- **[primary]**, table read 2026-09-08.
+  Hardware Design V1.0, 2021-10-20, gives 29 mA for both acquisition and
+  tracking, 20 uA standby, 8 uA backup -- table read 2026-09-08 from the copy
+  hosted at `files.waveshare.com`, a Quectel document on a distributor's server
+  and not fetched from Quectel (**[primary, mirrored host]**).
   The SX1262 with `LORA_RST` undriven contributes under 2 mA.
 - **P2: `L5 - L4` = 4-6 mA**, from Semtech's 4.6 mA.
 - **P3: `L6 - L5` under 2 mA** at one advert a minute. A ~100-byte packet at
-  SF8 / BW 62.5 kHz is about 615 ms of airtime (own arithmetic, symbol time
-  4.096 ms, explicit header, CR 4/5, **not [measured] and not from a tool**), so
-  even a 130 mA transmit averages near 1 mA at that cadence.
+  SF8 / BW 62.5 kHz is **615 ms** of airtime -- recomputed 2026-09-08, symbol
+  time 4.096 ms, 138 payload symbols, explicit header, CR 4/5, low-data-rate
+  optimize off (own arithmetic, **not [measured] and not from a tool**). The
+  184-byte maximum payload is 1046 ms. So even a 130 mA transmit averages near
+  1 mA at that cadence.
+
+  **The same number prices the air, not the battery.** One packet a minute is
+  36.9 s of airtime an hour, **1.0 % duty cycle** -- exactly at the limit of a
+  1 % sub-band. That is why "which sub-band is 869.618 MHz in" (T-285 in the
+  parent repo) decides the beacon cadence, and the power budget does not.
 - **P4: `L4 - L3` under 1 mA**, i.e. unprovable with this instrument. A radio in
   sleep is free.
 - **P5: L7 shows no SD read failure and no corrupt tile.** Weak prediction: the
