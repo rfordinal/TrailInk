@@ -49,7 +49,7 @@ an injected press.**
 
 | what | where | effect |
 |---|---|---|
-| long-press-to-sleep | `src/main.cpp`, `getPowerButtonHeldTime()` | `CMD:BUTTON power 5000` does not sleep the device |
+| long-press-to-sleep | `src/main.cpp`, `getPowerButtonHeldTime()` | `CMD:BUTTON power 5000` cannot sleep the device -- **read off the code, not measured** |
 | POWER+DOWN screenshot combo | `src/main.cpp` | not reachable; `CMD:SCREENSHOT` already is |
 | the reader's own POWER+DOWN check | `src/activities/reader/EpubReaderActivity.cpp` | not reachable |
 
@@ -97,6 +97,11 @@ Devel builds only: `ENABLE_BUTTON_CMD`, set in `default`, `sticky` and
 build has no injector compiled in at all -- `DebugInput.cpp` is empty there and
 the call sites inline to `false`.
 
+**Measured 2026-09-08**, not only reasoned from the `#ifdef`: a `gh_release`
+build carries no `BUTTON_OK` or `BUTTON_ERR` string and no `DebugInput` symbol,
+while the archived devel build carries one and three. So the check could have
+failed.
+
 The reason is the standing one: the device gets lost or stolen, and the person
 holding it can plug in USB. A press injector is a thumb for that person -- walk
 the menus, open the rider's books, read their pins, all without touching the
@@ -115,8 +120,9 @@ The command reveals nothing by itself: the reply is the button name back.
 
 `src/` is shared, so the simulator build carries `DebugInput` and the injection
 point. It has no way to send a command: its `HardwareSerial::available()`
-returns 0 (`src/HardwareSerial.h` in the simulator fork), so nothing ever
-reaches `main.cpp`'s `CMD:` branch there. Driving the simulator's UI from a
+returns 0 (`src/HardwareSerial.h` in the simulator fork) -- read off that
+header, never tried -- so nothing ever reaches `main.cpp`'s `CMD:` branch
+there. Driving the simulator's UI from a
 script needs a serial-input path in the fork first, or a different door
 altogether -- the fork's JSON socket (`docs/simulator.md`).
 
@@ -132,8 +138,10 @@ altogether -- the fork's JSON socket (`docs/simulator.md`).
   whole run is written up in that branch's copy of this file. In short: a walk
   from Home to the map and back, driven from the laptop with no thumb on the
   board, all seven button names pressed, `--hold 1500 up` zooming in Look
-  around where a plain `up` pans, an injected `power` press unable to sleep the
-  device, and every press logging the CPU coming out of power saving.
+  around where a plain `up` pans, and the two logged runs showing the CPU coming
+  out of power saving on the press. The `power` press was a 0 ms tap, so
+  nothing about the long hold that the table above rules out has been measured
+  (T-286 in the parent repo).
 - **Not run on a C3** (X4, X4 Pro). The injection point is board-agnostic
   `src/` code and the `default` build is clean, but no C3 has been flashed with
   it.
