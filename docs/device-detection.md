@@ -40,6 +40,16 @@ correct on those boards -- it stays at the compile-time `DEFAULT_DEVICE` -- so
 the two mechanisms disagree by construction, and the one that is right is the
 one barely anybody asks.
 
+**Confirmed on hardware the same day, and it is worse than a wrong label.** The
+first flash of `env:x4pro` on a real X4 Pro booted with a clean log and a
+mounted SD card and **painted nothing**: the `#if FREEINK_MCU_C3` guard meant
+`applyXteinkDisplayController()` never ran on the S3, so the profile's default
+SSD1677 stood unchallenged on a board that is a UC8279. All three drivers are
+compiled in for this device precisely because the batch varies, and the probe is
+the only thing that picks. So the guard does not merely misreport the board, it
+silently skips the step that makes the panel work (parent `docs/PROGRESS.md`,
+2026-09-09).
+
 ## "Which device" is the wrong question: it stands in for six properties
 
 The 29 sites do not want to know the device. Each wants one property, and uses
