@@ -201,15 +201,41 @@ It reports the direction, the span, and whether the patches on
 `origin/explorink` are in the new pin; exit 1 means it moved, 2 means a patch of
 ours is not in the new pin.
 
-**Turn the hooks on once per clone** — `.githooks/post-merge` and
-`post-commit` exist but git ignores them until it is told where they are:
+**The hooks are off on purpose, and turning them on is not yet safe.**
+`.githooks/post-merge` and `post-commit` exist, and git ignores them until it is
+told where they are:
 
 ```
-git -C firmware/explorink config core.hooksPath .githooks
+git -C firmware/explorink config core.hooksPath .githooks     # NOT YET, see below
 ```
 
-Nobody had that set as of 2026-09-09, which is also why the `pre-commit`
-clang-format hook was running for no one.
+Nobody had that set as of 2026-09-09, which is why the `pre-commit`
+clang-format hook had been running for no one and why 35 files had drifted out
+of format unnoticed.
+
+**Why the wait.** `core.hooksPath` is one setting for the whole repo, but a
+relative path resolves **per working tree** — so every worktree runs the hook
+from *its own branch*, not from `develop`. When this was switched on for a few
+minutes on 2026-09-09, 21 of 23 worktrees still carried the pre-fix
+`pre-commit`, the one that reformats all 544 tracked C/C++ files instead of the
+modified ones. Several of those are branches with work in progress. Switching it
+on would have handed each of those sessions 35 rewritten files, in their own
+working tree, on a commit that touched none of them.
+
+**The gate**: turn it on once the branches people are working on carry
+`./bin/clang-format-fix -g` (fixed on `develop` in `c7dcf135`). They pick it up
+on their next sync from `develop`, which the rule at the top of this section
+requires anyway. Check before flipping it:
+
+```
+for d in $(git -C firmware/explorink worktree list --porcelain \
+            | sed -n 's/^worktree //p'); do
+  grep -q 'clang-format-fix -g' "$d/.githooks/pre-commit" 2>/dev/null \
+    || echo "old hook: $d"
+done
+```
+
+Until then, run the pin check by hand — it is the same script the hook calls.
 
 **CI cannot cover this, and it is worth knowing why.** `.github/workflows/ci.yml`
 triggers on `push: branches: [master]` and on pull requests. This repo's trunk is
