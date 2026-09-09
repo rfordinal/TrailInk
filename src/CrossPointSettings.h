@@ -418,10 +418,13 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // it. Two fields rather than one brightness: turning the light off must not
   // forget the level it was at, and a level of 0 would.
   //
-  // Not in SettingsList, for the same reason as mapGnssPosition above -- only
-  // the LilyGo T5 S3 Pro has a frontlight in any env built today, and a
-  // Settings row would offer every rider a control for hardware they do not
-  // have. It is written by the user button's hold (main.cpp) and by CMD:LIGHT.
+  // Not in SettingsList, and that is now a gap rather than a reason. It was
+  // written when the LilyGo T5 S3 Pro was the only env with a frontlight; the
+  // X4 Pro has one too, mandatory, and it is the reference device
+  // (../docs/xteink-x4-pro-bringup.md). So on that board these two fields are
+  // live and there is still no rider-facing control for them -- only the home
+  // key's hold (main.cpp) and CMD:LIGHT, which is devel-only. A Settings row
+  // with a board condition is what this wants; T-298.
   uint8_t frontlightOn = 0;
   uint8_t frontlightBrightness = 50;
   // Power button return from footnotes (1 = enabled, 0 = disabled)

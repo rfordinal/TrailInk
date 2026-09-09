@@ -201,6 +201,86 @@ because the port note is the one a later session still needs.
    story from the T5 S3 Pro's buttons. `TouchPolicy.h` and the touch lock were
    written against that board.
 
+## The T5 S3 Pro tree, merged in to see what survives
+
+Branch `t5s3-to-x4pro`, forked from `release/xteink-x4-pro` on 2026-09-09 and
+merged with `release/lilygo-t5-s3-pro` whole. 93 commits, 25 non-docs files.
+Parent `docs/TODO.md` T-297 is the plan; its counts (212 commits, 53 files) are
+from before the T5 branch synced `develop`, which moved the merge base and
+shrank the incoming set.
+
+Why here and not `develop`: the X4 Pro is the **other** S3 board. The T5 S3 Pro
+has physical keys and one warm frontlight channel; this board has a GT911
+digitizer, a capacitive Home key and warm plus cool. So this is the board that
+answers whether that work is board-agnostic or T5-shaped, and it answers it
+before any of it reaches a production branch.
+
+One conflict, `src/main.cpp`, both hunks additive, resolved as a union. The SDK
+pointer stayed at `955b2530`; the T5 branch pinned `e514a868`, which is an
+ancestor of it, so ours is the newer of the two and there is no downgrade to
+audit.
+
+### Three things switch themselves on for this board
+
+Read off the code, not run on hardware:
+
+- `HalGPIO::wasHomeKeyTapped()` and `wasHomeKeyLongPressed()`
+  (`lib/hal/HalGPIO.cpp:248`) forward straight to the SDK's `InputManager`, so
+  they answer on any profile with a capacitive home key. This board's profile
+  has one.
+- `MappedInputManager::wasHomeKeyConfirm()` reports a home-key tap as
+  **Confirm**, with no board condition
+  (`src/MappedInputManager.cpp`, `wasPressed`/`wasReleased`).
+- `loop()` toggles the frontlight on a home-key **hold**, gated only by
+  `FrontlightManager::present()` (`src/main.cpp:899`).
+
+**Confirm is a T5 decision inherited by accident.** There, the user button was
+the only readable button on the board and had to carry two jobs. Here there are
+two physical keys (`Left` on GPIO0, `Right` on GPIO7) plus the Home key, so what
+Home should mean is an open question and not something to take from the other
+board. It is not the same question as whether the hold should light the panel --
+that one is the whole reason this is the reference device.
+
+What did **not** come across: the T5's `userButtonHook()` is behind `#if
+FREEINK_DEVICE_LILYGO` and does not compile here, and the LEDC frequency
+override is guarded at runtime on `BoardConfig::Board::LilyGoT5S3`
+(`src/main.cpp:632`). This board therefore runs the SDK's default frontlight PWM
+frequency, which is on the SDK's own Pending list -- see "What is open" below.
+
+GNSS is not in this binary at all. `lib/Gnss`, `GnssLog` and the map's GNSS
+reader are all behind `ENABLE_GNSS_CMD`, which `platformio.ini` sets in
+`[env:t5s3pro]` and in no other env (`src/GnssAccess.h` explains why that flag's
+name is narrower than its meaning). `MapGnssHeading` is host-tested either way.
+
+### What the hardware pass has to check
+
+Built and host-tested only: `pio run -e x4pro` and `-e t5s3pro` both clean, no
+warnings from `src/` or `lib/`, 457/457 host tests. That says nothing about a
+finger on glass.
+
+1. **Does it still boot.** The merge touched `main.cpp`'s `setup()` ordering.
+2. **Home key tap.** Does it select? Should it, given `Left` and `Right` exist?
+3. **Home key hold.** Does the frontlight come on under the thumb, and does the
+   level survive a reboot (`SETTINGS.frontlightOn` / `frontlightBrightness`)?
+4. **The boot flash.** `main.cpp:687-689` calls `setBrightness()` and only then
+   `off()`, so a board whose light was left off may still light up for one
+   frame at boot. **That order is deliberate** -- the comment above it says
+   `setBrightness()` seeds the manager's "last brightness", and `off()` alone
+   would make a later toggle restore the SDK's 50 % default instead of the
+   saved level. So if the flash is visible on this board, the fix is a
+   set-without-actuating path in `FrontlightManager`, not swapping these two
+   lines. Whether it is visible at all is a two-channel question and unmeasured.
+5. **Two channels, one `on()`.** `toggleFrontlight()` calls
+   `FrontlightManager::on()` and reads `brightness()`. What that does to warm
+   plus cool here is unknown -- the T5 has one channel.
+6. **Touch, first time on this board.** `TouchPolicy.h` and the touch lock were
+   written against the T5's buttons ([`touch-modes.md`](touch-modes.md), "The X4
+   Pro trap"): `TOUCH_DISABLED` here leaves no Back and no Confirm, and the
+   setting does not block that.
+7. **A map frame.** Still untried on this board, merge or no merge.
+8. **Heap.** RAM 21.2 % at link for `env:x4pro`; the runtime free-heap number
+   after a map frame has no baseline on this board yet.
+
 ## What is open
 
 - The SDK's own doc keeps a Pending list for this board -- frontlight GPIO and
