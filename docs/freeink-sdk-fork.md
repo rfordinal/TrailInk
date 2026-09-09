@@ -176,6 +176,31 @@ draws a map and holds a BLE link on it.
 5. Say in the commit message what the bump is **for**. A pointer move with no reason
    cannot be reverted with confidence.
 
+## Moving the pin: record it, then test harder
+
+Moving the pin is a normal, deliberate act. It propagates to other branches
+through an ordinary sync, and that is wanted. What it is not is free, and it is
+almost invisible: the firmware repo stores no SDK files, only the one line
+saying which SDK commit to build against, so `git show --stat` renders any SDK
+change as `freeink-sdk | 2 +-`, one changed file, whatever is behind it.
+
+So a move obliges three things and blocks nothing:
+
+- **A row in [`freeink-sdk-pins.md`](freeink-sdk-pins.md)** — every move of the
+  pin, per branch, with what verified it.
+- **A full hardware pass on that branch, not a spot check.** The SDK is the
+  panel driver, the SD card and the input layer, so the set is: boot, a map
+  frame (SD read), `MKCOL` + `PUT` (SD write), and a large WebDAV GET
+  (`readFileToStream`). Both real defects found in this subsystem sat in the SD
+  path, and neither showed up at boot.
+- **A commit body that names both SHAs and why.**
+
+`scripts/sdk_pin_check.py` reports the direction, the span, and whether the
+patches on `origin/explorink` survive; `.githooks/post-merge` and `post-commit`
+call it. Both need `git config core.hooksPath .githooks` once per clone, and CI
+cannot stand in — [`branching.md`](branching.md), "Sync the device branch before
+forking a feature off it", has the reason.
+
 ## The pin can walk off the fork, and it did twice
 
 Our patches live only on `explorink`. Nothing checks that the commit a firmware
