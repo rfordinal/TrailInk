@@ -41,20 +41,24 @@ they are one long stretch where the board does not reliably boot. Nothing
 about that should reach a session working on X4 firmware from `develop`. The
 release branch is the holding area; `develop` only sees the result.
 
-## Borrowing a release branch for verification only
+## Verifying a `develop`-based branch on a device branch's board
 
-A `develop`-based, device-agnostic branch sometimes needs a hardware pass
-when no X4/X4 Pro is on hand, and a `release/<device>` board is the only
-thing plugged in. Cherry-pick the commits onto a throwaway branch off
-`release/<device>`, build, flash, confirm -- then merge the **original**
-`develop`-based branch into `develop` (never the cherry-picked one anywhere).
-The verification branch is discarded once its job is done; it was never
-meant to merge.
+**The old answer was to cherry-pick onto a throwaway branch. That is now
+forbidden** -- see "No cherry-pick between our own branches" below.
 
-Confirmed 2026-09-06/07: `pins-on-sync` (pin commands + live burst
-geography on the Sync screen, `firmware/explorink`) verified this way on a
-T5 S3 Pro with no X4 available, then merged straight into `develop` as
-`adf6faa1` -- the T5S3Pro branch itself was never merged anywhere.
+The reason a cherry-pick was needed at all is one line of `platformio.ini`: the
+device's env exists only on `release/<device>`, so a `develop`-based branch
+cannot be flashed to that board. **With the env on `develop`, there is nothing
+to carry**: build the branch itself, flash it, confirm, merge into `develop`.
+
+Moving the envs down is therefore a prerequisite for this rule rather than an
+option, and it is the open half of T-289 in the parent repo. Until that is done
+there is no supported way to verify a `develop`-based branch on a board whose
+env lives elsewhere -- say so and stop, rather than reaching for the banned tool.
+
+History: `pins-on-sync` was verified the old way on 2026-09-06/07 on a T5 S3 Pro
+with no X4 available, then merged into `develop` as `adf6faa1`. That is how it
+was done, not how it is done.
 
 ## Existing branches
 
@@ -88,15 +92,41 @@ git -C firmware/explorink merge-base --is-ancestor <branch> origin/release/<devi
 git -C firmware/explorink branch -D <branch>
 ```
 
-## Carrying one change onto a device branch is a cherry-pick, not a merge
+## No cherry-pick between our own branches
 
-A `git merge` of a `develop`-based branch drags every `develop` commit the
-device branch has not taken -- 54 of them on 2026-09-07, against a device
-branch that was itself 93 commits ahead. The hardware pass that follows then
-measures all of it instead of measuring the change.
+**Maintainer's decision, 2026-09-09.** A change reaches another branch of ours
+by **merge**. `git cherry-pick` is not used to move our own work, and this
+section used to say the opposite.
 
-Cherry-pick the commits instead, resolve the conflicts against what the device
-branch actually has, and leave the `develop` sync as its own decision with its
-own hardware pass. The 2026-09-07 case is a worked example: the release branch
-had no `STR_TOUCH_MODE` row at the time, so the conflict resolution kept the
-device branch's shape rather than importing a `develop` feature sideways.
+This does not cover taking commits out of a foreign upstream. A CrossPoint
+review take is selecting from someone else's history, not moving our own work,
+and it keeps its own procedure
+([`upstream-crosspoint.md`](upstream-crosspoint.md)).
+
+### What the old rule said, and why it was replaced
+
+It said a `git merge` of a `develop`-based branch drags every `develop` commit
+the device branch has not taken -- 54 of them on 2026-09-07 -- so the hardware
+pass that follows measures all of it instead of measuring the change. That
+observation is true. The conclusion was wrong, because the drag is a symptom of
+the device branch being allowed to fall behind, and cherry-picking makes the
+drift permanent instead of fixing it.
+
+Measured on 2026-09-09, on this repo:
+
+- **Twin branches.** Four pairs of them: `cmd-buttons` / `cmd-buttons-t5s3`,
+  `diag/boot-reason` / `-t5s3`, `feat/map-popup-size-classes` / `-t5s3`,
+  `touch-lock-flag` / `-t5s3`. Three of the four twins were merged into the
+  release branch despite this doc calling them throwaway.
+- **The same file written twice.** `docs/settings-menu.md` existed on both
+  branches with an **identical commit subject**, a different SHA and 134 lines
+  of divergence. Git cannot see those as the same patch, so the next sync hits
+  it as an add/add conflict.
+- **Seven conflicts** in the pending `develop` -> release sync, five of them
+  produced by the cherry-picking itself, and every one of them resolved twice --
+  once on each branch.
+
+So: carry a change by merging, which means **the target branch has to be kept
+current** rather than left to drift. A sync that drags 54 commits is a sync that
+was overdue, not a reason to avoid syncing.
+
