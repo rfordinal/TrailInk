@@ -86,7 +86,7 @@ for, not a reason to start over.
 
 Nor is a booting board a reason to retire its branch. The X4 Pro booted and
 drew on 2026-09-09 and the branch stayed, because the next round of X4 Pro work
-starts there too (T-295 in the parent repo is that next round).
+starts there too (T-297 in the parent repo is that next round).
 
 ## Existing branches
 
