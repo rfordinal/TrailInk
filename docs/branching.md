@@ -12,9 +12,11 @@ One branch per device, `release/<device-slug>`, forked from `develop`. The
 slug matches the device's doc: `docs/devices/<slug>.md` in the parent repo, so
 `release/lilygo-t5-s3-pro` for [`../../docs/devices/lilygo-t5-s3-pro.md`](../../docs/devices/lilygo-t5-s3-pro.md).
 
-- **Bring-up and feature work for that device forks from `release/<device>`,
-  not from `develop`.** Use the normal worktree recipe (`CLAUDE.md`, "Every
-  change goes in a worktree"), just change the base branch:
+- **Hardware-conditional work for that device forks from `release/<device>`.**
+  Bring-up, a panel driver, a touch stack, a GNSS rail. **Everything else forks
+  from `develop`**, which is most work — see "Where a branch forks from:
+  `develop` by default" below. Use the normal worktree recipe (`CLAUDE.md`,
+  "Every change goes in a worktree"), just change the base branch:
 
   ```
   git -C firmware/explorink worktree add ../../.worktrees/firmware/<topic> -b <topic> release/<device>
@@ -24,10 +26,10 @@ slug matches the device's doc: `docs/devices/<slug>.md` in the parent repo, so
   bar as any other merge (`CLAUDE.md`, "Never merge into a production branch
   untested. Ask.") — `release/<device>` is not exempt just because it is not
   `develop`.
-- **Promote `release/<device>` into `develop` only when it is tip-top** — the
-  device's bring-up is stable, not mid-experiment. This is a second, separate
-  ask: merging into `develop` still needs a hardware test and the maintainer's
-  go-ahead, same as any other merge into a production branch.
+- **When the branch is stable, all of it goes into `develop`** — that is what
+  hands the work to every other device, and it is how the branch ends rather
+  than becoming a parallel line. See "A stable device branch goes back into
+  `develop`, whole" below. Still a separate ask with its own hardware test.
 - **Sync the other direction too.** `develop` keeps moving while a device's
   release branch is being worked — core fixes, shared refactors, other
   devices' contributions. Merge `develop` into `release/<device>` **before
@@ -35,12 +37,16 @@ slug matches the device's doc: `docs/devices/<slug>.md` in the parent repo, so
   See "Sync the device branch before forking a feature off it" below, including
   the submodule pointer that merge will otherwise carry quietly.
 
-## Why not just feature branches off `develop`
+## Why hardware-conditional work does not sit on `develop`
 
 A single GNSS probe, touch driver and panel init are each small, but together
 they are one long stretch where the board does not reliably boot. Nothing
 about that should reach a session working on X4 firmware from `develop`. The
-release branch is the holding area; `develop` only sees the result.
+release branch is the holding area; `develop` sees the result.
+
+That argument covers bring-up and nothing else. It is **not** a reason to put
+ordinary features there — see "Where a branch forks from" below for the split,
+and for what happens when the holding area quietly becomes the trunk.
 
 ## Verifying a `develop`-based branch on a device branch's board
 
