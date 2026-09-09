@@ -330,7 +330,16 @@ Also, from the same capture and worth knowing before anyone screenshots this
 board: it renders from a **persisted GPS fix at the maintainer's own location**.
 The coordinates are in the log, and a rendered frame identifies a place far more
 precisely than it looks (`../../CLAUDE.md`, "After every device screenshot,
-judge two things"). Nothing from this pass is committed or published.
+judge two things").
+
+**So the rule is about map frames, not about this board.** No render from this
+pass is committed or published, and none should be while that fix is the one on
+the card. A screen with no map on it is a different artifact and gets judged on
+its own: `../../../docs/device-shots/2026-09-09-x4pro-home-480x800.bmp` is the
+Home screen -- wordmark, menu rows, battery -- with no map, no place label and no
+debug overlay, so it carries nothing to leak and is cleared for the site. An
+earlier revision of this paragraph said "nothing from this pass", full stop,
+which read as a ban on the whole board and held that shot back once.
 
 ## What is open
 
