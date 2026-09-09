@@ -70,6 +70,18 @@ was done, not how it is done.
 ## Existing branches
 
 - `release/lilygo-t5-s3-pro` — created 2026-08-31 from `develop`.
+- `release/xteink-x4-pro` — created 2026-09-09 from `develop`, carrying
+  `[env:x4pro]`. Nothing has run on the board yet;
+  [`xteink-x4-pro-bringup.md`](xteink-x4-pro-bringup.md) says what the first
+  session has to settle.
+
+**The X3 needs no branch and no env.** It is an ESP32-C3 and `[env:default]`
+already builds one binary for the X4 and the X3 together
+(`platformio.ini`, `FREEINK_DEVICE_X4` and `FREEINK_DEVICE_X3` side by side);
+the framebuffer is sized to the largest selected panel (`BoardConfig.h`,
+`MAX_FRAMEBUFFER_BYTES`). A device gets its own branch when its bring-up would
+leave a board unreliably booting, and a device that already has a working
+binary is not that.
 
 ## Fork from `origin/release/<device>`, never from the local ref
 
