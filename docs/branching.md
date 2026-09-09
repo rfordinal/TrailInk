@@ -67,22 +67,29 @@ History: `pins-on-sync` was verified the old way on 2026-09-06/07 on a T5 S3 Pro
 with no X4 available, then merged into `develop` as `adf6faa1`. That is how it
 was done, not how it is done.
 
-## A `release/<device>` branch is never deleted
+## A `release/*` branch is never deleted
 
-**Standing rule, maintainer, 2026-09-09.** These branches are permanent. Every
-change to that board forks from one, takes its hardware pass there and merges
-up, so **being fully merged is the normal state between rounds** rather than a
-sign the branch is finished.
+**Standing rule, maintainer, 2026-09-09.** `git branch -d` and `git branch -D`
+are never run on a branch whose name starts with `release/`, and neither is a
+`git push origin --delete`. That covers every one of them, device branches and
+version branches alike: `release/xteink-x4-pro`, `release/xteink-x3`,
+`release/xteink-x4`, `release/lilygo-t5-s3-pro`, `release/1.5.0`, and any added
+later.
 
-The trap is the number. A branch that has just handed its work to `develop`
-reads `0 ahead of develop`, which looks like nothing is left in it. The rule
-that licenses a deletion at that moment is the parent `CLAUDE.md`'s cleanup
-line, "`git worktree remove <path>` and delete the branch", which is written
-for topic branches; it now carries the exception. Removing the **worktree** is
-correct and expected -- `git worktree add` brings the branch back into a
-directory whenever the next round needs it. The branch itself stays. The same
-holds for a branch sitting behind `develop`: that is what the sync below is
-for, not a reason to start over.
+**No condition unlocks it.** Not merged, not stale, not superseded, not "the
+board boots now", not "nobody has touched it in a month". If a release branch
+looks finished, the reading is wrong, not the branch.
+
+This is about the branch and nothing else: a release branch's *worktree* is
+cleaned up like any other, and `git worktree add` brings the branch back into a
+directory when the next round needs it.
+
+The reason a session reaches for the delete is the number. Every change to a
+board forks from its release branch, takes its hardware pass there and merges
+up, so **being fully merged is the normal state between rounds**: a branch that
+has just handed its work to `develop` reads `0 ahead of develop`, which looks
+like nothing is left in it. It means the last round landed. A branch sitting
+*behind* `develop` is the same non-event -- that is what the sync below is for.
 
 Nor is a booting board a reason to retire its branch. The X4 Pro booted and
 drew on 2026-09-09 and the branch stayed, because the next round of X4 Pro work
