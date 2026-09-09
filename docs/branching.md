@@ -67,6 +67,27 @@ History: `pins-on-sync` was verified the old way on 2026-09-06/07 on a T5 S3 Pro
 with no X4 available, then merged into `develop` as `adf6faa1`. That is how it
 was done, not how it is done.
 
+## A `release/<device>` branch is never deleted
+
+**Standing rule, maintainer, 2026-09-09.** These branches are permanent. Every
+change to that board forks from one, takes its hardware pass there and merges
+up, so **being fully merged is the normal state between rounds** rather than a
+sign the branch is finished.
+
+The trap is the number. A branch that has just handed its work to `develop`
+reads `0 ahead of develop`, which looks like nothing is left in it. The rule
+that licenses a deletion at that moment is the parent `CLAUDE.md`'s cleanup
+line, "`git worktree remove <path>` and delete the branch", which is written
+for topic branches; it now carries the exception. Removing the **worktree** is
+correct and expected -- `git worktree add` brings the branch back into a
+directory whenever the next round needs it. The branch itself stays. The same
+holds for a branch sitting behind `develop`: that is what the sync below is
+for, not a reason to start over.
+
+Nor is a booting board a reason to retire its branch. The X4 Pro booted and
+drew on 2026-09-09 and the branch stayed, because the next round of X4 Pro work
+starts there too (T-295 in the parent repo is that next round).
+
 ## Existing branches
 
 - `release/lilygo-t5-s3-pro` — created 2026-08-31 from `develop`.
