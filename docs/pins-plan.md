@@ -466,7 +466,7 @@ Not optional, and not restated per phase:
 - **Worktree, own branch.** Firmware work does not happen on the checked-out
   branch (parent `CLAUDE.md`). Branch off `develop`.
 - **Never flash without asking, every single time.** Build first, *then* take
-  the device lock (`python3 tools/x4lock.py`), then ask. Holding the lock is not
+  the device lock (`python3 tools/devlock.py`, which names the board), then ask. Holding the lock is not
   permission. Rebase onto `develop` and rebuild right before any upload.
 - **Archive a known-good build** right after it is confirmed on hardware.
 - **Resource Protocol** (`CLAUDE.md`): locals under 256 bytes, no bare `new`,
