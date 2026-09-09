@@ -67,17 +67,37 @@ Three things worth keeping from that:
   (a full-flash from another unit overwrites it).
 - **`[GFX] Time = N ms from clearScreen to displayBuffer` is not refresh time.**
   It read 7 ms and 41 ms while the panel was dead and reads 6 ms and 40 ms now
-  that it draws. It times the buffer fill, not the waveform. The refresh shows
-  up as the ~2 s gap between the Boot and Home activity lines instead.
+  that it draws. It stops the clock **before** the panel push:
+  `GfxRenderer::displayBuffer()` computes `elapsed` and logs it, then calls
+  `display.displayBuffer()` (`lib/GfxRenderer/GfxRenderer.cpp:1567-1570`). So
+  the number is the drawing work and the waveform is not in it. **What the
+  waveform costs on this panel is open.** This section first pointed at the
+  ~2 s gap between the Boot and Home activity lines as "the refresh", which is
+  unfounded: those timestamps are second-resolution, and the gap also holds
+  Boot's own dwell, the activity exit and Home's enter. A `micros()` bracket
+  around `display.displayBuffer()` would settle it.
+
+**And the screenshot channel could not have found this.** `CMD:SCREENSHOT`
+dumps the framebuffer, which the renderer had filled correctly the whole time;
+only the push to the glass was going to a controller that ignored it. A grab
+taken during the dead-panel boot would almost certainly have decoded into a
+correct Home screen and reported `ok (48000 bytes)`. **The instrument that saw
+the defect was a person looking at the panel.** Keep the two claims apart: a
+clean grab says the renderer produced the right frame, and says nothing about
+whether the panel developed it.
 
 ## What the first boot settled, and what it did not
 
 Settled:
 
 - **It boots and it draws.** Boot then Home, both on the glass.
-- **The SDMMC card path works.** `[SD] SDMMC card mounted` on the first try.
-  This was the flagged unknown -- the X4 Pro's 1-bit SDMMC is the first
-  non-SPI card this firmware has driven.
+- **The SDMMC card mounts.** `[SD] SDMMC card mounted` on the first try, and
+  `SdmmcBlockDevice` validates a real sector-0 read per attempt, so a block
+  read did happen. **No file has been read off it yet** -- the same boot logged
+  `missing tile list not read` and two `Fonts directory not found`, which are
+  absent paths and not successful reads. The X4 Pro's 1-bit SDMMC is the first
+  non-SPI card this firmware has driven, so "mounts" and "serves a map tile"
+  are two different claims here.
 - **Screenshots come back over serial.** `CMD:SCREENSHOT` at the X4's default
   geometry: 48,000 bytes = 800x480/8, no truncation, and `screenshot_gate.py`'s
   90d-CCW replay writes a 480x800 BMP that opens like any other device shot.
@@ -85,16 +105,34 @@ Settled:
 - **RTC found, IMU absent** (`[CLK] SDK RTC found`, `[GYR] SDK IMU not found`),
   matching the profile's `RtcType::Pcf8563` / `ImuType::None`.
 - **Heap is a different world from the C3.** `[MEM] Free: 241,212 B, Total:
-  308,188 B, MaxAlloc: 196,596 B` on the Home screen. The C3 rules were written
-  against ~400 kB of SRAM total.
+  308,188 B, MaxAlloc: 196,596 B` on the Home screen, one sample, with no BLE
+  link and no map open. The C3 rules were written against ~400 kB of SRAM
+  total.
+- **The C3 build is unaffected, verified rather than argued.** The probe call
+  sits in the `#else` of `#if FREEINK_MCU_C3` **and** behind
+  `#if FREEINK_DEVICE_X4PRO`, so a C3 build never preprocesses it.
+  `pio run -e default` at `develop` f2ddbaca, full core rebuild: RAM 18.0 %
+  (59,012 B), flash 61.6 % (4,033,773 B), zero warnings in `src/` or `lib/`.
+  Not checked, and not claimed: whether the C3 binary is byte-identical to the
+  pre-merge one.
 
 Not settled by this run:
 
 - **Touch.** Nothing tapped the GT911 or the capacitive Home key.
 - **Frontlight.** Never driven.
-- **`[MAIN] Hardware detect: X4` is wrong and cosmetic.** `main.cpp` prints
-  `_deviceType`, which the non-C3 branch hardcodes to `X4`. It selects nothing
-  -- the board profile is compile-time here. Parent `docs/TODO.md` T-278.
+- **`[MAIN] Hardware detect: X4` is wrong, and it is not only a log label.**
+  `HalGPIO::begin()`'s non-C3 branch hardcodes `_deviceType = DeviceType::X4`
+  (`lib/hal/HalGPIO.cpp:136`), and `deviceIsX3()` is read in ten places outside
+  that log line: the differential-refresh choice (`src/main.cpp:485`), theme
+  geometry (`src/components/themes/HintGeometry.h:25,30`,
+  `BaseTheme.cpp:284,305,412`, `lyra/LyraTheme.cpp:425,448`) and the interval
+  stepper's direction (`src/activities/util/IntervalSelectionActivity.cpp:123,124`).
+  So every S3 board silently takes the X4 branch in all of them. On the X4 Pro
+  that is **plausibly right and unchecked**: the panel is 800x480, the same
+  geometry the X4 branch was written for. On an S3 board that is not 800x480 it
+  is a real defect. This section first said "it selects nothing", which was
+  read off `main.cpp:366` alone without grepping the accessor. Parent
+  `docs/TODO.md` T-278.
 - **Buttons.** No press was tried.
 - Everything on the SDK's own Pending list below.
 
