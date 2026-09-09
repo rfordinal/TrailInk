@@ -71,9 +71,22 @@ was done, not how it is done.
 
 - `release/lilygo-t5-s3-pro` — created 2026-08-31 from `develop`.
 - `release/xteink-x4-pro` — created 2026-09-09 from `develop`, carrying
-  `[env:x4pro]`. Nothing has run on the board yet;
-  [`xteink-x4-pro-bringup.md`](xteink-x4-pro-bringup.md) says what the first
-  session has to settle.
+  `[env:x4pro]`. **The board's first boot ran the same day**: it boots, draws
+  Home, mounts the SDMMC card and answers `CMD:SCREENSHOT`, after one fix that
+  the branch then carried up into `develop` (`63a47ff3`, merged as `f2ddbaca`).
+  Touch, the buttons, the frontlight and a map frame are still untried --
+  [`xteink-x4-pro-bringup.md`](xteink-x4-pro-bringup.md) has the boot log and
+  the rest of that list.
+
+  **The branch stays, and it is the entry point for every X4 Pro change.**
+  Maintainer's decision, 2026-09-09, after the first boot had already been
+  merged up and the branch sat 0 ahead of `develop`. Being absorbed is not a
+  reason to retire it: while a board is in bring-up, work that touches that
+  board forks from `release/<device>`, gets its hardware pass there, and merges
+  up. That is the model, not a phase the board graduates from once it boots
+  once. A session that reads "0 ahead of develop" as "this branch is done" has
+  the direction backwards -- 0 ahead means the last round landed, and the next
+  round starts here again.
 
 **The X3 needs no branch and no env.** It is an ESP32-C3 and `[env:default]`
 already builds one binary for the X4 and the X3 together
@@ -156,6 +169,12 @@ If new functionality forks from `develop`, then a board's env has to be **on**
 collapses back into the thing that produced the cherry-picks. Moving
 `[env:t5s3pro]` and `[env:x4pro]` down is therefore part of this model, not a
 separate cleanup. T-289 in the parent repo.
+
+**The `[env:x4pro]` half is done, 2026-09-09.** It rode up with the first-boot
+merge and sits on `develop` (`platformio.ini`, `[env:x4pro]`), so a
+`develop`-based branch can now be built and flashed to an X4 Pro with nothing
+carried. `[env:t5s3pro]` is still only on `release/lilygo-t5-s3-pro` and is the
+open half of T-289.
 
 ## Sync the device branch before forking a feature off it
 
