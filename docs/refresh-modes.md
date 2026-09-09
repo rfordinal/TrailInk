@@ -168,25 +168,59 @@ charges its whole panel time to whichever counter you divide by, and the earlier
 boundary, `HalDisplay::displayWindow` (`lib/hal/HalDisplay.cpp:118`) and
 `HalDisplay::displayBuffer` (`:78`), so they are comparable.
 
-**Why a rectangle costs more than the whole frame is unexplained** `[open]`.
-`FreeInkDisplay::displayWindow()` only hands the rectangle to the active driver
-(`FreeInkDisplay.cpp:685-703`), so the extra second is inside that driver, and
-which driver the `t5s3pro` env links is not visible from `develop` -- that env
-lives on `release/lilygo-t5-s3-pro`. Settling it needs that branch's
-`platformio.ini` and then the driver's own `displayWindow`. One thing the code
-does rule out: the inverted-mode fallback at `FreeInkDisplay.cpp:689-695`, which
-turns a window request into a whole-panel `FAST` -- that would have shown up as
-the cheaper number, not the dearer one.
+**Why a rectangle costs more than the whole frame is unexplained** `[open]`,
+and after a source pass on 2026-09-09 it is unexplained in a stronger sense:
+**the two numbers are the same operation.**
 
-The consequence is the opposite of the X4's advice: **on this board the thing to
-minimise is not the number of windows but the use of windows at all.** The map's
-marker-move path asking for a whole-panel `FAST` would halve its blocking time.
-Tracked as T-277 in the parent repo, together with the counter split the
-attribution needs.
+The driver question above is answered. The `t5s3pro` env links `LgfxEpdDriver`,
+via `freeink-sdk/libs/hardware/BoardT5S3/src/LilyGoT5S3LgfxConfig.cpp`, and that
+driver **overrides `displayWindow` not at all**. So
+`PanelDriver::displayWindow`'s base implementation runs
+`display(bus, fb, prev, RefreshMode::Fast, turnOff)`, the rectangle is dropped,
+and `LgfxEpdDriver::display` -- which opens `(void)prev` -- does exactly
+`fillCanvasBW(fb)` and `pushCanvas(epd_fast)`. A whole-panel `FAST` calls the
+same function with the same mode. **Every one of the walk's 2,608 window
+requests took the whole-panel path.**
+
+So the earlier sentence here, "the extra second is inside that driver", was
+wrong and is withdrawn: there is no second driver path for it to be inside. It
+is worse than that for the comparison -- the whole-panel bracket runs strictly
+*more* code than the window one (`resolveReleasedMode`, `consumePrevFrameFor`
+and `swapBuffers` in `FreeInkDisplay::displayBuffer`, none of which
+`displayWindow` runs), so every difference the source contains points the wrong
+way.
+
+The numbers themselves survived being re-checked. Recomputed by hand against
+the card's whole history (`docs/power-runs/run8-2026-09-08.csv` in the parent
+repo, a superset of run7): windowed **1,030 ms** at n=998, whole-panel `FAST`
+**517 ms** at n=73, and the two distributions do not overlap. Not a small
+sample, not an averaging artefact.
+
+One mechanism in the code could produce a factor like this, and it is content
+rather than path: an unchanged frame arms no pixel, so the panel task runs one
+empty pass instead of eleven. Fitted to the two observed modes that is ~52 ms
+per pass over a ~455 ms fixed cost `[derived]`. It is falsifiable without a
+code change and `t5s3-partial-refresh.md` section 3 says how.
+
+The consequence for the plan is the reverse of what this section used to
+advise: **routing the marker path to a whole-panel `FAST` saves nothing**,
+because that is already what it does. Only which counter increments would
+change. T-277 in the parent repo carries the withdrawal; the blocking itself is
+T-263 and its fix is the async path, not a change of waveform.
 
 The consequence for the rider is in [`map-follow.md`](map-follow.md), "A
 windowed refresh blocks the loop": at this cost the map's main loop spends up to
 a quarter of its wall clock inside a blocking panel call.
+
+**And that 1,081 ms is not a windowed refresh at all.** `LgfxEpdDriver` does not
+override `PanelDriver::displayWindow`, so every window request on this board
+falls through to a whole-panel push -- all 2,608 of the counted ones did. The
+flat quotient of that walk is 1,117 ms; the 1,081 above is the mean of its seven
+segments. A fast
+frame there is **11** LovyanGFX LUT passes and a clean frame **37**, and most of
+the cost is CPU and PSRAM traffic rather than panel time.
+[`t5s3-partial-refresh.md`](t5s3-partial-refresh.md) has the chain, the cost
+model, the power half and the plan.
 
 ## The map never asks for a clean after entry
 

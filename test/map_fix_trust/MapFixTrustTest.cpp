@@ -7,6 +7,52 @@ using MapFixTrust::Pos;
 
 namespace {
 
+TEST(MapFixTrustHdop, NoHdopIsUnstatedAndDoesNotLatch) {
+  MapFixTrust::State state;
+  // GnssFix initialises hdop to 0 and only a parsed GGA sets it, so 0 is "the
+  // receiver stated none" -- the same sentinel role kAccuracyUnstated plays on
+  // the metre side.
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(0.0f, 9, state), Pos::Unstated);
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(9.0f, 9, state), Pos::Loose);
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(0.0f, 9, state), Pos::Unstated);
+  EXPECT_EQ(state.pos, Pos::Loose);
+}
+
+TEST(MapFixTrustHdop, TheLineIsWhereGeometryStopsFittingUnderTheMarker) {
+  MapFixTrust::State state;
+  // HDOP times about 5 m of ranging error, against the same 25 m the metre
+  // side calls Loose.
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(1.0f, 9, state), Pos::Trusted);
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(3.5f, 9, state), Pos::Trusted);
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(5.0f, 9, state), Pos::Loose);
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(25.5f, 9, state), Pos::Loose);
+}
+
+TEST(MapFixTrustHdop, TheDeadBandKeepsTheSideItAlreadyHas) {
+  MapFixTrust::State loose;
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(6.0f, 9, loose), Pos::Loose);
+  // Inside 3.5..5 with Loose already chosen, it stays Loose -- coming back
+  // costs crossing the whole band, so a fix hovering at the line does not
+  // repaint the marker every second.
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(4.0f, 9, loose), Pos::Loose);
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(3.5f, 9, loose), Pos::Trusted);
+
+  MapFixTrust::State fresh;
+  // A first stated fix inside the band has no side to keep, and starting Loose
+  // would make the alarm the default.
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(4.0f, 9, fresh), Pos::Trusted);
+}
+
+TEST(MapFixTrustHdop, ThreeSatellitesIsLooseWhateverTheGeometrySays) {
+  MapFixTrust::State state;
+  // A 2D fix assumed an altitude, and that assumption is wrong by whatever the
+  // ground has done since. Excellent HDOP does not rescue it.
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(0.9f, 3, state), Pos::Loose);
+  // It latches, unlike Unstated: this is a stated bad fix, not a missing one.
+  EXPECT_EQ(state.pos, Pos::Loose);
+  EXPECT_EQ(MapFixTrust::posTrustForHdop(0.9f, 4, state), Pos::Trusted);
+}
+
 TEST(MapFixTrustPos, UnstatedIsItsOwnAnswerAndDoesNotLatch) {
   MapFixTrust::State state;
   // No figure at all is not "bad" -- it is the state an old client leaves, and

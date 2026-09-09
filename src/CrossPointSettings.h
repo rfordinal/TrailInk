@@ -303,6 +303,36 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // IS a Settings-screen toggle, so the generic toJson/fromJson loop carries
   // it and nothing here has to.
   uint8_t mapAutoSyncTiles = 0;
+  // Take the map's position from a receiver on the device instead of from the
+  // phone, on a board that has one (GnssAccess.h). Off by default, and off is
+  // what every shipping device does today: the X4 and the X4 Pro have no
+  // receiver at all, so on those this field can only ever be 0 and the code
+  // that reads it is not even compiled in.
+  //
+  // In SettingsList (category Map) since 2026-09-03, behind ENABLE_GNSS_CMD so
+  // the row is compiled in only where a receiver exists -- the board condition
+  // the earlier version of this comment asked for. It stays reachable from the
+  // host too (CMD:SETTING mapGnssPosition 1, main.cpp).
+  //
+  // **It needs the row because it persists.** Left at 0 by a test, it survives
+  // every power cycle, and with no screen and no boot log naming it the
+  // symptom -- a map that draws no position -- is indistinguishable from dead
+  // hardware. That is not hypothetical: it was reported as a GNSS regression on
+  // 2026-09-03 and cost a device session
+  // (../docs/gnss-to-map-plan.md, "And it was reported as a GNSS regression").
+  uint8_t mapGnssPosition = 0;
+  // Write one CSV row per accepted GNSS fix to /trailink/gnss.csv (GnssLog.h).
+  // Off by default and it must stay that way: the file is a **track log**, not
+  // a single point, so on a lost or stolen device it is a record of where the
+  // rider went. Only exists on a build with a receiver.
+  //
+  // In SettingsList (category Map) since 2026-09-04, behind ENABLE_GNSS_CMD,
+  // beside mapGnssPosition. Until then it needed a USB cable and CMD:SETTING,
+  // so a rider could not record a walk without one -- which is what the row
+  // fixes. **Reachable is not the same as on**: the default stays 0, and the
+  // row's label says "track" rather than "log" so that switching it on tells
+  // the rider what it writes.
+  uint8_t mapGnssLog = 0;
   // Edge markers for pins outside the viewport: a direction arrow and the
   // distance, drawn where the bearing ray leaves the screen
   // (MapActivity::drawPins(), ../docs/pins.md). Pins *inside* the viewport are
@@ -395,6 +425,21 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t uiTheme = LYRA;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
+  // Frontlight state, persisted so the light comes back the way the rider left
+  // it. Two fields rather than one brightness: turning the light off must not
+  // forget the level it was at, and a level of 0 would.
+  //
+  // frontlightBrightness has a Settings row, behind FREEINK_CAP_FRONTLIGHT
+  // (SettingsList.h) -- a capability and not a board name, so it compiles in for
+  // the X4 Pro as well as the T5 S3 Pro without anything here naming either.
+  // frontlightOn has no row on purpose: off is a state the key holds produce,
+  // and storing it as a value would lose the level the rider picked.
+  //
+  // Both fields are serialised by hand in CrossPointSettings.cpp rather than by
+  // the generic loop, which is why the row carries no JSON key: two writers for
+  // one field would fight.
+  uint8_t frontlightOn = 0;
+  uint8_t frontlightBrightness = 50;
   // Power button return from footnotes (1 = enabled, 0 = disabled)
   uint8_t pwrBtnFootnoteBack = 1;
   // Use book's embedded CSS styles for EPUB rendering (1 = enabled, 0 = disabled)

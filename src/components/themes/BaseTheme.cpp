@@ -12,6 +12,7 @@
 #include <string>
 
 #include "HintGeometry.h"
+#include "components/icons/touch_lock_icon.h"
 #include "I18n.h"
 #include "RecentBooksStore.h"
 #include "TouchPolicy.h"
@@ -237,6 +238,7 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   if (btn3FontId == 0) btn3FontId = fontId;
   if (btn4FontId == 0) btn4FontId = fontId;
   if (!TouchPolicy::hintsVisible()) {
+    drawTouchLockIndicator(renderer);
     return;
   }
   rememberFrontLabels(btn1, btn2, btn3, btn4);
@@ -271,7 +273,9 @@ void BaseTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
 }
 
 Rect BaseTheme::buttonHintsRect(const GfxRenderer& renderer) const {
-  if (!TouchPolicy::hintsVisible()) return Rect{0, 0, 0, 0};  // drawButtonHints() draws nothing then
+  // Not empty when the panel is locked: the padlock strip lives in the same band
+  // and a caller repainting around it has to refresh that too.
+  if (!TouchPolicy::hintsVisible() && !TouchPolicy::lockIndicator()) return Rect{0, 0, 0, 0};
   // Full width: the four boxes are one band as far as anything trying to stay out
   // of their way is concerned. Height and offset are drawButtonHints()' own.
   const int height = BaseMetrics::values.buttonHintsHeight;
@@ -392,6 +396,35 @@ bool BaseTheme::frontBoxActive(const int index) const {
 }
 
 bool BaseTheme::sideBoxActive(const int index) const { return index >= 0 && index <= 1 && sideLabelDrawn[index]; }
+
+void BaseTheme::drawTouchLockBox(GfxRenderer& renderer, const Rect box) const {
+  // Fill then border, the same pairing this theme's drawButtonHints() uses: the
+  // band is reserved, but a map or a rendered page can still have painted into
+  // it before this runs.
+  renderer.fillRect(box.x, box.y, box.width, box.height, false);
+  renderer.drawRect(box.x, box.y, box.width, box.height);
+}
+
+void BaseTheme::drawTouchLockIndicator(GfxRenderer& renderer) const {
+  if (!TouchPolicy::lockIndicator()) return;
+
+  const GfxRenderer::Orientation origOrientation = renderer.getOrientation();
+  renderer.setOrientation(GfxRenderer::Orientation::Portrait);
+
+  // Drawn as a button, not as a small glyph floating in the band: the same box
+  // the hint boxes use, one of them wide, centred. A padlock on its own read as
+  // a status mark rather than as the thing that took the buttons' place.
+  const int boxHeight = UITheme::getInstance().getMetrics().buttonHintsHeight;
+  const int boxWidth = HintGeometry::scaleMetric(kFrontBoxWidth);
+  const int boxX = (renderer.getScreenWidth() - boxWidth) / 2;
+  const int boxY = renderer.getScreenHeight() - boxHeight;
+  drawTouchLockBox(renderer, Rect{boxX, boxY, boxWidth, boxHeight});
+  const int iconX = boxX + (boxWidth - icon_touchLock.w) / 2;
+  const int iconY = boxY + (boxHeight - icon_touchLock.h) / 2;
+  renderer.drawMono1bpp(icon_touchLock.bits, iconX, iconY, icon_touchLock.w, icon_touchLock.h, true);
+
+  renderer.setOrientation(origOrientation);
+}
 
 bool BaseTheme::frontHintBox(const int index, const int portraitWidth, const int portraitHeight, Rect& out) const {
   if (!TouchPolicy::hintsVisible() || !frontBoxActive(index)) return false;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <BoardConfig.h>
 #include <HalGPIO.h>
 
 #include "CrossPointSettings.h"
@@ -53,5 +54,39 @@ inline bool touchActive() { return panelPresent() && mode() != CrossPointSetting
 // OFF as well would put six buttons on the glass that do nothing, and on a board
 // with no keys under them the labels would name keys that are not there.
 inline bool hintsVisible() { return !panelPresent() || mode() == CrossPointSettings::TOUCH_BUTTONS_ONLY; }
+
+// Whether the capacitive home key carries a double tap, and what it means.
+//
+// On the LilyGo T5 S3 Pro a double tap is the touch lock -- nothing else on that
+// board can stop the glass reacting. The single tap stays Confirm there, which
+// costs it the double-tap window in latency (MappedInputManager::pumpHomeKey()).
+// Everywhere else the key has no double tap and its single tap is Confirm the
+// instant it lands.
+//
+// A board constant rather than a setting, because it decides what a physical key
+// means and the answer differs by hardware, not by preference.
+// Whether the capacitive home key's double tap is the lock gesture. Two
+// conditions, and neither is a board name: there has to be a home key to double
+// tap, and a digitizer worth locking. It was `#if FREEINK_DEVICE_LILYGO` until
+// 2026-09-09, which shut the gesture out of the X4 Pro -- a board with both, and
+// the reference device.
+//
+// Not constexpr, and not cacheable: `panelPresent()` reads `hasTouch()` live
+// because the touch controller finishes its init after static construction, so
+// this answers false for the first part of boot and true afterwards. Every
+// caller must therefore tolerate the flip. `pumpHomeKey()` does: the branch this
+// picks clears the pending-tap state on the way through, so a flip starts the
+// gesture fresh rather than half-resolved.
+//
+// The gesture is load-bearing on a board whose Back and Confirm both come from
+// touch. While the lock is on, a single tap deliberately does NOT select
+// (`MappedInputManager::pumpHomeKey()`), so the double tap is the *only* way
+// back -- which is why it is resolved before that gate and not after it.
+inline bool homeKeyDoubleTapLocksTouch() { return panelPresent() && BoardConfig::hasHomeKey(); }
+
+// Whether to draw the lock glyph instead of the hint boxes. The boxes vanishing
+// is the signal that touch is off, but on their own they cannot distinguish OFF
+// from ANYWHERE, which also draws none.
+inline bool lockIndicator() { return panelPresent() && mode() == CrossPointSettings::TOUCH_DISABLED; }
 
 }  // namespace TouchPolicy

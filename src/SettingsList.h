@@ -236,8 +236,63 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           "uiTheme", StrId::STR_CAT_DISPLAY),
         SettingInfo::Toggle(StrId::STR_SUNLIGHT_FADING_FIX, &CrossPointSettings::fadingFix, "fadingFix",
                             StrId::STR_CAT_DISPLAY),
+#if FREEINK_CAP_FRONTLIGHT
+        // The frontlight level, 10 to 100 % in tens. Off is deliberately not a
+        // value here: it is a state the two buttons produce (the home key's hold
+        // toggles, the user button's hold walks the rungs), and storing it would
+        // lose the level the rider chose. That is also why the row carries no
+        // JSON key -- frontlightOn and frontlightBrightness are serialised by
+        // hand in CrossPointSettings.cpp, and a second writer would fight it.
+        SettingInfo::Value(StrId::STR_FRONTLIGHT, &CrossPointSettings::frontlightBrightness, {10, 100, 10}, nullptr,
+                           StrId::STR_CAT_DISPLAY),
+#endif
 
-        // --- Map ---
+    // --- Map ---
+#ifdef ENABLE_GNSS_CMD
+        // Where the map's position comes from: off (default) the phone over
+        // BLE, on the receiver on this board (MapActivity::onEnter(), which
+        // only calls gnssStart() when this is set).
+        //
+        // Compiled in only where a receiver exists. ENABLE_GNSS_CMD is set in
+        // env:t5s3pro and nowhere else, and today it means "this build has a
+        // receiver" rather than anything about the console (GnssAccess.h). On an
+        // X4 or X4 Pro build there is no driver to switch to, so a row here
+        // would be a toggle that does nothing.
+        //
+        // It has a row at all because not having one cost a bring-up session.
+        // 2026-09-03 this was reported as a GNSS regression: it had been left at
+        // 0 by the previous day's BLE test, it persists in settings.json, and
+        // with no screen and no boot log naming it the symptom is
+        // indistinguishable from dead hardware. A setting a rider can be left
+        // sitting on needs somewhere a rider can see it
+        // (../docs/gnss-to-map-plan.md, "And it was reported as a GNSS
+        // regression").
+        // The label says GNSS and not GPS because GPS would be false, not merely
+        // pedantic: the L76K on this board emits `GPGSV` *and* `GLGSV`, and an
+        // `inview` of 19 was measured as 10 GPS plus 9 GLONASS
+        // (../docs/gnss.md, "GPS and GLONASS in this configuration"). The
+        // satellite count this toggle turns on is a sum across constellations
+        // (`Gnss::satsInView()`), so a "GPS" label would misname our own
+        // readout. The only other UI string with "GPS" in it is the phone app's
+        // name, ExplorInk GPS, which is a product name and not a claim about a
+        // receiver.
+        SettingInfo::Toggle(StrId::STR_MAP_GNSS_POSITION, &CrossPointSettings::mapGnssPosition, "mapGnssPosition",
+                            StrId::STR_CAT_MAP),
+        // One CSV row per accepted fix to /trailink/gnss.csv (GnssLog.h). Same
+        // build gate and the same reason as the row above.
+        //
+        // **The label says "track" on purpose.** This writes where the rider
+        // went, not a single point, so on a lost or stolen device the file is a
+        // record of their movements (the field's own comment,
+        // CrossPointSettings.h). A rider switching it on has to be told that by
+        // the row itself -- "GNSS log" would read as diagnostics.
+        //
+        // Off by default and the default does not move. A row makes it
+        // reachable, which is the point: before this it needed a USB cable and
+        // CMD:SETTING, so the one person who could turn it on was whoever had
+        // the device on a desk. Reaching it is not the same as defaulting it on.
+        SettingInfo::Toggle(StrId::STR_MAP_GNSS_LOG, &CrossPointSettings::mapGnssLog, "mapGnssLog", StrId::STR_CAT_MAP),
+#endif
         // Off by default. On, the map screen asks the phone for a tile as soon
         // as it hatches one, and shows a transfer icon in the header while the
         // transfer is in flight (MapActivity::maybeAutoSyncTiles(),
@@ -350,7 +405,8 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
                           {StrId::STR_STATE_OFF, StrId::STR_STATE_ON}, "touchReaderControls", StrId::STR_CAT_CONTROLS)
             .withHidden(),
         // Touch policy. Dropped below on a board with no digitizer, where it
-        // would offer a choice between identical behaviours.
+        // would offer a choice between identical behaviours. Stays visible --
+        // this one is the device's own input policy, not the reader's.
         //
         // Two values, not three: OFF is deliberately unreachable from here. A
         // rider who picked it could not get back to Settings to undo it, and on
