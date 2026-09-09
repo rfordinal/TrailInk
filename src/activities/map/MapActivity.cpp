@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
+#include "TouchPolicy.h"
 #include "MapPointMarks.h"
 #include "MapPointShards.h"
 // APP_STATE.showBootScreen: the quick-resume-sleep decision, read in onExit().
@@ -307,6 +308,45 @@ constexpr int kHeaderGroupGap = 10;  // BLE group to battery block, and logo to 
 // running" from "no icon yet" learns nothing from the row.
 constexpr int kHeaderGnssIconSize = kHeaderIconHeight;
 constexpr int kHeaderGnssIconToBtGap = 6;
+// The suffix the clock carries on a GNSS session while it really is UTC, drawn
+// as part of the clock's own string. **Not a separate label with its own gaps.**
+// It was one first, and on the panel it sat almost equidistant between the clock
+// and the GNSS glyph and read as labelling the glyph -- reported off a shot,
+// 2026-09-03. Tuning the two gaps would have hidden that; one string makes it
+// impossible, because the suffix cannot be nearer to anything than to the time
+// it belongs to.
+//
+// Plain literal, not tr(): UTC is an international abbreviation and reads the
+// same in every language this firmware ships, same precedent as the "+"/"--"
+// zoom hints in drawZoomSideHints().
+constexpr const char* kHeaderUtcSuffix = " UTC";
+
+// GNSS bars: **how many** bars are filled says how many satellites are being
+// tracked, and **how tall** they all are says how strong the best one is. Two
+// numbers in one block, because they answer two different questions and a rider
+// needs both: four weak satellites and two strong ones are both "no fix", and
+// they need opposite things done about them.
+//
+// Deliberately not the BLE staircase next to it. Those bars step up in height by
+// design, so a glance tells the two blocks apart without reading either.
+//
+// Four is the count that matters: a position needs four satellites, so a full
+// block means a fix is due and a half-full one means it is not coming yet.
+constexpr int kHeaderGnssBarCount = kHeaderBleBarCount;
+
+// SNR here is C/N0 in dB-Hz, the satellite signal against the noise floor. The
+// steps are the two thresholds this whole problem turns on, measured elsewhere
+// and written down in Gnss::injectAidIni(): below about 24 a satellite is not
+// usable, from 24 it can be tracked when the receiver already holds the
+// ephemeris, and from about 31 the receiver can read the ephemeris off the air
+// by itself. So the top step is "this can fix unaided" and the middle is "this
+// needs aiding", which is exactly the distinction the panel should carry.
+int resolveGnssBarHeight(uint8_t bestSnr) {
+  if (bestSnr == 0) return 0;
+  if (bestSnr < 24) return kHeaderIconHeight / 4;
+  if (bestSnr < 31) return kHeaderIconHeight / 2;
+  return kHeaderIconHeight;
+}
 #endif
 
 // The clock sits leftmost in the status row, between the place name and the
@@ -1447,7 +1487,38 @@ int16_t MapActivity::clockTick(uint32_t& localNowOut) const {
   // One function for both callers, because the repaint decision and the string
   // have to quantise identically. If they disagree, the header either repaints
   // every minute while showing a coarse string, or shows a stale one.
+  //
+  // Two sources, one per radio, because the phone is not there to ask when the
+  // receiver is the position source (bleInUse_, MapActivity.h). Every GNSS
+  // receiver carries UTC, so the row keeps its clock either way.
+#ifdef ENABLE_GNSS_CMD
+  if (!bleInUse_) {
+    if (!gnss.running()) return -1;
+    // Unix seconds, zero until a sentence carrying date AND time has arrived
+    // (Gnss.h). Not gated on a position fix: RMC brings the date well before
+    // the receiver has four satellites, and a clock is useful before a dot is.
+    const uint32_t utc = gnss.fix().utc;
+    if (utc == 0) return -1;
+    // **UTC plus the rider's own offset, because a receiver cannot know the
+    // timezone.** NMEA carries no zone and the device is offline by design, so
+    // there is nothing to derive one from -- the BLE path gets an offset because
+    // the phone sends one (BlePositionServer::localTimeNow()). clockUtcOffsetQ
+    // is quarter hours biased by 48, so 48 is UTC+0
+    // (CrossPointSettings.h:226), and 48 is also the default: a rider who never
+    // visited Settings > Clock offset sees UTC here, which in central Europe is
+    // an hour or two slow. That is a wrong-looking clock rather than a wrong
+    // position, and the alternative -- guessing a zone from longitude -- is
+    // wrong at every land border.
+    const int32_t offsetSeconds = (static_cast<int32_t>(SETTINGS.clockUtcOffsetQ) - 48) * 900;
+    const int64_t local = static_cast<int64_t>(utc) + offsetSeconds;
+    if (local < 0) return -1;
+    localNowOut = static_cast<uint32_t>(local);
+  } else if (!freeink::BlePositionServer::getInstance().localTimeNow(localNowOut)) {
+    return -1;
+  }
+#else
   if (!freeink::BlePositionServer::getInstance().localTimeNow(localNowOut)) return -1;
+#endif
   const uint16_t minuteOfDay = static_cast<uint16_t>((localNowOut % 86400u) / 60u);
   if (!clockIsCoarse()) return static_cast<int16_t>(minuteOfDay);
   return static_cast<int16_t>(minuteOfDay / kClockCoarseMinutes * kClockCoarseMinutes);
@@ -1479,10 +1550,14 @@ void MapActivity::updateHeaderStatus() {
   nextHeaderPollMs_ = now + kHeaderPollMs;
 
   auto& ble = freeink::BlePositionServer::getInstance();
-  const bool transferIconVisible = autoSyncPending_ > 0;
+  // All three gated on bleInUse_, matching what drawHeaderStatusStrip() will
+  // actually paint. Without the gate this asks a radio that was never started
+  // whether a phone is there -- the getters answer safely (0, false) so nothing
+  // breaks, but the row would be deciding repaints from a link it does not draw.
+  const bool transferIconVisible = bleInUse_ && autoSyncPending_ > 0;
   // Same test drawHeaderStatusStrip() uses, and the comment there says why it is
   // the interval rather than the MTU.
-  const bool connected = ble.connIntervalMs() != 0;
+  const bool connected = bleInUse_ && ble.connIntervalMs() != 0;
   const int bars = connected ? resolveBleBars(ble.rssi()) : 0;
 
   // Two classes of change, and they earn different urgency.
@@ -1498,12 +1573,27 @@ void MapActivity::updateHeaderStatus() {
   // handful of times a ride (start, first fix, sky lost), so there is nothing
   // to cap -- and each of those is exactly the moment the rider wants told.
   // Unlike the bar count next to it, which flips on an RSSI threshold.
-  structural = structural || gnssHeaderState() != drawnGnssState_;
+  //
+  // Only while the glyph is on the row. With the phone as the source the glyph
+  // is not drawn, so drawnGnssState_ holds whatever it last painted and would
+  // never agree with a live gnssHeaderState() -- every tick would read as
+  // structural and repaint the header forever.
+  if (!bleInUse_) structural = structural || gnssHeaderState() != drawnGnssState_;
+  // The bars move far more often than the glyph does -- a satellite drops in or
+  // out every few seconds -- so they are rate-capped with the BLE bars rather
+  // than treated as structural. barsMoved below carries them.
 #endif
   // A bar count moving while the link holds is the same story told slightly
   // differently, and RSSI sitting on a threshold flips it back and forth.
   // Every flip is a real waveform pass, so it is rate-capped.
-  const bool barsMoved = connected && bars != drawnBleBars_;
+  bool barsMoved = connected && bars != drawnBleBars_;
+#ifdef ENABLE_GNSS_CMD
+  if (!bleInUse_) {
+    const uint8_t tracked = gnss.satsWithSignal();
+    const int gnssBars = tracked > kHeaderGnssBarCount ? kHeaderGnssBarCount : static_cast<int>(tracked);
+    barsMoved = gnssBars != drawnGnssBars_ || resolveGnssBarHeight(gnss.bestSnr()) != drawnGnssBarHeight_;
+  }
+#endif
 
   // The minute rolling over. No rate cap of its own -- a minute *is* the cap,
   // and it is 30x slower than the bars' floor. This is the one condition that
@@ -1680,7 +1770,26 @@ void MapActivity::headerStatusRect(int& x, int& y, int& w, int& h) const {
 #else
   const int transferIconLeft = logoLeft - kHeaderTransferIconToBtGap - kHeaderTransferIconSize;
 #endif
-  const int clockLeft = transferIconLeft - kHeaderClockToTransferIconGap - headerClockSlotWidth(renderer);
+#ifdef ENABLE_GNSS_CMD
+  // The "UTC" label is part of the widest layout too, so it is reserved here
+  // unconditionally -- including on BLE sessions, which never draw it.
+  //
+  // **Measured 2026-09-03: without this the label was 4 px short and refused to
+  // draw at all** (drawHeaderStatusStrip()'s own fit check said so, twice: once
+  // when it tried to squat in the transfer icon's slot, once after it got its
+  // own link). This rect is the hard left edge, and a link the chain can take
+  // that the rect has not reserved is a link that can never be taken.
+  //
+  // Not conditional on clockUtcOffsetQ, unlike the drawing: a rect that shrank
+  // when the rider set an offset would stop refreshing pixels the previous
+  // layout had written, which is the exact failure the comment at the top of
+  // this function warns about.
+  const int utcLabelReserve = renderer.getTextWidth(SMALL_FONT_ID, kHeaderUtcSuffix);
+#else
+  const int utcLabelReserve = 0;
+#endif
+  const int clockLeft =
+      transferIconLeft - utcLabelReserve - kHeaderClockToTransferIconGap - headerClockSlotWidth(renderer);
   // Battery's real icon top is kHeaderMarginTop + 11, not +5: drawHeader()
   // hands drawBatteryRight() rect.y+5 (BaseTheme.cpp:374), and
   // drawBatteryRight() adds another +6 of its own (:99) before drawing the
@@ -1943,32 +2052,99 @@ void MapActivity::drawHeaderStatusStrip() {
   // turned out too tight for some percentages and let the bars run into the
   // text.
   //
-  // Every horizontal position here is re-derived by headerStatusRect(), which
-  // is what the windowed repaint refreshes. Keep the two in step -- a strip
-  // narrower than what is drawn leaves half a glyph behind.
+  // Every horizontal position here is a link in a right-to-left chain, so a
+  // slot that is not drawn does not leave a hole -- everything left of it moves
+  // right by itself.
+  //
+  // **Which links exist depends on which radio this session runs** (bleInUse_,
+  // MapActivity.h). The row shows the source the map actually has and says
+  // nothing about the other one -- maintainer's call, 2026-09-03. An icon for a
+  // radio that was never started is worse than no icon: it invites the reader to
+  // conclude the link is merely down, which is a different and fixable problem.
+  //
+  // headerStatusRect() deliberately does **not** follow this. It re-derives the
+  // widest chain unconditionally (see its own comment), so the opaque backing
+  // drawn from it clears whatever slots a narrower row leaves empty. That is the
+  // one place the two are allowed to disagree, and it is why they may: the rect
+  // must be a superset of what is drawn, never a match for it.
   const int batteryX = screenWidth - kHeaderMarginRight - BaseMetrics::values.batteryWidth;
   const int worstCasePercentWidth = renderer.getTextWidth(SMALL_FONT_ID, "100%");
   const int barsRight = batteryX - worstCasePercentWidth - BaseTheme::batteryPercentSpacing - kHeaderGroupGap;
-  const int barsLeft = barsRight - kHeaderBleBarsWidth;
-  const int logoLeft = barsLeft - kHeaderBtToBarsGap - kHeaderBtLogoWidth;
+
+  // The rect the windowed repaint refreshes, taken before the chain rather than
+  // with the backing below: it is the hard left edge, and the UTC label is the
+  // one link whose width comes from a font instead of a constant. Nothing may
+  // be laid out left of backingX -- those pixels are never refreshed, so they
+  // would draw once and then stay.
+  int backingX, backingY, backingW, backingH;
+  headerStatusRect(backingX, backingY, backingW, backingH);
+
+  // Walks leftwards. Each block that draws something consumes its own width
+  // plus the gap to whatever it sits next to.
+  int chainRight = barsRight;
+  int barsLeft = 0;
+  int logoLeft = 0;
+  if (bleInUse_) {
+    barsLeft = chainRight - kHeaderBleBarsWidth;
+    logoLeft = barsLeft - kHeaderBtToBarsGap - kHeaderBtLogoWidth;
+    chainRight = logoLeft;
+  }
 #ifdef ENABLE_GNSS_CMD
-  // One more link in the right-to-left chain, between the Bluetooth logo and
-  // the transfer icon. Everything left of it (the transfer icon, the clock, and
-  // the place name that truncates against the clock) shifts left by itself,
-  // which is why this is a link and not a hardcoded x.
-  const int gnssIconLeft = logoLeft - kHeaderGnssIconToBtGap - kHeaderGnssIconSize;
-  const int transferIconLeft = gnssIconLeft - kHeaderTransferIconToBtGap - kHeaderTransferIconSize;
-#else
-  const int transferIconLeft = logoLeft - kHeaderTransferIconToBtGap - kHeaderTransferIconSize;
+  // The receiver's glyph, only when the receiver is the source. kHeaderGnss-
+  // IconToBtGap is reused as the gap on its left even when no Bluetooth logo
+  // sits there: the constant is the spacing this icon was laid out with, and
+  // giving it a second name for the same number would be two numbers to keep
+  // level.
+  int gnssIconLeft = 0;
+  int gnssBarsLeft = 0;
+  clockShowsUtc_ = false;
+  if (!bleInUse_) {
+    // Same slot the BLE bars use on the other kind of session, and the same
+    // order: the glyph sits left of its bars exactly as the Bluetooth logo sits
+    // left of its own. One row, one grammar.
+    gnssBarsLeft = chainRight - kHeaderBleBarsWidth;
+    chainRight = gnssBarsLeft - kHeaderBtToBarsGap - kHeaderGnssIconSize;
+    gnssIconLeft = chainRight;
+    chainRight = gnssIconLeft - kHeaderGnssIconToBtGap;
+
+    // Whether the clock carries the UTC suffix. **Only while it really is UTC.**
+    // A GNSS session has no timezone to work from (clockTick()), so with
+    // clockUtcOffsetQ at its default of 48 the row shows UTC -- measured
+    // 2026-09-03, it read 19:53 at 21:55 CEST, a clock two hours slow with
+    // nothing on the panel admitting it. The suffix is what admits it.
+    //
+    // Once the rider sets an offset the clock is their local time, exactly like
+    // the BLE path, and the suffix would be false. Showing it on every GNSS
+    // session was considered and rejected on that -- a label that lies about the
+    // number it is attached to is worse than no label (maintainer's call).
+    //
+    // No repaint tracking of its own, and it needs none: the only thing that
+    // makes it appear or vanish is clockUtcOffsetQ, and changing that changes
+    // the clock's own minute, which updateHeaderStatus() already treats as a
+    // repaint reason.
+    clockShowsUtc_ = SETTINGS.clockUtcOffsetQ == 48;
+  }
 #endif
+  // The transfer icon's slot leaves the chain with the icon. Leaving it reserved
+  // on a GNSS session is what put 14 px of nothing between the clock and the
+  // UTC label, so the label read as belonging to the glyph on its other side
+  // (reported off a panel shot, 2026-09-03). A slot nothing can ever draw in is
+  // not a slot, it is a hole.
+  int transferIconLeft = chainRight;
+  if (bleInUse_) {
+    transferIconLeft = chainRight - kHeaderTransferIconToBtGap - kHeaderTransferIconSize;
+    chainRight = transferIconLeft;
+  }
+  // The clock is right-aligned against whatever the chain has left, which is the
+  // transfer icon on a BLE session and the UTC label (or the GNSS glyph) on a
+  // GNSS one.
+  const int clockSlotRight = chainRight - kHeaderClockToTransferIconGap;
   const int batteryIconTop = kHeaderMarginTop + 5 + 6;
   const int iconBottom = batteryIconTop + BaseMetrics::values.batteryHeight;
   const int iconTop = iconBottom - kHeaderIconHeight;
 
   // White backing first, like the compass halo and the busy badge: this can
-  // land on live map lines, not blank margin.
-  int backingX, backingY, backingW, backingH;
-  headerStatusRect(backingX, backingY, backingW, backingH);
+  // land on live map lines, not blank margin. Rect computed above.
   renderer.fillRect(backingX, backingY, backingW, backingH, false);
 
   // The clock, leftmost, when the phone has ever sent a non-zero utc. 24-hour
@@ -1984,7 +2160,8 @@ void MapActivity::drawHeaderStatusStrip() {
   const int16_t clockTickNow = clockTick(localNow);
   if (clockTickNow >= 0) {
     const uint32_t secondsOfDay = localNow % 86400u;
-    char clockText[6];
+    // Sized for "00:00" plus the " UTC" suffix and the terminator.
+    char clockText[12];
     if (clockIsCoarse()) {
       // "12:5*": the tens of minutes, then a mark standing in for the withheld
       // digit. Not "12:50", which would claim a minute it does not have.
@@ -2001,14 +2178,34 @@ void MapActivity::drawHeaderStatusStrip() {
       snprintf(clockText, sizeof(clockText), "%u:%02u", static_cast<unsigned>(secondsOfDay / 3600u),
                static_cast<unsigned>((secondsOfDay % 3600u) / 60u));
     }
-    const int slotRight = transferIconLeft - kHeaderClockToTransferIconGap;
-    const int textX = slotRight - renderer.getTextWidth(SMALL_FONT_ID, clockText);
+#ifdef ENABLE_GNSS_CMD
+    if (clockShowsUtc_) {
+      std::strncat(clockText, kHeaderUtcSuffix, sizeof(clockText) - std::strlen(clockText) - 1);
+    }
+#endif
+    int textX = clockSlotRight - renderer.getTextWidth(SMALL_FONT_ID, clockText);
+#ifdef ENABLE_GNSS_CMD
+    // headerStatusRect() reserves the suffix (see there), so this cannot
+    // normally fire -- but the reserve measures " UTC" on its own while this
+    // measures one combined string, and the kerning between the last digit and
+    // the space is the difference between the two. Drop the suffix rather than
+    // draw left of the refresh window, where the pixels are written once and
+    // never cleared.
+    if (clockShowsUtc_ && textX < backingX) {
+      LOG_ERR(kLogTag, "header: clock with '%s' runs %d px outside the refresh window -- suffix dropped",
+              kHeaderUtcSuffix, backingX - textX);
+      clockText[std::strlen(clockText) - std::strlen(kHeaderUtcSuffix)] = '\0';
+      clockShowsUtc_ = false;
+      textX = clockSlotRight - renderer.getTextWidth(SMALL_FONT_ID, clockText);
+    }
+#endif
     // kHeaderTextTopY, not iconTop: this is text standing next to the battery
     // percentage, and the two rows are 4px apart. headerStatusRect() starts at
     // whichever is higher, so this stays inside the refreshed window.
     renderer.drawText(SMALL_FONT_ID, textX, kHeaderTextTopY, clockText, true);
     // The same quantised value the repaint decision compares against.
     drawnClockMinute_ = clockTickNow;
+
   } else {
     drawnClockMinute_ = -1;
   }
@@ -2022,24 +2219,75 @@ void MapActivity::drawHeaderStatusStrip() {
   // assumes the forced-Portrait UI themes (GfxRenderer.cpp, drawIcon()'s own
   // comment), and this row renders in whatever orientation the device is held
   // in, same as the compass and the Bluetooth logo it sits next to.
-  if (autoSyncPending_ > 0) {
+  //
+  // Guarded on bleInUse_ as well, though autoSyncPending_ cannot rise without a
+  // link: autosync only counts tiles the phone was asked for, and asking goes
+  // through isCommandSubscribed(). The guard is here so the row's rule reads as
+  // one rule -- BLE icons iff BLE -- rather than as an accident of another
+  // counter staying zero.
+  const bool showTransferIcon = bleInUse_ && autoSyncPending_ > 0;
+  if (showTransferIcon) {
     renderer.drawMono1bpp(icon_transferBle.bits, transferIconLeft, iconTop, icon_transferBle.w, icon_transferBle.h,
                           true);
   }
-  transferIconShown_ = autoSyncPending_ > 0;
+  transferIconShown_ = showTransferIcon;
 
 #ifdef ENABLE_GNSS_CMD
-  // The receiver's state, always drawn -- "off" is a state and not the absence
-  // of an icon. drawMono1bpp() for the same reason as the transfer icon above.
-  {
+  // The receiver's state, whenever the receiver is what this session uses.
+  // drawMono1bpp() for the same reason as the transfer icon above.
+  //
+  // **This used to be drawn always, with "off" as one of three states**, so a
+  // rider could tell "no receiver running" from "no icon yet". That reasoning
+  // expired on 2026-09-03, when the map stopped running both radios at once:
+  // the phone path now draws Bluetooth icons and no GNSS icon, so there is no
+  // "no icon yet" case left to be confused with. Off still has a glyph, and it
+  // now means the one thing worth telling -- the rider asked for the receiver
+  // and it is not running (start failed, or `gnss.running()` went false).
+  if (!bleInUse_) {
     const GnssHeaderState state = gnssHeaderState();
     const freeink::Icon& glyph = state == GnssHeaderState::Fixed     ? icon_gnssFixed
                                  : state == GnssHeaderState::Seeking ? icon_gnssSearching
                                                                      : icon_gnssOff;
     renderer.drawMono1bpp(glyph.bits, gnssIconLeft, iconTop, glyph.w, glyph.h, true);
     drawnGnssState_ = state;
+
+    // Bars: count = satellites tracked, height = the best one's signal.
+    //
+    // An empty block is the useful case, not a missing one. On 2026-09-04 the
+    // receiver saw nothing at all for fifteen minutes outdoors and the panel
+    // said only "searching" -- a state it also shows when a fix is two seconds
+    // away. Four empty slots say "it hears nothing", which is a different
+    // problem with a different answer, and it needs no cable to read.
+    const uint8_t tracked = gnss.satsWithSignal();
+    const int filled = tracked > kHeaderGnssBarCount ? kHeaderGnssBarCount : static_cast<int>(tracked);
+    const int barHeight = resolveGnssBarHeight(gnss.bestSnr());
+    for (int i = 0; i < kHeaderGnssBarCount; ++i) {
+      const int x = gnssBarsLeft + i * (kHeaderBleBarWidth + kHeaderBleBarGap);
+      if (i < filled && barHeight > 0) {
+        renderer.fillRect(x, iconBottom - barHeight, kHeaderBleBarWidth, barHeight, true);
+      } else {
+        // A baseline tick, not an outlined bar: an outline at this size reads as
+        // a filled one from arm's length, and "not tracked" has to be legible at
+        // a glance or the block says nothing.
+        renderer.fillRect(x, iconBottom - 1, kHeaderBleBarWidth, 1, true);
+      }
+    }
+    drawnGnssBars_ = filled;
+    drawnGnssBarHeight_ = barHeight;
   }
 #endif
+
+  // Everything below is the phone link, and this session may not have one.
+  // Returning rather than nesting: the bars branch below has its own early
+  // return, so a wrapping `if` would put the function's real end in two places.
+  // The drawn-state trackers are cleared first, so updateHeaderStatus() compares
+  // against a row that shows no link rather than against the last one that did.
+  if (!bleInUse_) {
+    drawnLinkConnected_ = false;
+    drawnBleBars_ = 0;
+    lastKnownBleBars_ = 0;
+    return;
+  }
 
   // Logo: a small hand-drawn Bluetooth rune -- a vertical spine (the actual
   // Bluetooth glyph's ascender/descender) plus two chevron wings crossing it,
@@ -2231,6 +2479,7 @@ MapActivity::MapActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
   // collide with a neighbour -- which is what the old `line1Y`/`line2Y`
   // ladder could not promise once more than one path was writing into it.
   debugFixSlot_ = debug_.reserve("fix");
+  debugGnssSlot_ = debug_.reserve("gnss");
   debugRenderSlot_ = debug_.reserve("render");
   debugRouteNameSlot_ = debug_.reserve("route");
   debugRouteFitSlot_ = debug_.reserve("routefit");
@@ -2249,14 +2498,30 @@ void MapActivity::onEnter() {
   // does -- so the window before it needs closing here.
   powerManager.setPowerSaving(false);
 
-  bleStartFailed_ = !freeink::BlePositionServer::getInstance().begin();
-  if (bleStartFailed_) {
-    LOG_ERR(kLogTag, "BlePositionServer.begin() failed");
+  // One position source per map session, and the other radio does not run.
+  // See bleInUse_'s comment (MapActivity.h) for what this costs and why the
+  // trade was taken.
+#ifdef ENABLE_GNSS_CMD
+  bleInUse_ = SETTINGS.mapGnssPosition == 0;
+#else
+  bleInUse_ = true;
+#endif
+
+  if (bleInUse_) {
+    bleStartFailed_ = !freeink::BlePositionServer::getInstance().begin();
+    if (bleStartFailed_) {
+      LOG_ERR(kLogTag, "BlePositionServer.begin() failed");
+    }
+    LOG_DBG(kLogTag, "BlePositionServer.begin() returned");
+    // After begin(), so the characteristics exist before anything can be
+    // written to them.
+    transfer_.attach();
+  } else {
+    // Not a failure -- nobody asked for it. bleStartFailed_ drives the waiting
+    // banner's error line, and there is no error to report.
+    bleStartFailed_ = false;
+    LOG_INF(kLogTag, "ble: not started, position comes from the receiver");
   }
-  LOG_DBG(kLogTag, "BlePositionServer.begin() returned");
-  // After begin(), so the characteristics exist before anything can be
-  // written to them.
-  transfer_.attach();
 
 #ifdef ENABLE_GNSS_CMD
   // The receiver comes up with the map and goes down with it, when the rider
@@ -2583,6 +2848,10 @@ void MapActivity::onExit() {
   // activity is about to be deleted (main.cpp's exitActivity). A transfer
   // still in flight loses its .part file here rather than surviving into a
   // screen that has no BLE link.
+  // Both are unconditional even when bleInUse_ is false and begin() never ran:
+  // end() returns immediately on !begun_ (BlePositionServer.cpp:429) and
+  // detach() clears hooks that were never set. A branch here would be a second
+  // place to keep in step with onEnter()'s, for no gain.
   transfer_.detach();
   freeink::BlePositionServer::getInstance().end();
 
@@ -2748,6 +3017,39 @@ void MapActivity::loop() {
     return;
   }
 
+  // The touch mode decides what chrome is on screen -- the hint boxes, or the
+  // padlock that stands in for them when the panel is locked -- and it changes
+  // from under this screen: the home key's tap toggles the lock in main.cpp's
+  // loop(), which cannot reach in here. Every other screen picks that up from
+  // the activityManager.requestUpdate() the toggle fires; this one paints from
+  // its own loop() rather than through Activity::render(RenderLock&&) (see
+  // renderCurrent()'s note), so that request never lands. Measured on hardware
+  // 2026-09-05: the lock took effect and the boxes stayed on the panel.
+  //
+  // Below the popup's early return on purpose. A menu open over the map owns
+  // the panel, and repainting the map under it would strand the popup's pixels;
+  // the check fires on the first frame after it closes instead.
+  // The EFFECTIVE mode, not SETTINGS.touchMode: the lock is its own flag now and
+  // it overrides the stored preference (TouchPolicy::mode()). Polling the stored
+  // field would have missed every lock and unlock.
+  const uint8_t effectiveTouchMode = static_cast<uint8_t>(TouchPolicy::mode());
+  if (drawnTouchMode_ != effectiveTouchMode) {
+    const bool firstFrame = drawnTouchMode_ == 0xFF;
+    drawnTouchMode_ = effectiveTouchMode;
+    if (!firstFrame) {
+      // Two strips of chrome changed, not the map. swapChrome() puts the
+      // snapshotted map back and refreshes only those strips; the full render is
+      // the fallback for when there is no snapshot to work from (no full frame
+      // yet, or the heap refused one).
+      if (!swapChrome()) {
+        redrawDueMs_ = 0;
+        showBusy();  // the old chrome is still up; say the redraw started
+        renderCurrent();
+      }
+      return;
+    }
+  }
+
   freeink::PositionUpdate update;
   if (freeink::BlePositionServer::getInstance().getLatest(update)) {
     // showingPersistedFix_ is in the condition because onEnter() seeds
@@ -2804,6 +3106,33 @@ void MapActivity::loop() {
   // thing that is not that decision -- and the case step 3 is built for has no
   // phone connected at all.
   pollGnssFix();
+
+  // The receiver's own numbers, written every loop. set() is a vsnprintf into
+  // the slot's buffer -- no drawing, no panel, no allocation -- and
+  // updateDebugOverlay() only repaints when the text actually changed, so
+  // writing the same string a hundred times a second costs nothing.
+  //
+  // **`run` comes first because every number after it is ambiguous without
+  // it**: the accessors answer 0 both for a stopped receiver and for a running
+  // one hearing nothing, and those are opposite findings. `used`, `inview` and
+  // `tracked` are three different counts and the gaps between them are the
+  // diagnosis -- inview off the almanac, tracked from a non-zero C/N0, used in
+  // the solution.
+  //
+  // Worth its slot: on 2026-09-05 this row read `q0 u0 v10 t10 s30` for a long
+  // stretch at the start of a walk. Ten satellites tracked at 30 dB-Hz and no
+  // fix is not a weak-signal story, it is the receiver failing to decode the
+  // ephemeris off the air -- which needs about 31 dB-Hz. Nothing else on the
+  // panel could have said that.
+  if (bleInUse_) {
+    debug_.clear(debugGnssSlot_);
+  } else {
+    const GnssFix& debugFix = gnss.fix();
+    debug_.set(debugGnssSlot_, "gnss %s q%u u%u v%u t%u s%u", gnss.running() ? "on" : "off",
+               static_cast<unsigned>(debugFix.quality), static_cast<unsigned>(debugFix.satsUsed),
+               static_cast<unsigned>(gnss.satsInView()), static_cast<unsigned>(gnss.satsWithSignal()),
+               static_cast<unsigned>(gnss.bestSnr()));
+  }
 #endif
 
   // The command console, over both channels. Same parser, same state, same
@@ -2913,7 +3242,12 @@ void MapActivity::loop() {
   // bleStartFailed_ here except to set it on a fresh begin(): a genuinely
   // failed init must not be retried every tick, only on the transition that
   // asks for the radio again.
-  {
+  //
+  // Skipped whole when this session never started the radio (bleInUse_,
+  // MapActivity.h). Without the guard, needBle is true in Follow and this
+  // block would begin() the very radio onEnter() deliberately left down -- the
+  // rider would get an advertising device the moment they entered Follow.
+  if (bleInUse_) {
     const bool transferActive = transfer_.status().active;
     const bool needBle = screenMode_ == MapScreenMode::Follow || transferActive;
     auto& ble = freeink::BlePositionServer::getInstance();
@@ -2949,7 +3283,9 @@ void MapActivity::loop() {
   // (BlePositionServer.h, sendTransferStatus). A separate call, not folded into
   // serviceAdvertising: that one owns advertising, this is the indication slot.
   // Costs one counter compare per tick when nothing is parked.
-  freeink::BlePositionServer::getInstance().flushTransferStatus();
+  // Same guard, same reason: nothing parks an indication on a link that was
+  // never opened.
+  if (bleInUse_) freeink::BlePositionServer::getInstance().flushTransferStatus();
 
   const uint32_t now = millis();
   if (redrawDueMs_ != 0 && now >= redrawDueMs_) {
@@ -3152,6 +3488,105 @@ void MapActivity::drawMapButtonHints() {
       break;
     }
   }
+}
+
+bool MapActivity::captureRegion(RegionSnapshot& snap, const Rect rect) {
+  snap.bits.reset();
+  snap.size = 0;
+  snap.rect = Rect{0, 0, 0, 0};
+  if (rect.width <= 0 || rect.height <= 0) return false;
+  const size_t size = renderer.getRegionByteSize(rect.x, rect.y, rect.width, rect.height);
+  if (size == 0) return false;
+  // Same reserve the menu backdrop keeps, and for the same reason: a convenience
+  // must not be able to starve the work. Doing without it costs a full render on
+  // the next chrome change, which beats an allocation failure elsewhere.
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  if (size + kMenuBackdropHeapReserve > freeHeap) {
+    LOG_DBG(kLogTag, "region snapshot skipped: %u bytes, free heap %u", static_cast<unsigned>(size),
+            static_cast<unsigned>(freeHeap));
+    return false;
+  }
+  auto buffer = makeUniqueNoThrow<uint8_t[]>(size);
+  if (!buffer) {
+    LOG_ERR(kLogTag, "region snapshot unavailable: %u bytes, free heap %u", static_cast<unsigned>(size),
+            static_cast<unsigned>(freeHeap));
+    return false;
+  }
+  if (!renderer.copyRegionToBuffer(rect.x, rect.y, rect.width, rect.height, buffer.get(), size)) {
+    LOG_ERR(kLogTag, "region snapshot read rejected: %d,%d %dx%d", rect.x, rect.y, rect.width, rect.height);
+    return false;
+  }
+  snap.bits = std::move(buffer);
+  snap.size = size;
+  snap.rect = rect;
+  return true;
+}
+
+bool MapActivity::restoreRegion(const RegionSnapshot& snap) const {
+  if (!snap.bits) return false;
+  const Rect rect = snap.rect;
+  if (!renderer.copyBufferToRegion(rect.x, rect.y, rect.width, rect.height, snap.bits.get(), snap.size)) {
+    LOG_ERR(kLogTag, "region snapshot write rejected: %d,%d %dx%d", rect.x, rect.y, rect.width, rect.height);
+    return false;
+  }
+  return true;
+}
+
+bool MapActivity::swapChrome() {
+  // Nothing was snapshotted (the screen never drew a full frame, or the heap said
+  // no), so there is no map to put back and the caller has to re-render.
+  if (!chromeFront_.bits) return false;
+  const Rect front = chromeFront_.rect;
+  const Rect side = chromeSide_.rect;
+
+  if (!restoreRegion(chromeFront_)) return false;
+  // The side boxes exist only in the mode that draws them, so an absent snapshot
+  // here is normal rather than a failure.
+  if (chromeSide_.bits) restoreRegion(chromeSide_);
+
+  // Draws whatever the mode wants over the restored map: the boxes, or the
+  // padlock, or nothing at all. The snapshots are deliberately kept -- their
+  // bits are still a clean picture of the map under these rectangles, so the
+  // next swap needs no new capture.
+  drawMapButtonHints();
+
+  // ONE window over both rects when the driver can afford it, not two.
+  //
+  // A windowed refresh costs the same panel time as a full one whatever its area
+  // -- ~1,081 ms on this panel, measured over a 4h36m walk 2026-09-05
+  // (docs/map-follow.md, "A windowed refresh blocks the loop"). So two windows
+  // cost two refreshes, about 2.2 s, where one union costs 1.08 s. Area is free;
+  // the count is not.
+  //
+  // This flips when this panel gets a real partial-window refresh (planned,
+  // 2026-09-06): once a window costs in proportion to its area, two small
+  // far-apart rects beat one union spanning mostly untouched panel.
+  //
+  // What is NOT free is the driver's buffer: displayBufferWindow() allocates one
+  // per window, and an unbounded union of two far-apart boxes is the whole panel,
+  // which aborted the device on a map screen (measured 2026-08-17,
+  // Ssd1677Driver::displayWindow -> operator new -> bad_alloc). Hence the
+  // affordability test, and hence the fallback below rather than a bigger try.
+  Rect window = front;
+  if (side.width > 0) {
+    const int x0 = std::min(front.x, side.x);
+    const int y0 = std::min(front.y, side.y);
+    const int x1 = std::max(front.x + front.width, side.x + side.width);
+    const int y1 = std::max(front.y + front.height, side.y + side.height);
+    window = Rect{x0, y0, x1 - x0, y1 - y0};
+  }
+  if (!windowRefreshAffordable(window.width, window.height)) {
+    // The union does not fit. Two windows are two refreshes, the same panel time
+    // as the full render the caller falls back to -- and the full render is at
+    // least correct about the layout, so let the caller do that instead.
+    LOG_DBG(kLogTag, "chrome swap union %dx%d unaffordable -- full render instead", window.width, window.height);
+    return false;
+  }
+  if (!renderer.displayBufferWindow(window.x, window.y, window.width, window.height)) {
+    LOG_ERR(kLogTag, "chrome swap window rejected: %d,%d %dx%d", window.x, window.y, window.width, window.height);
+    return false;
+  }
+  return true;
 }
 
 bool MapActivity::captureMenuBackdrop() {
@@ -5136,7 +5571,27 @@ void MapActivity::saveLaddersIfChanged() {
           static_cast<unsigned>(zoomStep()), static_cast<unsigned>(markerStep()));
 }
 
-bool MapActivity::preventAutoSleep() { return freeink::BlePositionServer::getInstance().isRunning(); }
+bool MapActivity::preventAutoSleep() {
+  // Whichever radio this session actually runs, not BLE specifically.
+  //
+  // **This was `return ble.isRunning()` and that became a bug on 2026-09-04.**
+  // It was correct while the map always started BLE: the server was up, so the
+  // screen always inhibited sleep. Then onEnter() stopped starting BLE on a GNSS
+  // session (bleInUse_, MapActivity.h) and this line kept asking about BLE --
+  // so a rider walking with the receiver got a map screen that let the device
+  // deep-sleep out from under them. Deep sleep is a full chip reset, so every
+  // wake cold-started the receiver, and a cold start that never finishes is a
+  // receiver that never fixes. Reported after a 15-minute walk with no position.
+  //
+  // The lesson is not about this line. Skipping `begin()` silently changed every
+  // caller that used `isRunning()` as a stand-in for "the map is live", and this
+  // was one. Anything else keyed on the BLE server as a proxy for the screen
+  // being in use needs the same read.
+#ifdef ENABLE_GNSS_CMD
+  if (!bleInUse_) return gnss.running();
+#endif
+  return freeink::BlePositionServer::getInstance().isRunning();
+}
 
 void MapActivity::kickFullClock() { powerManager.setPowerSaving(false); }
 
@@ -5159,8 +5614,18 @@ void MapActivity::renderWaiting() {
   // that paired fine looked identical. Same reasoning as renderViewport()'s
   // unconditional call (docs/map-header-status.md).
   drawHeaderStatus();
-  renderer.drawText(UI_10_FONT_ID, 8, mapContentTop() + 8,
-                    bleStartFailed_ ? tr(STR_MAP_BLE_START_FAILED) : tr(STR_MAP_WAITING_BLE), true);
+  // Names the source that is actually being waited on. Before 2026-09-03 this
+  // always said "Waiting for BLE position" -- including on a ride where the fix
+  // was coming from the receiver and no phone was involved, which is wrong text
+  // rather than a wrong dot. Named T-589 by the ride's own write-up
+  // (../../../docs/gnss.md, "What a hardware pass has to check"); that id is not
+  // in the parent repo's TODO.md, so the doc is the citation, not a task file.
+  const char* waitingText = tr(STR_MAP_WAITING_BLE);
+#ifdef ENABLE_GNSS_CMD
+  if (!bleInUse_) waitingText = tr(STR_MAP_WAITING_GNSS);
+#endif
+  renderer.drawText(UI_10_FONT_ID, 8, mapContentTop() + 8, bleStartFailed_ ? tr(STR_MAP_BLE_START_FAILED) : waitingText,
+                    true);
   const auto labels = mappedInput.mapLabels(tr(STR_EXIT), tr(STR_MAP_OPTIONS), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
   drawZoomSideHints();
@@ -5470,6 +5935,86 @@ void MapActivity::pollGnssFix() {
   if (!fix.valid) return;
   if (fix.quality == 0 || fix.quality == 6) return;
 
+  // **The receiver's own confidence, into the marker.** MapFixTrust was built
+  // as the seam both sources hang off, but only the metre-speaking ones were
+  // wired to it -- the BLE packet and the console. A GNSS session left the ring
+  // showing whatever a previous BLE session had latched, which is to say
+  // nothing about the receiver. posTrustForHdop() is that missing half.
+  trust_.pos = MapFixTrust::posTrustForHdop(fix.hdop, fix.satsUsed, trustState_);
+  // `trust_.dir` is deliberately left alone. MapFixTrust says outright that
+  // there is no degrees-to-state mapping and that a receiver's course would
+  // have to come from whether it is moving, not from a figure -- and nobody has
+  // written that mapping. Leaving it Unstated draws the glyph this screen has
+  // always drawn, which is honest; inventing a rule here would put a second,
+  // unreviewed opinion next to the one that file exists to hold.
+
+  // **One gate, and it only catches a fix that contradicts itself.**
+  //
+  // There were two. The other refused a fix whose HDOP was hopeless, and it is
+  // gone on the maintainer's call, 2026-09-06: with the ring now able to say
+  // "this position is loose", refusing the fix is the worse answer. A marker
+  // that quietly stops moving cannot be told from a device standing still,
+  // while a marker that moves with a broken ring says exactly what it knows.
+  // **Informing beats withholding wherever the fix is merely imprecise.**
+  //
+  // What no ring can rescue is a fix that disagrees with itself. A fix carries
+  // a position and, separately, a Doppler speed. Where the position jumped
+  // implies a speed too, and on a sound fix the two roughly agree -- on a bus
+  // as much as on foot, which is why they are compared to each other and never
+  // to a ceiling. An earlier version did cap speed per ride mode and the
+  // maintainer killed it on the spot: a hiker gets on a bus, and the walk this
+  // came from had two metro rides in it.
+  //
+  // Multipath moves the position without moving the Doppler, so the two
+  // diverge and say so. Measured against the three worst jumps of the walk of
+  // 2026-09-05: 85 m in 1 s implies 306 km/h while the receiver reported 76.8,
+  // a factor of four -- refused. 89 m in 5 s implies 64 against a reported 58,
+  // and 79 m in 5 s implies 57 against 69; those agree with themselves, so they
+  // stand, because the rider may genuinely have been on a bus and this code
+  // cannot know they were not.
+  {
+    bool inconsistent = false;
+    const uint32_t nowMs = millis();
+    if (haveGnssAcceptedFix_) {
+      const uint32_t dtMs = nowMs - lastAcceptedFixMs_;
+      // Under a second there is no useful denominator, and over a minute the
+      // rider may have been underground -- a metro ride is a gap, not a jump.
+      if (dtMs >= 1000 && dtMs <= 60000) {
+        const double dLat = (fix.latitude - lastAcceptedLat_) * 111320.0;
+        const double dLon = (fix.longitude - lastAcceptedLon_) * 111320.0 * cos(fix.latitude * M_PI / 180.0);
+        const double metres = sqrt(dLat * dLat + dLon * dLon);
+        const double impliedKmh = metres / (dtMs / 1000.0) * 3.6;
+        // Both conditions, not either: a slow rider whose Doppler reads zero
+        // would otherwise trip this on every step. Only a large absolute jump
+        // that also outruns the reported speed several times over is a glitch.
+        inconsistent = impliedKmh > 40.0 && impliedKmh > fix.speedKmh * 3.0 + 20.0;
+        if (inconsistent) {
+          LOG_DBG(kLogTag, "gnss fix disagrees with itself: %.0f m in %lu ms implies %.0f km/h, receiver says %.1f",
+                  metres, static_cast<unsigned long>(dtMs), impliedKmh, static_cast<double>(fix.speedKmh));
+        }
+      }
+    }
+
+    if (inconsistent) {
+      // **Never refuse forever.** A receiver settling into a bad state would
+      // otherwise freeze the marker, and after a short run the next fix is
+      // taken whatever it says -- the ring will have already said it is loose.
+      if (++gnssRejectedRun_ <= kGnssMaxRejectedRun) {
+        LOG_DBG(kLogTag, "gnss fix refused: hdop %.1f, speed %.1f km/h, sats %u, run %u", static_cast<double>(fix.hdop),
+                static_cast<double>(fix.speedKmh), static_cast<unsigned>(fix.satsUsed),
+                static_cast<unsigned>(gnssRejectedRun_));
+        return;
+      }
+      LOG_INF(kLogTag, "gnss: %u fixes refused in a row, taking this one anyway",
+              static_cast<unsigned>(gnssRejectedRun_));
+    }
+    gnssRejectedRun_ = 0;
+    lastAcceptedLat_ = fix.latitude;
+    lastAcceptedLon_ = fix.longitude;
+    lastAcceptedFixMs_ = nowMs;
+    haveGnssAcceptedFix_ = true;
+  }
+
   // Which sample this is. The driver's "something changed" answer is poll()'s
   // return value and main.cpp already consumed it, so the change instant stands
   // in for a sequence number: it is constant between changes and moves on every
@@ -5498,10 +6043,13 @@ void MapActivity::pollGnssFix() {
   gnssSeq_++;
   // course and moving are logged next to the step they produced: a heading that
   // looks wrong on the panel is answered by this line and not by a rebuild.
-  LOG_DBG(kLogTag, "gnss fix: seq %u, quality %u, sats %u, hdop %.1f, speed %.1f km/h, course %.1f, moving %d, heading %u, age %lu ms",
+  LOG_DBG(kLogTag,
+          "gnss fix: seq %u, quality %u, sats %u, hdop %.1f, speed %.1f km/h, course %.1f, moving %d, heading %u, age "
+          "%lu ms",
           static_cast<unsigned>(gnssSeq_), static_cast<unsigned>(fix.quality), static_cast<unsigned>(fix.satsUsed),
           static_cast<double>(fix.hdop), static_cast<double>(fix.speedKmh), static_cast<double>(fix.courseDegrees),
-          gnssHeadingState_.moving ? 1 : 0, static_cast<unsigned>(headingStep), static_cast<unsigned long>(gnss.fixAgeMs()));
+          gnssHeadingState_.moving ? 1 : 0, static_cast<unsigned>(headingStep),
+          static_cast<unsigned long>(gnss.fixAgeMs()));
   // Before applyFix(), not after: applyFix() can spend seconds rendering, and a
   // row is worth having even if the frame that fix would have drawn never
   // finishes.
@@ -6150,6 +6698,20 @@ void MapActivity::renderViewport(int32_t latE7, int32_t lonE7, uint8_t headingSt
                                source_->bytesRead(), source_->waysFiltered());
   consoleState_.setZoomInfo(zoomStep(), range.z, MapViewport::kZoomLadder[zoomStep()].mpp);
   sendViewportDiagonalIfChanged();
+
+  // Snapshot what the chrome is about to cover, before it covers it. That is
+  // what lets a later lock/unlock swap the boxes for the padlock with two small
+  // window refreshes instead of re-rendering the map -- tiles off the card and
+  // a full-panel refresh for a change that touches two strips of chrome.
+  //
+  // The band is taken at chromeBandHeight(), the tallest chrome any mode draws,
+  // NOT at the current mode's height: the boxes are taller than the padlock
+  // strip, so a snapshot sized for the padlock would leave a sliver of stale box
+  // pixels above it, and e-ink holds that indefinitely.
+  const int chromeBand = UITheme::getInstance().chromeBandHeight();
+  captureRegion(chromeFront_,
+                Rect{0, renderer.getScreenHeight() - chromeBand, renderer.getScreenWidth(), chromeBand});
+  captureRegion(chromeSide_, GUI.sideButtonHintsRect(renderer));
 
   // Composited last, over the map's own bottom-edge pixels rather than into
   // reserved space -- same idea as the debug window at the top of the screen

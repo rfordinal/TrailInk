@@ -24,12 +24,19 @@
 // The board's own support code: the PCA9535 expander behind the user button and
 // the GNSS/LoRa power rail both live here.
 #include <BoardT5S3.h>
+// For the expander's direction register, which BoardT5S3 does not expose.
+#include <Wire.h>
 #endif
 
 #ifdef ENABLE_GNSS_CMD
+#include <BlePositionServer.h>  // gnssStart() asks it for a clock to seed with
 #include <Gnss.h>
 #include <Wire.h>
 #include <esp_system.h>
+#endif
+
+#ifdef ENABLE_SDBUS_CMD
+#include <esp_rom_crc.h>
 #endif
 
 #include <cstring>
@@ -72,61 +79,200 @@ namespace {
 // path and block every other poll behind it.
 bool frontlightStateChanged = false;
 
-// Both of this board's programmable inputs land here, so the gesture means the
-// same thing whichever one the rider used (side switch or capacitive home key).
+// True while a held button is still walking the frontlight rungs. loop() waits
+// for it to clear before it writes the level to the card: a hold steps every
+// 500 ms and each step would otherwise be its own SD write, on the input path,
+// for a level the rider is still choosing.
+bool frontlightHoldActive = false;
+
+// The rungs a held user button walks through, off included. A cycle rather than
+// an on/off toggle because the panel needs very different amounts of light at
+// dusk and in full dark, and there is no other control for it on this board: no
+// frontlight row in Settings, and touch is what gloves defeat.
+//
+// 10 % is the bottom rung on purpose: it is enough to read the panel in a dark
+// tent and it is the one setting a rider can leave on for hours. 100 % costs
+// about 43 mA off the cell at 40 % already (docs/devices/lilygo-t5-s3-pro.md),
+// so the top rung is a look-at-it-now rung, not a ride setting.
+constexpr uint8_t FRONTLIGHT_RUNGS[] = {0, 10, 30, 60, 100};
+
+// The user button's hold. The home key keeps its own plain on/off below: the two
+// inputs deliberately do different things now, because the key is the one a
+// glove cannot reach and "give me light" is the gesture worth having there.
+//
+// Steps to the first rung strictly above the current brightness, wrapping to
+// off. Comparing against the live brightness rather than a stored index is what
+// keeps a value that is on no rung -- a settings.json from an older build, or a
+// CMD:LIGHT during bring-up -- from stalling the cycle: 50 % steps to 60 %.
+void cycleFrontlight(const char* source) {
+  if (!frontlight.present()) return;
+  const uint8_t current = frontlight.brightness();
+  uint8_t next = 0;
+  for (const uint8_t rung : FRONTLIGHT_RUNGS) {
+    if (rung > current) {
+      next = rung;
+      break;
+    }
+  }
+  frontlight.setBrightness(next);
+  frontlightStateChanged = true;
+  LOG_INF("BTN", "%s: frontlight %u%%", source, static_cast<unsigned>(frontlight.brightness()));
+}
+
+// The home key's hold: off from anywhere, on at the level in Settings. It reads
+// SETTINGS.frontlightBrightness rather than FrontlightManager's own remembered
+// level, so the Settings row and the user button's rungs are the only things
+// that decide how bright "on" is -- one number, three ways to set it.
 void toggleFrontlight(const char* source) {
   if (!frontlight.present()) return;
   if (frontlight.brightness() > 0) {
-    frontlight.off();
+    frontlight.setBrightness(0);
   } else {
-    frontlight.on();
+    frontlight.setBrightness(SETTINGS.frontlightBrightness);
   }
   frontlightStateChanged = true;
   LOG_INF("BTN", "%s: frontlight %u%%", source, static_cast<unsigned>(frontlight.brightness()));
 }
+
+// How long BOOT must be held before it means sleep. On the T5 S3 Pro a shorter
+// press means Back (boardButtonHook() below), so the two gestures share one
+// number and it has to be long enough to tap deliberately with gloves on:
+// 400 ms, the setting's own answer, is a window a rider misses and sleeps the
+// device instead of stepping back.
+//
+// Wake is passed the same number, but it does not mean the same thing:
+// verifyPowerButtonWakeup() subtracts the time already spent booting
+// (HalGPIO.cpp:212-213), so what a wake actually requires is that the button is
+// still down when setup() reaches that check -- 1 ms of it if boot took longer
+// than 1500 ms. Sleep is the only gesture this number really gates.
+uint16_t powerHoldDurationMs() {
+#if FREEINK_DEVICE_LILYGO
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::LilyGoT5S3) return 1500;
+#endif
+  return SETTINGS.getPowerButtonDuration();
+}
 }  // namespace
 
 #if FREEINK_DEVICE_LILYGO
-// The T5 S3 Pro's user button (switch S3, silkscreened IO48, wired to PCA9535
-// IO12 -- docs/devices/lilygo-t5-s3-pro.md, "The four physical buttons") is the
-// only button on this board firmware can read at all: BOOT is the power button,
-// RST resets the MCU and PWR sits on the charger. So it carries two jobs.
+// ===========================================================================
+// THE T5 S3 PRO'S BUTTON MAP. Read this before changing any of it.
+// ===========================================================================
 //
-//   tap   -> Confirm (Select)
-//   hold  -> toggle the frontlight
+// Three sessions in a row mis-identified which switch is which here, because the
+// silkscreen, the schematic and the firmware each use a different name for the
+// same thing. The canonical hardware page is the parent repo's
+// docs/devices/lilygo-t5-s3-pro.md, "The four physical buttons"; this table is
+// what the firmware actually does with them.
+//
+// | Physical            | Schematic       | Reaches the MCU as    | Firmware job     |
+// |---------------------|-----------------|-----------------------|------------------|
+// | BOOT, left, top     | S2, net IO0     | GPIO0 = input.power   | tap = Back       |
+// |                     |                 |                       | hold 1500ms =    |
+// |                     |                 |                       |  sleep, wake too |
+// | IO48 silkscreen,    | S3, net BUTTON  | PCA9535 U1 (0x20)     | tap = Confirm    |
+// |   left, bottom      |                 |   pin IO1_0, polled   | hold 600ms = the |
+// |   ("the user        |                 |   by boardButtonHook()|   next frontlight|
+// |    button")         |                 |   below               |   rung           |
+// | RST, right, top     | S1, net RST/EN  | nothing -- it is the  | none, and never  |
+// |                     |                 |   hardware reset pin  |   readable       |
+// | PWR, right, bottom  | S4, BQ25896 QON | nothing -- no MCU or  | none, and never  |
+// |                     |                 |   expander pin at all |   readable       |
+//
+// **"The user button", "S3", "the IO48 one" and "the left bottom button" are all
+// the same single switch.** It is NOT a home button, and GPIO48 has no switch on
+// it anywhere in the schematic (GPIO48 is EP_CKV, the panel bus clock).
+//
+// **The capacitive home key is a fifth, separate input** and is not one of the
+// four above. It is not a GPIO at all: the GT911 reports it in its own status
+// byte, bit 0x10, and InputManager::serviceTouch() reads that bit on every board
+// **regardless of TouchConfig::hasHomeKey** -- that flag is consulted nowhere in
+// InputManager and gates nothing today, so do not go looking for it as the
+// switch that turns this key on. Confirmed working on this panel 2026-09-05
+// (holding it turns the frontlight on). Its jobs are handled in loop(), not
+// here:
+//
+//   home key tap        -> Confirm (Select), after the double-tap window
+//   home key double tap -> lock / unlock the touch panel (toggleTouchLock)
+//   home key hold       -> frontlight on / off (toggleFrontlight)
 //
 // Why the light hangs off a physical hold and not a touch control: gloves defeat
 // the capacitive panel, and the light is exactly what a rider reaches for with
-// gloves on.
+// gloves on. Why Back is on BOOT (2026-09-07): without it this board has no way
+// out of a screen except touch, which is the input a glove removes, and BOOT's
+// short press was doing nothing here -- shortPwrBtn defaults to IGNORE. Sleep
+// and Back are now the same press told apart by how long it is held, which is
+// what powerHoldDurationMs() above sets. Why the lock hangs off a double tap:
+// nothing else on this board can stop the glass reacting to a bag, a palm or rain, and the single tap was worth
+// keeping as Select. The cost is that Select through this key waits out the
+// double-tap window -- a single tap cannot be known to be single until then.
 namespace {
 constexpr unsigned long USER_BUTTON_HOLD_MS = 600;
+// A held button keeps stepping the light at this rate. Slow enough to let go on
+// the rung you meant (five rungs take 2.6 s end to end), fast enough that
+// walking the whole cycle is not a chore. There is no SD write per step: the
+// hold sets a flag (frontlightHoldActive) and loop() saves the level once, once
+// the button is up.
+constexpr unsigned long USER_BUTTON_REPEAT_MS = 500;
 
-// The tap is reported as a synthetic Confirm press *after* the button is
-// released, because a press edge at touch-down would let the activity act
-// before the hold could still turn out to mean the frontlight.
-//
-// It has to survive InputManager's debounce, which commits a state change only
-// once two update() calls at least DEBOUNCE_DELAY (5 ms) apart saw the same
-// state (InputManager.cpp, update()). Counting polls rather than wall time is
-// what makes this survive a panel refresh: a millisecond window would expire
-// unobserved while the main loop sits in a multi-second redraw, and the tap
-// would be silently dropped. Both conditions must hold, so the pulse is long
-// enough in time AND seen often enough.
-constexpr uint8_t USER_BUTTON_CLICK_POLLS = 3;
-constexpr unsigned long USER_BUTTON_CLICK_MS = 20;
+void toggleTouchLock() {
+  // One flag, flipped. Nothing has to be remembered across it: the mode the
+  // rider chose lives in SETTINGS.touchMode and the lock never touches it, so
+  // unlocking simply stops overriding it (TouchPolicy::mode()). The earlier
+  // version stored DISABLED *into* touchMode and kept the previous value in RAM,
+  // which lost it across a reboot and put a value in that field that the
+  // Settings row does not list.
+  SETTINGS.touchLocked = SETTINGS.touchLocked != 0 ? 0 : 1;
+  // One SD write per deliberate tap, the same reasoning the frontlight hold
+  // below carries: a handful of writes a ride, not one per interaction.
+  SETTINGS.saveToFile();
+  // The hint boxes appear or vanish with the mode and the layout reserves room
+  // for them or does not, so the screen is repainted rather than nudged.
+  activityManager.requestUpdate();
+  LOG_INF("BTN", "Home key: touch %s", SETTINGS.touchLocked != 0 ? "locked" : "unlocked");
+}
+
+// A synthetic press has to survive InputManager's debounce, which commits a
+// state change only once two update() calls at least DEBOUNCE_DELAY (5 ms)
+// apart saw the same state (InputManager.cpp, update()). Counting polls rather
+// than wall time is what makes this survive a panel refresh: a millisecond
+// window would expire unobserved while the main loop sits in a multi-second
+// redraw, and the tap would be silently dropped. Both conditions must hold, so
+// the pulse is long enough in time AND seen often enough.
+constexpr uint8_t SYNTHETIC_CLICK_POLLS = 3;
+constexpr unsigned long SYNTHETIC_CLICK_MS = 20;
+
+// One synthetic press in flight at a time, as a key bitmask. Two gestures cannot
+// overlap on a board with two buttons and one thumb, and if they did, the newer
+// one is the one the rider meant.
+uint8_t syntheticClickMask = 0;
+uint8_t syntheticClickPolls = 0;
+unsigned long syntheticClickSince = 0;
+
+// Both taps are reported *after* release, never on the press edge: on either
+// button the press could still turn out to be a hold, and an activity that acted
+// at touch-down would have acted before the gesture was known.
+void beginSyntheticClick(uint8_t button, unsigned long now) {
+  syntheticClickMask = static_cast<uint8_t>(1U << button);
+  syntheticClickPolls = 0;
+  syntheticClickSince = now;
+}
 
 bool userButtonDown = false;
 bool userButtonLongFired = false;
 unsigned long userButtonDownAt = 0;
-bool userButtonClickPending = false;
-uint8_t userButtonClickPolls = 0;
-unsigned long userButtonClickSince = 0;
+unsigned long userButtonRungAt = 0;
+
+bool powerButtonLevelKnown = false;
+bool powerButtonDown = false;
+unsigned long powerButtonDownAt = 0;
 
 // Runs inside InputManager::update() (one call per poll), i.e. in whatever task
 // drives the main loop. Reads one PCA9535 input register over I2C; BoardT5S3
 // takes the bus mutex for us, so this is safe next to the panel's own expander
-// writes.
-uint8_t userButtonHook() {
+// writes. The BOOT read is a plain digitalRead of the same pin and polarity
+// InputManager samples for BTN_POWER (InputManager.cpp, getDigitalState()) --
+// this only adds a meaning to it, it does not take the power button away.
+uint8_t boardButtonHook() {
   const unsigned long now = millis();
   const bool down = BoardT5S3::readButton();
 
@@ -136,28 +282,97 @@ uint8_t userButtonHook() {
     userButtonDownAt = now;
     // Drop a tap still being reported: a second press starting inside that
     // window would otherwise be seen as Confirm held down.
-    userButtonClickPending = false;
-  } else if (down && !userButtonLongFired && now - userButtonDownAt >= USER_BUTTON_HOLD_MS) {
-    // Fires the moment the hold is long enough, not on release: the light comes
-    // on under the thumb, which is the feedback that says "let go now".
+    syntheticClickMask = 0;
+  } else if (down && now - userButtonDownAt >= USER_BUTTON_HOLD_MS &&
+             (!userButtonLongFired || now - userButtonRungAt >= USER_BUTTON_REPEAT_MS)) {
+    // Fires the moment the hold is long enough, not on release: the light
+    // changes under the thumb, which is the feedback that says "let go now".
+    // Then it keeps stepping while the button stays down, so a rider walks to
+    // the rung they want with one press instead of four -- the light itself is
+    // the readout, and letting go is how they stop.
     userButtonLongFired = true;
-    toggleFrontlight("User button hold");
+    userButtonRungAt = now;
+    frontlightHoldActive = true;
+    cycleFrontlight("User button hold");
   } else if (!down && userButtonDown) {
     userButtonDown = false;
-    if (!userButtonLongFired) {
-      userButtonClickPending = true;
-      userButtonClickPolls = 0;
-      userButtonClickSince = now;
+    frontlightHoldActive = false;
+    if (!userButtonLongFired) beginSyntheticClick(InputManager::BTN_CONFIRM, now);
+  }
+
+  const bool powerDown =
+      digitalRead(BoardConfig::ACTIVE.input.power) == (BoardConfig::ACTIVE.input.powerActiveHigh ? HIGH : LOW);
+  if (!powerButtonLevelKnown) {
+    // The first poll after install lands while the button that woke the device
+    // may still be held. Adopt the level instead of calling it a press edge, or
+    // every wake would end in a Back the rider never asked for.
+    powerButtonLevelKnown = true;
+    powerButtonDown = powerDown;
+  } else if (powerDown && !powerButtonDown) {
+    powerButtonDown = true;
+    powerButtonDownAt = now;
+  } else if (!powerDown && powerButtonDown) {
+    powerButtonDown = false;
+    // A hold long enough to sleep never reaches here: loop() calls
+    // enterDeepSleep() at the threshold, while the button is still down. The
+    // check is for the case where it could not -- the two-second post-boot
+    // sleep guard (allowSleepAt), or a screenshot combo -- where a long press
+    // must not turn into a Back on release.
+    if (now - powerButtonDownAt < powerHoldDurationMs()) {
+      beginSyntheticClick(InputManager::BTN_BACK, now);
     }
   }
 
-  if (!userButtonClickPending) return 0;
-  ++userButtonClickPolls;
-  if (userButtonClickPolls > USER_BUTTON_CLICK_POLLS && now - userButtonClickSince >= USER_BUTTON_CLICK_MS) {
-    userButtonClickPending = false;
+  if (!syntheticClickMask) return 0;
+  ++syntheticClickPolls;
+  if (syntheticClickPolls > SYNTHETIC_CLICK_POLLS && now - syntheticClickSince >= SYNTHETIC_CLICK_MS) {
+    syntheticClickMask = 0;
     return 0;
   }
-  return static_cast<uint8_t>(1U << InputManager::BTN_CONFIRM);
+  return syntheticClickMask;
+}
+// --- Deselect the LoRa radio before the card comes up ----------------------
+//
+// The SD card and the SX1262 share one SPI bus on this board: MISO21 MOSI13
+// SCLK14, with SD_CS12 against LORA_CS46 (BoardT5S3Pins.h). GPIO46 runs straight
+// to the radio module's NSS with no pull-up, so nothing holds the radio
+// deselected unless the firmware does.
+//
+// Measured 2026-09-03 with CMD:SDBUS, nine runs, each after a hard reset with a
+// passing baseline read: with the radio deselected the card read correctly in
+// every combination of rail and reset line. With it selected the read failed
+// unless the radio was BOTH powered AND had its reset actively driven. So
+// deselecting is the whole defence, and it is the only one this function needs.
+//
+// **Why this exists when freeink-sdk already fixes it.** The SDK's fix lives in
+// prepareEpdPower(), which runs at display init -- and display init happens
+// AFTER Storage.begin(). It covers the rest of the run; it cannot cover card
+// detection. This covers card detection. Two windows, not two belts.
+//
+// The pin survives display init afterwards because lgfx::pinMode() writes no
+// level for output mode, which is the same property that made the bug possible.
+//
+// **What this deliberately does NOT do.** It does not cut the shared GNSS/LoRa
+// rail and it does not drive the radio's reset. An earlier version did both. The
+// rail cut was wrong twice over: it is half of the condition that breaks the
+// card, and it belongs to the battery question (T-244), not to this one. Do not
+// couple them again.
+void t5s3DeselectLoraRadio() {
+  if (BoardConfig::ACTIVE.board != BoardConfig::Board::LilyGoT5S3) return;
+
+  // Read before writing. The level here is the pad's reset state, which nothing
+  // on disk documents for GPIO46 -- it is a strapping pin -- so this line is the
+  // only place that number has ever been observed. It also makes a silent
+  // regression loud: if the SDK fix is ever lost, this still saves the card and
+  // the log still says the pin came up asserted.
+  pinMode(T5S3_LORA_CS, INPUT);
+  const int before = digitalRead(T5S3_LORA_CS);
+
+  pinMode(T5S3_LORA_CS, OUTPUT);
+  digitalWrite(T5S3_LORA_CS, HIGH);
+
+  LOG_INF("SDBUS", "LORA_CS (GPIO%d) was %s at boot, now deselected", T5S3_LORA_CS,
+          before ? "high" : "LOW -- the radio was selected on the card's bus");
 }
 }  // namespace
 #endif  // FREEINK_DEVICE_LILYGO
@@ -175,10 +390,11 @@ Gnss gnss;
 //
 // That matters more than it looks. LORA_CS (GPIO46) is also handed to LovyanGFX
 // as the panel bus's pin_oe *and* pin_pwr (LilyGoT5S3LgfxConfig.cpp:162,166),
-// and Bus_EPD really does drive both as plain GPIOs, one of them as the i80
-// bus's DC line (M5GFX Bus_EPD.cpp:83,85,120,129,143). So once the rail is up,
-// every panel refresh asserts the radio's chip select -- on the same SPI bus
-// the SD card is on, where a second device driving MISO corrupts tile reads.
+// and it is left driven LOW from display init onward -- see the long comment on
+// t5s3DeselectLoraRadio() above for why, and for why "every panel refresh
+// asserts it" (what this comment used to say) is wrong. The radio therefore
+// sits selected on the same SPI bus the SD card is on, where a second device
+// driving MISO corrupts every card transfer.
 //
 // The defence is to hold the SX1262 in reset, which parks its MISO high-Z. It
 // is done here rather than left to BoardT5S3::disableGpsLora(), because nothing
@@ -237,7 +453,64 @@ bool gnssStart() {
   config.rxBufferBytes = GNSS_RX_BUFFER_BYTES;
 #endif
   config.powerEnable = gnssPowerEnable;
-  return gnss.begin(config);
+  if (!gnss.begin(config)) return false;
+
+  // Ask for all three constellations before anything else. The module was
+  // running GPS+GLONASS (mode 5): a raw capture on 2026-09-04 carried 45 GPGSV
+  // and 45 GLGSV sentences and not one GBGSV, and `gnss.md` had already noted
+  // the set is configurable and that the vendor lists BeiDou.
+  //
+  // **Why it matters here and not as a nicety: this antenna's problem is
+  // satellites in view, and BeiDou is about 45 more of them.** A weak signal
+  // does not need a better satellite, it needs more chances at four usable
+  // ones. Modes are from the official CASIC spec, 1.6.5 CAS04:
+  //   1 GPS, 2 BDS, 3 GPS+BDS, 4 GLONASS, 5 GPS+GLONASS, 6 BDS+GLONASS,
+  //   7 GPS+BDS+GLONASS.
+  //
+  // Sent on every start rather than saved to the module's flash: it costs one
+  // 16-byte sentence, it cannot drift out of step with this code, and it wears
+  // nothing out. **Unverified that this module accepts mode 7** -- the spec says
+  // the supported subset is per product model and does not list the L76K's.
+  // The check is cheap and needs no sky: a `$GBGSV` in `CMD:GNSS RAW ON` means
+  // it took.
+  if (!gnss.sendNmeaSentence("PCAS04,7")) {
+    LOG_ERR("GNSS", "constellation request not sent");
+  }
+
+  // Seed the receiver before it starts searching. **Without this a cold start
+  // cannot finish at the signal level this board delivers** -- reading the
+  // ephemeris off the air needs more signal than merely tracking a satellite
+  // does, and this antenna sits between the two (Gnss::injectAidIni has the
+  // numbers and where they come from). A 15-minute walk on 2026-09-04 got no
+  // fix at all; the receiver was tracking one satellite the whole time.
+  //
+  // Position comes from the persisted last fix, which is the same value the map
+  // opens its first frame on, so it is as good as the device has and costs
+  // nothing to pass. 50 km of claimed accuracy is deliberately loose: it is a
+  // fix from some earlier trip, and on 2026-09-04 that meant Bratislava while
+  // the device was in Barcelona. A seed that lies about its accuracy is worse
+  // than a wide one, because the receiver trusts it.
+  //
+  // Time only when something has it. A GNSS map session runs no BLE
+  // (MapActivity's bleInUse_), and this board has no RTC ("RTC not found" at
+  // boot), so utcNow() answers only when a phone set the clock earlier in this
+  // same boot. Position-only aiding is still most of the win.
+  if (SETTINGS.mapHasLastFix) {
+    uint32_t utc = 0;
+    const bool haveTime = freeink::BlePositionServer::getInstance().utcNow(utc);
+    const double lat = static_cast<double>(SETTINGS.mapLastLatE7) / 1e7;
+    const double lon = static_cast<double>(SETTINGS.mapLastLonE7) / 1e7;
+    if (gnss.injectAidIni(lat, lon, haveTime, utc)) {
+      LOG_INF("GNSS", "aiding sent: %.5f,%.5f, time %s", lat, lon, haveTime ? "included" : "not available");
+    } else {
+      LOG_ERR("GNSS", "aiding not sent, the frame was written short");
+    }
+  } else {
+    // Worth a line rather than silence: this is the one case where the receiver
+    // really does start from nothing, and it is the case that takes minutes.
+    LOG_INF("GNSS", "no persisted fix to seed with, this is a cold start");
+  }
+  return true;
 }
 
 // Reads the PCA9535's own registers, which BoardT5S3 does not expose: it offers
@@ -628,7 +901,9 @@ void setup() {
   // LilyGo's own answer, 2026-08-25: the PT4103B23F behind BL_EN wants a PWM
   // frequency "not above approximately 1 kHz". The SDK board profile asks for
   // 5 kHz (BoardConfig.h, LILYGO_T5S3), which is above the vendor's ceiling —
-  // freeink-sdk is upstream, so correct it here rather than forking the SDK.
+  // freeink-sdk was upstream-only when this was written, so the correction had
+  // to live here. It is forked as of 2026-09-03 (docs/freeink-sdk-fork.md), so
+  // this belongs upstream now and the workaround should go. T-247.
   if (BoardConfig::ACTIVE.board == BoardConfig::Board::LilyGoT5S3 && frontlight.present()) {
     ledcChangeFrequency(BoardConfig::ACTIVE.frontlight.gpio, 1000, BoardConfig::ACTIVE.frontlight.pwmResolutionBits);
   }
@@ -647,8 +922,9 @@ void setup() {
     if (!BoardT5S3::pca9535Present()) BoardT5S3::beginI2C();
     if (BoardT5S3::pca9535Present()) {
       BoardT5S3::setPca9535PinMode(PCA9535_IO12_BUTTON, INPUT);
-      InputManager::setButtonHook(userButtonHook);
-      LOG_INF("BTN", "User button: tap = Confirm, hold %lu ms = frontlight", USER_BUTTON_HOLD_MS);
+      InputManager::setButtonHook(boardButtonHook);
+      LOG_INF("BTN", "User button: tap = Confirm, hold %lu ms = frontlight rung; BOOT: tap = Back, hold %u ms = sleep",
+              USER_BUTTON_HOLD_MS, static_cast<unsigned>(powerHoldDurationMs()));
     } else {
       LOG_ERR("BTN", "PCA9535 not answering: user button stays dead");
     }
@@ -666,6 +942,12 @@ void setup() {
               ? (gpio.deviceIsX3() ? "X3" : "X4")
               : BoardConfig::ACTIVE.name,
           BoardConfig::ACTIVE.displayWidth, BoardConfig::ACTIVE.displayHeight);
+
+#if FREEINK_DEVICE_LILYGO
+  // Before Storage.begin() on purpose, and this is the window the SDK fix does
+  // not reach: prepareEpdPower() runs at display init, which is later.
+  t5s3DeselectLoraRadio();
+#endif
 
   // SD Card Initialization
   // We need 6 open files concurrently when parsing a new chapter
@@ -707,7 +989,7 @@ void setup() {
   switch (wakeupReason) {
     case HalGPIO::WakeupReason::PowerButton:
       LOG_DBG("MAIN", "Verifying power button press duration");
-      if (!gpio.verifyPowerButtonWakeup(SETTINGS.getPowerButtonDuration(),
+      if (!gpio.verifyPowerButtonWakeup(powerHoldDurationMs(),
                                         SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP)) {
         powerManager.startDeepSleep(gpio);
       }
@@ -896,10 +1178,33 @@ void loop() {
   // every screen has it, and before activityManager.loop() so the screen on top
   // cannot consume it first. The SDK suppresses the key's tap once the hold
   // fires (InputManager::serviceTouch), so a hold never also selects.
-  if (gpio.wasHomeKeyLongPressed()) {
+  // Through MappedInputManager, not gpio: the SDK's hold fires from a latched
+  // down-state that survives a missed release edge, so the raw event can arrive
+  // from a press already spent as a tap. That is how one double tap on Home
+  // locked the panel, opened the map, and lit the frontlight when the map
+  // finished rendering (measured 2026-09-05).
+  if (mappedInputManager.wasHomeKeyLongPress()) {
     toggleFrontlight("Home key hold");
   }
-  if (frontlightStateChanged) {
+#if FREEINK_DEVICE_LILYGO
+  // The third gesture on the same key: a double tap locks or unlocks the panel.
+  // Resolved in MappedInputManager, which holds the first tap for the double-tap
+  // window and decides between Confirm and this -- a tap that had already
+  // selected could not be taken back once the second tap arrived.
+  if (mappedInputManager.wasHomeKeyDoubleTap()) {
+    toggleTouchLock();
+  }
+#endif
+  // The Settings row writes the level straight into SETTINGS, so the light has
+  // to be told. Only while it is on: changing the level must not turn it on.
+  static uint8_t appliedFrontlightBrightness = SETTINGS.frontlightBrightness;
+  if (SETTINGS.frontlightBrightness != appliedFrontlightBrightness) {
+    appliedFrontlightBrightness = SETTINGS.frontlightBrightness;
+    if (frontlight.present() && frontlight.brightness() > 0) {
+      frontlight.setBrightness(appliedFrontlightBrightness);
+    }
+  }
+  if (frontlightStateChanged && !frontlightHoldActive) {
     frontlightStateChanged = false;
     SETTINGS.frontlightOn = frontlight.brightness() > 0 ? 1 : 0;
     if (frontlight.brightness() > 0) SETTINGS.frontlightBrightness = frontlight.brightness();
@@ -1311,6 +1616,7 @@ void loop() {
         //   CMD:GNSS OFF       ->  GNSS_OK:off
         //   CMD:GNSS RAW ON    ->  GNSS_OK:raw=1   (every sentence to the log)
         //   CMD:GNSS RAW OFF   ->  GNSS_OK:raw=0
+        //   CMD:GNSS EPH       ->  asks how many ephemerides are held (RAW ON first)
         //   CMD:GNSS PROBE     ->  GNSS_PROBE:...  (run first, on a cold boot)
         //   CMD:GNSS RELEASE   ->  GNSS_RELEASE:... (writes the rail pin, step 2a)
         //   CMD:GNSS LOG       ->  GNSS_LOG:...    (sizes of the fix log, never its rows)
@@ -1493,9 +1799,9 @@ void loop() {
                 "GNSS_RELEASE:reset=%s cfg0_base=0x%02X cfg0_released=0x%02X cfg0_restored=0x%02X "
                 "wrote=%d released=%d restored=%d "
                 "base_bytes=%lu base_sent=%lu off_bytes=%lu off_sent=%lu back_bytes=%lu back_sent=%lu\n",
-                gnssResetReasonName(), cfgBase, haveReleased ? cfgReleased : 0xEE,
-                haveRestored ? cfgRestored : 0xEE, wroteLevel ? 1 : 0, released ? 1 : 0, restored ? 1 : 0,
-                baseBytes, baseSent, offBytes, offSent, backBytes, backSent);
+                gnssResetReasonName(), cfgBase, haveReleased ? cfgReleased : 0xEE, haveRestored ? cfgRestored : 0xEE,
+                wroteLevel ? 1 : 0, released ? 1 : 0, restored ? 1 : 0, baseBytes, baseSent, offBytes, offSent,
+                backBytes, backSent);
             gnss.end();  // powerEnable is null, so this touches no rail
           }
         } else if (argument == "RAW ON" || argument == "RAW") {
@@ -1504,8 +1810,34 @@ void loop() {
         } else if (argument == "RAW OFF") {
           gnss.setRawSink(nullptr);
           logSerial.printf("GNSS_OK:raw=0\n");
+        } else if (argument == "EPH") {
+          // Ask a CASIC receiver how many valid ephemerides it is holding. The
+          // answer comes back as an ordinary sentence carrying `LT=<n>`, so it
+          // reaches the raw sink and nothing else -- CMD:GNSS RAW ON first.
+          //
+          // **This is the instrument for the one question that has been open
+          // since 2026-09-02: does a rail cycle cost the receiver its
+          // ephemeris?** Ask, `CMD:GNSS OFF`, wait, `CMD:GNSS ON`, ask again. A
+          // count that survives means the module has a backup domain and every
+          // doc calling a map entry a cold start is wrong; a count that drops to
+          // zero means the map screen throws away the one thing the receiver
+          // cannot quickly get back. **It needs no sky and no fix**, which is
+          // why it is worth having: the same question outdoors costs ten minutes
+          // per attempt and answers ambiguously.
+          //
+          // Reading it rather than injecting it is the whole point. Ephemeris
+          // *injection* on this module is a known unsolved problem -- CASIC's
+          // own spec lists MSG-GPSEPH as an output, and OpenTrailPaper measured
+          // 4 ACKs out of 33 attempts with the count staying at zero
+          // (investigations/agnss.md). The module decodes its own ephemeris
+          // perfectly given signal, so retention is the lever, not injection.
+          if (gnss.sendNmeaSentence("PCAS06,L")) {
+            logSerial.printf("GNSS_OK:eph-query sent, read the reply's LT= with RAW ON\n");
+          } else {
+            logSerial.printf("GNSS_ERR:eph query not sent, receiver not running\n");
+          }
         } else if (argument.length() > 0) {
-          logSerial.printf("GNSS_ERR:expected ON, OFF, PROBE, RELEASE, RAW ON or RAW OFF\n");
+          logSerial.printf("GNSS_ERR:expected ON, OFF, PROBE, RELEASE, EPH, RAW ON or RAW OFF\n");
         } else if (!gnss.running()) {
           logSerial.printf("GNSS_OFF\n");
         } else {
@@ -1632,6 +1964,130 @@ void loop() {
                            currText, chgText, static_cast<unsigned>(g.gaugeAddr), static_cast<unsigned>(g.chargerAddr));
         }
 #endif
+#ifdef ENABLE_SDBUS_CMD
+      } else if (cmd == "SDBUS" || cmd.startsWith("SDBUS ")) {
+        // Bench instrument for BUG-037: toggle the three things
+        // t5s3DeselectLoraRadio() does, plus the two it deliberately no longer does,
+        // a CRC after each. It exists because the fix writes all three at once
+        // and the hardware runs never separated them.
+        //
+        //   CMD:SDBUS               ->  SDBUS:cs=1 rst=0 rail=0
+        //   CMD:SDBUS CS 0|1        ->  same reply, after the write
+        //   CMD:SDBUS RST 0|1
+        //   CMD:SDBUS RAIL 0|1
+        //   CMD:SDBUS READ <path>   ->  SDBUS_READ:<path> bytes=<n> crc32=<hex> ms=<n>
+        //
+        // `cs` is the radio's chip select (GPIO46): 1 means deselected, which is
+        // what the fix sets. `rst` is LORA_RST (GPIO1): 0 holds the radio in
+        // reset. `rail` is the expander pin that powers the GNSS receiver and
+        // the radio together. All three are reported as read back from the pin,
+        // not from what we last wrote.
+        //
+        // **Read-only on purpose.** No write, no mkdir, no settings save. With
+        // the bus deliberately broken a write allocates from a misread FAT and
+        // can land anywhere, and that already happened once on this card
+        // (parent docs/BUGS.md, BUG-037, the two fsck fragments). The question
+        // this answers -- does the card come back -- a read answers.
+        //
+        // **What a run cannot rule out:** SdFat caches directory and FAT blocks,
+        // so a read that follows a successful one is not entirely off the card.
+        // Prefer a file big enough to force data blocks, and treat a *failure*
+        // as the strong signal rather than a success.
+        //
+        // Devel-only, and t5s3pro only, for two reasons rather than one:
+        // `RAIL 1` powers a radio, and leaving `CS 0` behind breaks the card
+        // until something puts it back. Neither belongs in a build a stranger
+        // flashes.
+        String rest = cmd.substring(5);
+        rest.trim();
+
+        auto reportState = [&]() {
+          bool railHigh = false;
+          const bool railOk =
+              BoardT5S3::pca9535Present() && BoardT5S3::readPca9535Pin(PCA9535_IO00_LORA_GPS_EN, &railHigh);
+          char railText[4] = "?";
+          if (railOk) snprintf(railText, sizeof(railText), "%d", railHigh ? 1 : 0);
+          logSerial.printf("SDBUS:cs=%d rst=%d rail=%s\n", digitalRead(T5S3_LORA_CS) ? 1 : 0,
+                           digitalRead(T5S3_LORA_RST) ? 1 : 0, railText);
+        };
+
+        if (rest.isEmpty()) {
+          reportState();
+        } else if (rest.startsWith("READ ")) {
+          String path = rest.substring(5);
+          path.trim();
+          if (path.isEmpty()) {
+            logSerial.printf("SDBUS_READ_ERR:no path\n");
+          } else {
+            HalFile f;
+            if (!Storage.openFileForRead("SDBUS", path, f)) {
+              logSerial.printf("SDBUS_READ_ERR:%s open failed\n", path.c_str());
+            } else {
+              // 512 to match the card's own block size, so a chunk boundary
+              // never straddles two blocks and the byte count is what the bus
+              // actually delivered.
+              uint8_t buf[512];
+              uint32_t crc = 0;
+              size_t total = 0;
+              const unsigned long t0 = millis();
+              int n = 0;
+              while ((n = f.read(buf, sizeof(buf))) > 0) {
+                crc = esp_rom_crc32_le(crc, buf, static_cast<uint32_t>(n));
+                total += static_cast<size_t>(n);
+              }
+              const unsigned long ms = millis() - t0;
+              f.close();
+              // A negative read is a bus failure mid-file and must not look like
+              // a short file: the count and the CRC are both meaningless then.
+              if (n < 0) {
+                logSerial.printf("SDBUS_READ_ERR:%s read failed after %u bytes\n", path.c_str(),
+                                 static_cast<unsigned>(total));
+              } else {
+                logSerial.printf("SDBUS_READ:%s bytes=%u crc32=%08lx ms=%lu\n", path.c_str(),
+                                 static_cast<unsigned>(total), static_cast<unsigned long>(crc), ms);
+              }
+            }
+          }
+        } else {
+          const int sp = rest.lastIndexOf(' ');
+          const String what = (sp < 0) ? rest : rest.substring(0, sp);
+          const String valText = (sp < 0) ? String() : rest.substring(sp + 1);
+          if (valText != "0" && valText != "1") {
+            logSerial.printf("SDBUS_ERR:want 0 or 1\n");
+          } else {
+            const bool high = (valText == "1");
+            if (what == "CS") {
+              pinMode(T5S3_LORA_CS, OUTPUT);
+              digitalWrite(T5S3_LORA_CS, high ? HIGH : LOW);
+              reportState();
+            } else if (what == "RST") {
+              pinMode(T5S3_LORA_RST, OUTPUT);
+              digitalWrite(T5S3_LORA_RST, high ? HIGH : LOW);
+              reportState();
+            } else if (what == "RAIL") {
+              if (!BoardT5S3::pca9535Present()) {
+                BoardT5S3::beginI2C();
+              }
+              if (!BoardT5S3::pca9535Present()) {
+                logSerial.printf("SDBUS_ERR:PCA9535 silent\n");
+              } else {
+                // Level before direction, the same order disableGpsLora()
+                // and disableGpsLora() use: switching to output first would
+                // drive whatever the output register happens to hold.
+                const bool wroteLevel = BoardT5S3::writePca9535Pin(PCA9535_IO00_LORA_GPS_EN, high);
+                const bool wroteDir = BoardT5S3::setPca9535PinMode(PCA9535_IO00_LORA_GPS_EN, OUTPUT);
+                if (!wroteLevel || !wroteDir) logSerial.printf("SDBUS_ERR:rail write failed\n");
+                // The rail needs a moment before the parts on it settle, and
+                // this is a hand-driven bench command, so it can afford to wait.
+                delay(50);
+                reportState();
+              }
+            } else {
+              logSerial.printf("SDBUS_ERR:want CS, RST, RAIL or READ\n");
+            }
+          }
+        }
+#endif
       }
     }
   }
@@ -1649,10 +2105,17 @@ void loop() {
   // Touch counts as activity only while touch is allowed to do anything. With
   // it switched off the glass is dead input, so a pocket or a palm on it must
   // not hold the device awake.
+  // The capacitive home key is neither a button nor a coordinate frame, so
+  // neither of the two tests below sees it: wasAnyPressed/Released read the
+  // button bitmask and wasTouchActivity() reads contact frames. A rider who
+  // drove the device from that key alone was therefore slept on schedule and
+  // spent the whole time on the throttled 50 ms loop, which also stretched the
+  // key's own gesture timing.
+  const bool homeKeyActivity = gpio.wasHomeKeyPressed() || gpio.wasHomeKeyTapped() || gpio.wasHomeKeyLongPressed();
   // An injected press counts as user input for both deadlines. Without it a
   // host walking the UI from a script would watch the device throttle and then
   // auto-sleep under it, which drops the very port the script is driving.
-  const bool userInput = gpio.wasAnyPressed() || gpio.wasAnyReleased() || DebugInput::active() ||
+  const bool userInput = gpio.wasAnyPressed() || gpio.wasAnyReleased() || homeKeyActivity || DebugInput::active() ||
                          (TouchPolicy::touchActive() && gpio.wasTouchActivity()) || halTiltSensor.hadActivity();
   if (userInput || activityManager.preventAutoSleep()) {
     lastActivityTime = millis();
@@ -1695,7 +2158,7 @@ void loop() {
   }
 
   if (millis() >= allowSleepAt && gpio.isPressed(HalGPIO::BTN_POWER) &&
-      gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
+      gpio.getPowerButtonHeldTime() > powerHoldDurationMs()) {
     // If the screenshot combination is potentially being pressed, don't sleep
     if (gpio.isPressed(HalGPIO::BTN_DOWN)) {
       return;
@@ -1706,7 +2169,17 @@ void loop() {
   }
 
   // Refresh screen when power button is short-pressed with FORCE_REFRESH setting.
-  if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
+  //
+  // Not on a board where the short press is already Back (boardButtonHook()):
+  // the setting would then fire a full refresh on every step back, and the
+  // rider has no way to see that the two are the same press.
+  const bool shortPowerIsBack =
+#if FREEINK_DEVICE_LILYGO
+      BoardConfig::ACTIVE.board == BoardConfig::Board::LilyGoT5S3;
+#else
+      false;
+#endif
+  if (!shortPowerIsBack && SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::FORCE_REFRESH &&
       mappedInputManager.wasReleased(MappedInputManager::Button::Power)) {
     LOG_DBG("MAIN", "Manual screen refresh triggered");
     if (!activityManager.handleForcedRefresh()) {

@@ -29,6 +29,10 @@ Not evaluated: whether FastEPD fits our HAL, whether its parallel-bus
 assumptions match the T5 S3 Pro's actual wiring, whether it is faster or more
 correct than our own driver. This is a library to study, not one to adopt.
 
+[`t5s3-partial-refresh.md`](t5s3-partial-refresh.md) is where FastEPD's
+partial-refresh findings are put next to OpenTrailPaper's and to what our own
+LovyanGFX-backed driver actually does.
+
 **Check for new commits and re-read relevant source before any T5 S3 Pro
 panel-driver, partial-refresh, or grayscale work** — this doc is a pointer,
 not a snapshot; the library moves.

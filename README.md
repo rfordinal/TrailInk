@@ -200,6 +200,9 @@ what is still wrong.
 it shares with the LoRa radio.
 [`docs/gnss-to-map-plan.md`](./docs/gnss-to-map-plan.md) is the ordered plan for
 getting the map to read that receiver, written so one session takes one step.
+[`docs/t5s3-partial-refresh.md`](./docs/t5s3-partial-refresh.md) is why a
+windowed refresh costs a whole-panel frame on that board today, and the ordered
+plan for fixing it.
 
 ### Pre-PR checks
 

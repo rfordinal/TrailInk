@@ -387,12 +387,41 @@ from the phone with the setting off (a bench run, 2026-09-02). Of the five check
 `gnss.md` lists under "What a hardware pass has to check", three are done, one is
 half done and one cannot be run with today's instrumentation.
 
-**Board state, 2026-09-02: `mapGnssPosition` is 0 on the device.** It was set
-during the BLE regression run and never set back. Powering the device off does
-not clear it: `CMD:SETTING` calls `SETTINGS.saveToFile()`
-(`src/main.cpp:1023`), the field is serialised into `settings.json`
-(`src/CrossPointSettings.cpp:102`) and read back at boot with a default of 0
-(`:224`). So the card holds a zero and the next boot will too.
+**Board state, 2026-09-03: `mapGnssPosition` is 1 on the device again.** It had
+been 0 since the BLE regression run of 2026-09-02, which set it and never set it
+back. Powering the device off does not clear it: `CMD:SETTING` calls
+`SETTINGS.saveToFile()` (`src/main.cpp:1023`), the field is serialised into
+`settings.json` (`src/CrossPointSettings.cpp:102`) and read back at boot with a
+default of 0 (`:224`). So the card held a zero and every boot after it did too.
+
+**And it was reported as a GNSS regression.** 2026-09-03, the maintainer's
+words: the receiver was not recording position. Nothing had regressed. The
+device answered `SETTING_OK:mapGnssPosition=0`, `SETTING_OK:mapGnssLog=0` and
+`GNSS_OFF`; setting the first back to 1 and entering the map logged `gnss:
+started, rx ring 8192 bytes` and `CMD:GNSS` then reported `inview=11 tracked=1
+bestsnr=29 cserr=0 ferr=0 ovf=0 bytes=13899` -- a healthy receiver with no fix,
+which is what indoors on a bench looks like. **A persisted opt-in that no screen
+shows and no boot log prints reads exactly like broken hardware.** That was the
+cost of the setting being deliberately absent from `SettingsList`.
+
+**So it has a Settings row now, and that absence is over.** Settings > Map >
+**Built-in GNSS**, a toggle on the same field, added the same day
+(`src/SettingsList.h`, the Map section). GNSS and not GPS: the L76K here emits
+`GPGSV` and `GLGSV` both, and an `inview` of 19 was measured as 10 GPS plus 9
+GLONASS ([`gnss.md`](gnss.md), "GPS and GLONASS in this configuration"), so
+"GPS" would misname the very count the toggle turns on. The row is behind `#ifdef
+ENABLE_GNSS_CMD`, which is set in `env:t5s3pro` and in no other env and today
+means "this build has a receiver" (`src/GnssAccess.h`) -- so an X4 or X4 Pro
+build does not compile it and no rider gets a toggle for hardware that is not
+there. That is the board condition the field's own comment had been asking for.
+
+**Unverified on hardware.** Both envs compile clean -- `t5s3pro` at 21.7 % RAM
+and 58.7 % flash, `default` at 17.9 % and 61.1 %, no new warnings -- and the
+flag's scope is read off `platformio.ini:309,354`. Nothing has been flashed. A
+hardware pass has to check three things: the row appears under Map on the T5 S3
+Pro and toggling it survives a reboot; the row is absent on an X4 build; and
+`[MEM] Free:` at Home is unchanged, because a `SettingInfo` in a static vector
+is a runtime allocation and the linker's RAM figure does not cover it.
 
 **The first command of every future GNSS run is therefore `CMD:SETTING
 mapGnssPosition 1`.** Without it the map runs off the phone, everything looks

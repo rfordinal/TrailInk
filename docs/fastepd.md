@@ -6,7 +6,17 @@ Detailed findings from a research pass, 2026-09-01, into
 everything long-form lives here, per this repo's one-topic-per-file rule.
 
 Read at commit `4ab7155` (2026-09-01) plus the project's two-page GitHub
-Wiki. All `FastEPD.inl:<line>` citations below are paths inside that
+Wiki.
+
+**Line numbers here are stale by +2 past `FastEPD.inl:2541`.** Re-checked
+2026-09-07: `main` is `9113bdd`, one commit on from `4ab7155`, a Linux build fix
+that inserts two `#ifndef __LINUX__` lines at that point. Nothing else changed
+and `FastEPD.h` is untouched, so every finding below still holds -- but
+`bbepPartialUpdate` is now `:3532-3661`, its all-rows loop `:3627`, the
+`iSkipped` memset `:3635-3637`, and the 32 ms pass comment `:3616`. The
+`FastEPD.h:93` cited below was already off by one; the panel enum is `:92`.
+[`t5s3-partial-refresh.md`](t5s3-partial-refresh.md) puts these findings next to
+OpenTrailPaper's and to what our own driver actually does. All `FastEPD.inl:<line>` citations below are paths inside that
 upstream repo, not this one -- **the library moves, re-read before citing
 it as current**.
 

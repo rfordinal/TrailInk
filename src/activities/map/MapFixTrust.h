@@ -98,6 +98,36 @@ inline constexpr uint16_t kTrustedAtOrBelowM = 18;
 // is written down here rather than left as an accident of the encoder.
 inline constexpr uint16_t kAccuracyUnstated = 0;
 
+// ## The same line, in the vocabulary a GNSS receiver actually speaks
+//
+// A receiver reports no metres. It reports **HDOP** -- horizontal dilution of
+// precision, the factor by which the satellites' geometry multiplies a ranging
+// error into a position error. Satellites spread across the sky cross at good
+// angles and give HDOP near 1; satellites crowded into the strip of sky a
+// street canyon leaves open cross at flat angles and give 10 and more. It is
+// geometry, not signal: the 85 m jump on the walk of 2026-09-05 carried an
+// unremarkable HDOP of 2.7, because a reflection off a wall is not a geometry
+// problem.
+//
+// Horizontal error is roughly HDOP times the per-satellite ranging error, which
+// is about 5 m on a consumer receiver. So the metre thresholds above land at
+// **HDOP 5 and 3.5**, and the same 40 % hysteresis gap comes with them.
+//
+// **Checked against 7466 real fixes** (a 2h45 walk across Barcelona,
+// 2026-09-05): HDOP under 2 on 73.4 % of them, 2 to 5 on 23.1 %, and only 3.6 %
+// at 5 or above -- nearly all of it in the second half, in the narrow streets
+// of l'Eixample, where the satellite count had halved. So the ring stays whole
+// for the ordinary walk and breaks in the canyon, which is what the metre side
+// promises too.
+inline constexpr float kLooseAtOrAboveHdop = 5.0f;
+inline constexpr float kTrustedAtOrBelowHdop = 3.5f;
+
+// Four satellites is what a three-dimensional solution needs; three gives a 2D
+// fix that assumed an altitude. That assumption is wrong by whatever the ground
+// has done since, so the position is not inside the marker whatever HDOP says.
+// A hard Loose, not a threshold, because it is a different kind of statement.
+inline constexpr uint8_t kMinSatsForTrust = 4;
+
 // ## There is no degrees-to-state mapping here, on purpose
 //
 // The render has 16 heading steps of 22.5 degrees (MapHeading) and nothing
@@ -128,6 +158,14 @@ struct State {
 // resolves to Pos::Unstated and never latches, so a source that reports
 // accuracy on some fixes and not others does not drag the ring back and forth.
 Pos posTrustFor(uint16_t accuracyM, State& state);
+
+// The same verdict from a GNSS fix, which speaks HDOP and satellite count
+// instead of metres. Updates `state` with the same latch and dead band.
+//
+// An hdop of 0 means the receiver stated none -- GnssFix initialises it to 0
+// and only a parsed GGA sets it -- so it resolves to Pos::Unstated and does not
+// latch, exactly as kAccuracyUnstated does on the metre side.
+Pos posTrustForHdop(float hdop, uint8_t satsUsed, State& state);
 
 // ## The wire
 //

@@ -562,6 +562,25 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // ~26 KB it needs at the biggest dialog size is held only while the menu is
   // up; on OOM the capture simply fails and every close falls back to
   // renderCurrent(), the behaviour before this existed.
+  // A saved rectangle of the panel, so a change that only touches chrome can put
+  // the map back and refresh that rectangle instead of re-rendering the whole
+  // screen. The menu backdrop below does the same thing by hand; this pair is
+  // the reusable form of it.
+  struct RegionSnapshot {
+    std::unique_ptr<uint8_t[]> bits;
+    size_t size = 0;
+    Rect rect{0, 0, 0, 0};
+  };
+  // Overwrites whatever the snapshot held. False when there is no heap for it or
+  // the renderer refuses the read -- the caller then falls back to a full render.
+  bool captureRegion(RegionSnapshot& snap, Rect rect);
+  // Writes the snapshot back and KEEPS it: the bits are still a clean picture of
+  // the map under that rectangle, so the next chrome swap needs no new capture.
+  bool restoreRegion(const RegionSnapshot& snap) const;
+  // Swap the chrome for whatever the current touch mode wants -- the hint boxes,
+  // the padlock, or nothing -- using the snapshots rather than a re-render.
+  // False when it could not be done, and the caller re-renders.
+  bool swapChrome();
   bool captureMenuBackdrop();
   // Heap that must survive taking the backdrop. Everything that runs while the
   // menu is up -- BLE tile transfers, the console, a settings write -- draws
@@ -935,6 +954,60 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // One step per hold: this stays set until the button comes back up.
   bool observeHoldZoomed_ = false;
 
+  // Which source this map session takes its position from, decided once in
+  // onEnter() and constant for the life of the screen. True means the phone
+  // over BLE; false means the receiver on this board.
+  //
+  // **False stops the BLE radio coming up at all**, not merely the position
+  // path: BlePositionServer::begin() is one service with four characteristics
+  // (position, command, transfer, transfer status), so there is no way to have
+  // tiles without also advertising and running the controller. The rider who
+  // turned the receiver on asked for a map that needs no phone, so the map does
+  // not run a radio for one -- maintainer's call, 2026-09-03. What that costs
+  // while the map is open: no autosync of missing tiles, no freshness check, no
+  // BLE command channel. The clock comes from the receiver's own UTC instead
+  // (drawHeaderStatusStrip()), and the tile sync screen still uses BLE
+  // normally.
+  //
+  // Read it rather than SETTINGS.mapGnssPosition at each call site: a setting
+  // toggled from the host mid-screen would otherwise half-apply, with icons
+  // saying one thing and a running radio another.
+  //
+  // **Not starting the server changed callers that never mentioned it.**
+  // `BlePositionServer::isRunning()` was being used as a stand-in for "the map
+  // is live", and preventAutoSleep() was one of them -- so the first GNSS walk
+  // got a map that let the device deep-sleep, which cold-started the receiver on
+  // every wake (2026-09-04, fixed in preventAutoSleep()). `PowerLog::bleState()`
+  // was another: its 0 no longer means "not the map screen". Before adding a
+  // caller here, grep isRunning() and ask which question it is really asking.
+  bool bleInUse_ = true;
+
+  // True while the header clock carries its " UTC" suffix: a GNSS session whose
+  // clockUtcOffsetQ was never set, so the time really is UTC. Decided in
+  // drawHeaderStatusStrip() each time the row is laid out, and read by the same
+  // function a few lines later -- a member rather than a local because the
+  // layout chain settles it before the string that uses it is built.
+  bool clockShowsUtc_ = false;
+
+  // What the GNSS bar block last painted: how many bars were filled and how tall
+  // they were. Two fields because the block carries two numbers, and either one
+  // moving is a repaint (drawHeaderStatusStrip()).
+  // Consecutive GNSS fixes refused by pollGnssFix()'s sanity gates. Bounded so a
+  // receiver in a bad state cannot freeze the marker indefinitely.
+  uint8_t gnssRejectedRun_ = 0;
+  static constexpr uint8_t kGnssMaxRejectedRun = 5;
+  // The last fix pollGnssFix() actually accepted, for the self-consistency
+  // check. Separate from lastLatE7_/lastFixMs_, which the BLE path also writes
+  // and which Observe mode holds back -- this has to be the receiver's own
+  // previous point or the implied speed is measured against the wrong thing.
+  bool haveGnssAcceptedFix_ = false;
+  double lastAcceptedLat_ = 0.0;
+  double lastAcceptedLon_ = 0.0;
+  uint32_t lastAcceptedFixMs_ = 0;
+
+  int drawnGnssBars_ = -1;
+  int drawnGnssBarHeight_ = -1;
+
   // Set from BlePositionServer::begin()'s return in onEnter(). Without this,
   // a BLE stack that failed to come up (plausible: init costs ~75 KB heap,
   // see docs/map-memory.md) looks identical to a phone that simply has not
@@ -1210,6 +1283,18 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // -- so the transition into or out of "no clock" moves this value and
   // repaints, same as a minute rolling over does.
   int16_t drawnClockMinute_ = -1;
+  // The touch mode the chrome on screen was painted for. This screen has to
+  // poll it because it paints from its own loop() rather than through
+  // Activity::render(RenderLock&&), so the repaint the lock toggle asks for
+  // never reaches it -- see the check in loop(). 0xFF means "nothing painted
+  // yet", so the first frame after entering settles it without a redraw.
+  uint8_t drawnTouchMode_ = 0xFF;
+  // The map under the chrome, taken on every full frame before the chrome covers
+  // it. Two rectangles, never their union: the bottom band and the side boxes
+  // are far apart, and one rect spanning both would be most of the panel (540 x
+  // 546 on a T5 S3 Pro, ~37 kB) against ~4 kB for the pair.
+  RegionSnapshot chromeFront_;
+  RegionSnapshot chromeSide_;
   // Until when Observe's clock shows the exact minute. Set by any button press:
   // a rider who pressed something is looking at the screen, and the saving only
   // exists during the hours nobody is. 0 = never set, i.e. coarse.
@@ -1259,6 +1344,11 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // Follow frames: the raw values driving the marker, and what the viewport
   // reset cost.
   uint8_t debugFixSlot_ = MapDebugOverlay::kInvalidSlot;
+  // Sits right under the fix row because it answers the question that row
+  // raises: where the position came from and whether the receiver can still
+  // produce one. Reserved even on a BLE session, and cleared there, so the
+  // slot order does not depend on which radio the map happened to start.
+  uint8_t debugGnssSlot_ = MapDebugOverlay::kInvalidSlot;
   uint8_t debugRenderSlot_ = MapDebugOverlay::kInvalidSlot;
   // Route overview frames: the route's name and how the ladder fitted it.
   // Their own slots rather than a reuse of the two above, so neither path has

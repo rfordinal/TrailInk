@@ -87,13 +87,18 @@ a new command to devel until widening it is a deliberate decision.
 `BL_EN` wants a frequency **not above approximately 1 kHz** (quoted verbatim in
 [Outline: LilyGo](https://wiki.comsultia.com/doc/lilygo-3X4JgoVOpf)). `freeink-sdk` is upstream,
 so `src/main.cpp` corrects it after `frontlight.begin()` with
-`ledcChangeFrequency(gpio, 1000, bits)` rather than forking the SDK. The light
+`ledcChangeFrequency(gpio, 1000, bits)` rather than forking the SDK -- which was
+the only option at the time and is no longer: `freeink-sdk` is forked as of
+2026-09-03 ([`freeink-sdk-fork.md`](freeink-sdk-fork.md)), so this correction
+belongs upstream. T-247 in the parent repo. The light
 was only ever driven at 1 kHz here; 5 kHz was never tried, so nothing is known
 about how it behaves.
 
 ## The user button: tap is Select, hold toggles the frontlight
 
-**Written 2026-09-02, not yet run on hardware.**
+**Written 2026-09-02, not yet run on hardware.** **Superseded 2026-09-07**: the
+hold now steps through frontlight rungs instead of toggling, and BOOT taps Back
+-- see "The remap, 2026-09-07" below. The mechanism described here is unchanged.
 
 This board has four switches and only one of them is readable and free of a
 fixed job: switch S3 (silkscreened `IO48`), which is net `BUTTON` on PCA9535
@@ -118,7 +123,8 @@ settle it: one person, one glove, one tap.
 function installs the SDK's own hook, which reports the button as `BTN_DOWN`,
 and it is still never called here (see the GNSS section above). `setup()`
 configures `IO12` as an input on the expander and installs a local
-`userButtonHook()` instead, right after `frontlight.begin()` -- the hook can
+`boardButtonHook()` instead (named `userButtonHook()` until the 2026-09-07
+remap), right after `frontlight.begin()` -- the hook can
 toggle the light, so it must not be reachable before the LEDC channel exists.
 
 Three things in that hook are load-bearing:
@@ -222,7 +228,7 @@ Two different code paths, because the two inputs arrive differently. The switch
 is synthesised into a `BTN_CONFIRM` click by the board hook in `main.cpp`; the
 key already has tap and hold events in the SDK, so `MappedInputManager` reports
 its tap as `Button::Confirm` (next to the swipe that becomes Back) and `loop()`
-takes its hold. Both holds land in one `toggleFrontlight()`, so the gesture
+takes its hold. Both holds land in one function (`cycleFrontlight()` since 2026-09-07), so the gesture
 cannot come to mean two different things.
 
 **The X4 Pro inherits the home-key half** -- it has a home key too and the
@@ -239,6 +245,116 @@ as much as a motorcycle.
 are both "the button under the screen" in conversation, and the first
 implementation of this feature went to the wrong one. One capture with `[INPUT]`
 logging and one press settles it in a minute; a build and a flash do not.
+
+## The remap, 2026-09-07: BOOT taps Back, the hold cycles the light
+
+**Written and confirmed on hardware 2026-09-07.** Maintainer's call, and the
+maintainer used it on the panel afterwards: "funguje". Three
+changes, all in `src/main.cpp`:
+
+| input | gesture | before | now |
+|---|---|---|---|
+| BOOT (GPIO0, the power button) | tap | nothing (`shortPwrBtn` = `IGNORE`) | **`BTN_BACK`** |
+| BOOT | hold | sleep at 400 ms | sleep at **1500 ms** |
+| user button (S3, `IO12`) | tap | Confirm | Confirm, unchanged |
+| user button | hold 600 ms | frontlight on/off | **next frontlight rung, and another every 500 ms while held** |
+| home key (GT911) | hold 700 ms | frontlight on/off | on/off at the Settings level |
+
+**Why Back at all.** Until now this board could go forward and never back
+without touch: the only synthesised key was Confirm. A rider in gloves could
+open a screen and not leave it. BOOT is the only other switch the MCU can read,
+and its short press was doing nothing on this board -- `shortPwrBtn` defaults to
+`IGNORE`.
+
+**Why the sleep threshold moved to 1500 ms.** Sleep and Back are now the same
+press told apart by how long it is held, so the split has to be a duration a
+gloved thumb can aim at. `CrossPointSettings::getPowerButtonDuration()` answers
+400 ms, which is short enough that a deliberate tap sleeps the device instead of
+stepping back. `powerHoldDurationMs()` in `main.cpp` returns 1500 on this board
+and defers to the setting everywhere else, and wake is handed the same
+number -- but **wake does not enforce 1500 ms**. `verifyPowerButtonWakeup()`
+subtracts the boot time already elapsed (`lib/hal/HalGPIO.cpp:212-213`), so the
+requirement collapses to *the button is still down when `setup()` reaches that
+check*, down to 1 ms once boot exceeds the threshold. Sleep is the only side
+this number gates. `[read]` -- **open:** how long boot takes to that point on
+this board is unmeasured, and one timestamped log line at the call site would
+settle whether a wake press has to be held at all.
+
+**The Back tap is emitted on release, and only if the press was short.** A hold
+long enough to sleep never reaches the release branch at all -- `loop()` calls
+`enterDeepSleep()` at the threshold, with the button still down. The duration
+check covers the cases where it cannot: the two-second post-boot sleep guard
+(`allowSleepAt`) and the screenshot combo.
+
+**The first poll adopts the BOOT level instead of reading an edge.** The hook is
+installed in `setup()` while the button that woke the device may still be held,
+so a naive edge detector would end every wake with a Back nobody pressed.
+
+**`FORCE_REFRESH` is ignored on this board.** `shortPwrBtn` can ask a short power
+press to force a full refresh; here that press is Back, and one press must not
+do two things. The setting keeps working on every other board.
+
+**The frontlight is a cycle, not a toggle**: `0, 10, 30, 60, 100` %, wrapping to
+off. One number was never enough -- dusk and full dark want very different
+amounts of light, and this board has no frontlight row in Settings and no touch
+control a glove can reach. The step is computed against the live brightness, not
+a stored index, so a value on no rung (an older `settings.json`, or a `CMD:LIGHT`
+during bring-up) steps to the next rung above it instead of stalling. 10 % is the
+rung a rider can leave on for hours; 100 % costs real current (43 mA off the cell
+at 40 %, `../../docs/devices/lilygo-t5-s3-pro.md`).
+
+**A held user button keeps stepping**, one rung per 500 ms after the first at
+600 ms, so the whole cycle is 2.6 s end to end and the rider stops by letting
+go. The light is its own readout, which is what makes a repeat safe here: there
+is nothing to read on the panel and nothing to undo. The card write waits for
+the release (`frontlightHoldActive`), or a hold would be one SD write per step,
+on the input path, for a level still being chosen.
+
+**One number, three ways to set it.** `SETTINGS.frontlightBrightness` is the
+level, 10 to 100 %, and **off is never stored in it** -- off is a state the
+buttons produce, and storing it would lose the level the rider chose. The
+Settings row (Display -> Frontlight, `SettingType::VALUE`, 10..100 step 10)
+sets it, the user button's hold walks it across the rungs, and the home key's
+hold switches the light off and back on at whatever it says. `loop()` applies a
+level changed in Settings immediately, but only while the light is on: choosing
+a level must not turn the light on.
+
+The row carries **no JSON key**. `frontlightOn` and `frontlightBrightness` are
+serialised by hand in `CrossPointSettings.cpp`, and a list entry with a key
+would write the same field a second time.
+
+**The home key keeps its plain on/off** (`toggleFrontlight()`), and the two
+inputs stop meaning the same thing. That was the 2026-09-02 rule -- try each in
+real use before splitting them up -- and real use split them: the key is the one
+a glove cannot reach, so "give me light, now" belongs there, while walking the
+rungs is a deliberate act with a bare thumb. The SDK also reports one long-press
+event per press, so a repeat on that key would need a second hold recogniser
+next to the one that already exists.
+
+**The hook is `boardButtonHook()` now, not `userButtonHook()`** -- it recognises
+both switches, so the old name was a lie. Same install site, same synthetic-click
+machinery, now shared by the two gestures through `beginSyntheticClick()`.
+
+**Confirmed by use on the panel, 2026-09-07**: the buttons do what this section
+says. The maintainer flashed the build, used the four gestures and answered
+"funguje". That is a use report, not an instrumented run.
+
+**Still not separately measured**, and worth a capture when one is cheap:
+
+- That a wake press leaves no stray Back behind it. The guard is written (the
+  hook adopts the BOOT level on its first poll) and nothing odd was seen, but
+  nobody watched a log across a wake.
+- That one long hold produces exactly one card write rather than five. The
+  deferral is written (`frontlightHoldActive`); the evidence would be one
+  `[SET]` line per hold in a serial capture.
+- That the extra `digitalRead` per input poll disturbs neither touch nor a
+  refresh. Nothing misbehaved in use; no timing was taken.
+
+**A wrong claim this section carried for one build.** The first version said a
+hold cycles the light and it did not: it stepped once. The repeat had been
+written, built and never flashed, and the report of "it does not work" matched
+the firmware that was actually on the board. Rule: after any "it does not work",
+check which binary is running before reading the code.
 
 
 
@@ -431,11 +547,166 @@ are about this board and not about GNSS:
   GPIOs, and passes one to the i80 peripheral as its DC line
   (`Bus_EPD.cpp:83,85,120,129,143`). On this board both are GPIO46, which is the
   SX1262's chip select, on the SD card's SPI bus.
-  **That the wiring is shared is settled; that it is a hazard is not.** The
-  cited lines drive the pin *high*, and a deasserted chip select is harmless --
-  whether it is ever driven low during a refresh has not been established, and
-  neither has whether an SX126x in reset parks MISO high-Z. Do not read this
-  bullet as a confirmed fault.
+  **Answered 2026-09-03, and it is a fault.** This bullet used to end "that it
+  is a hazard is not settled", because the lines cited above drive the pin high
+  and a deasserted chip select is harmless. The hazard is not in those lines: it
+  is that `lgfx::pinMode(pin, output)` sets no level, so the pin is simply left
+  low from display init and never raised. See the SD-card section below, which
+  also retracts the "every refresh" reading of `Bus_EPD`. Whether an SX126x in
+  reset parks MISO high-Z is still unread, and no longer load-bearing.
+
+## The EPD config asserted the LoRa radio's chip select, and the SD card died
+
+**Root-caused and fixed 2026-09-03.** This section was wrong three times before
+it was right, so it says which parts are measured and which are read off code.
+The parent repo's BUG-037 has the full history including the dead versions.
+
+The card became unusable: every BLE tile `begin` answered `ERR mkdir failed`,
+`settings.json` would not save, the Wi-Fi File Transfer page answered `HTTP 500`
+to `/mkdir` and listed the volume as empty, and roughly one boot in two came up
+on "SD card error". Three unrelated tasks, three vocabularies.
+
+**The card is fine. Measured on the laptop 2026-09-02**, in a USB reader: a
+64 KB write, `mkdir base/11/1125` -- the exact path the firmware had just
+refused -- and a copy into it, all `rc=0`, checksums matching after an unmount
+and remount. `dmesg` says `Write Protect is off`. It also took a **second
+reader** to see the card at all: invisible on the SY-T18 (`14cd:1212`), fine on
+a Genesys (`05e3:0764`). That reader trouble was never fixed, only worked around.
+
+### The cause is a placeholder pin in our own EPD config
+
+Not the board. The T5 S3 Pro is wired the ordinary way for a device that has both
+a radio and a card. What broke it is `freeink-sdk`'s
+`lilygoT5S3LgfxConfig()`, which passed `T5S3_LORA_CS` (GPIO46, the SX1262's
+`NSS`, on the SD card's SPI bus) as **both** `pinOe` and `pinPwr`.
+
+Both were placeholders and the commit that added the driver says so: `9becf6c`
+(2026-06-05) writes `/*OE dummy*/ T5S3_LORA_CS` and `/*pwr dummy*/
+T5S3_LORA_CS`, and `LgfxEpdConfig.h` documents `pinOe` as "may be a dummy GPIO if
+real OE is via an expander hook". LovyanGFX requires the two fields; this panel
+needs neither, because its real output-enable is `PCA9535_IO10_EP_OE` and its
+power sequence is the TPS65185, both driven by the injected hooks. GPIO46 was
+simply what was to hand.
+
+`Bus_EPD::init()` then calls `lgfx::pinMode(pin, output)` on both
+(`Bus_EPD.cpp:120,143`). That call writes no level -- its `gpio_hi()` is guarded
+to non-output modes (`common.cpp:599-601`) -- and `GPIO_OUT1_REG` resets to 0
+(`gpio_reg.h:77-80`). So the pad becomes an output at 0 and **nothing ever raises
+it**. The `powerControl()` that would have set a level is virtual
+(`Bus_EPD.h:95`) and `FreeInkBusEPD` overrides it without calling the base
+(`LgfxEpdDriver.cpp:34-45`), so it never runs.
+
+**An earlier version of this section said the pin is driven low per refresh. It
+is not.** It is left low, once, and never touched again.
+
+### What the hardware says
+
+Measured 2026-09-03 with `CMD:SDBUS`, which toggles the chip select, the reset
+line and the shared GNSS/LoRa rail independently and reads a 19,855-byte file
+with a CRC32. Nine runs, each after a hard reset with a passing baseline read.
+
+| rail | reset line | radio selected | card |
+|---|---|---|---|
+| off | driven | no | reads, `7bda5027`, 40 ms |
+| off | driven high | no | reads |
+| on | driven high | no | reads |
+| on | driven high | **yes** | reads |
+| on | driven low | **yes** | reads |
+| on | **floating** | **yes** | fails |
+| off | driven low | **yes** | fails, reproduced twice |
+| off | floating | **yes** | fails |
+
+**Deselected, the card read correctly in every combination.** Selected, it failed
+unless the radio was **both** powered **and** had its reset actively driven. No
+exception in either direction. The failure is sticky within a boot: raising the
+chip select again does not bring the card back, only a reset does.
+
+**Why an undefined radio loads the bus is inference, not measurement.** No
+SX126x datasheet is on disk and GPIO46 has never been scoped on the pad. State
+the table, not the theory.
+
+### GPIO46 comes out of reset low, and that is the other half of the symptom
+
+**Measured 2026-09-03**, first boot of the fixed build:
+
+```
+[411] [SDBUS] LORA_CS (GPIO46) was LOW -- the radio was selected on the card's bus at boot, now deselected
+[418] [SD] SD card detected
+```
+
+GPIO46 is a strapping pin and its reset level is in nothing on disk. Now it is
+observed: **low**. So at `Storage.begin()`, before any of our code or the EPD
+driver has touched the pin, the radio is already selected. That is the
+"one boot in two came up on SD card error" half, which no earlier version of this
+section could explain.
+
+### The fix is in two places because there are two windows
+
+- **`freeink-sdk`, `prepareEpdPower()`** deselects GPIO46 before the EPD bus is
+  built, and `pinOe` becomes `-1` so LovyanGFX stops touching it at all. That
+  hook is the last thing to run before `Bus_EPD::init()`, and nothing downstream
+  writes the level back. Upstream PR `Free-Ink/freeink-sdk#73`; we carry it on
+  our fork's `explorink` branch ([`freeink-sdk-fork.md`](freeink-sdk-fork.md)).
+  `pinPwr` has to stay a real GPIO: it reaches the i80 driver as `dc_gpio_num`,
+  which the IDF rejects when negative, and this board has no free pin.
+- **`t5s3DeselectLoraRadio()` in `src/main.cpp`** runs before `Storage.begin()`.
+  The SDK's fix runs at display init, which is ~300 ms later, so it cannot cover
+  card detection. This covers card detection. Two windows, not two belts. It also
+  reads the pin before writing it, which is where the reset-level measurement
+  above comes from, and which makes a lost SDK fix loud instead of silent.
+
+**Neither cuts the rail, and an earlier version did.** The rail cut was wrong
+twice over: it is half of the condition that breaks the card, and it belongs to
+the battery question, not this one. A rail left on keeps the receiver and the
+radio powered through deep sleep, measured in both directions -- rail up across a
+wake on 08-31 (`out0=0xFF bytes=1633`), rail down across a wake on 09-03
+(`out0=0xFE bytes=0`). That is T-244 and it runs on its own schedule. **Do not
+couple them again.**
+
+**Verified on hardware 2026-09-03**, release branch with both halves: the boot
+line above, `SD card detected`, settings and the missing-tile list loaded, a
+19,855-byte read with the right CRC, `POST /mkdir` 200 and the directory listed
+and deleted again. And a control: asserting the chip select by hand still kills
+the read, so the failure mode is intact and merely no longer triggered.
+
+**A build carrying only the SDK half, with `t5s3DeselectLoraRadio()` removed,
+also worked** -- including with the rail cut, which had been the dead state. So
+the SDK fix alone restores the card after boot; the firmware half is for the
+detection window.
+
+### Why it took three days to surface
+
+The bug has been in the config since 2026-06-05. On this board it was masked for
+two days by unrelated work: GNSS bring-up powers the shared rail and drives the
+radio's reset low, which is exactly the combination the card tolerates. A BLE
+regression run on 2026-09-02 at 11:08 set `mapGnssPosition` to 0 and never set it
+back, the setting persists to the card, and from the next boot GNSS never ran --
+so the masking went with it.
+
+**Two things this does not explain, and they stay open.** The first failure was
+at 15:23, four hours after the setting changed, and the archived build at 14:41
+rendered the map from card tiles in between. Nobody read the expander in that
+window, so the rail state then cannot be recovered. And the earlier write-up
+blaming `gnss.end()` on map exit for cutting the rail is **mechanically
+impossible**: `MapActivity` only starts GNSS when `mapGnssPosition != 0` and only
+calls `gnss.end()` if it started it.
+
+### The same class, upstream, the same day
+
+`Free-Ink/freeink-sdk#72` fixed an EPD driver pulsing a pin that also gates the
+SD rail on the OnePage board, merged 2026-09-02. An EPD driver writing a pin it
+does not own, with the SD card as collateral. Ours is the second instance.
+
+### The worst part is not the bus
+
+The firmware **reported failure and the card changed anyway.** `fsck.vfat` found
+an orphaned long-filename part for `crash_report.txt` and 64 KB of a `TIB1` tile
+in a cluster chain no directory entry pointed at. Which call produced each is
+inferred; what is certain is that a rename returned an error and had renamed the
+file, and that tile bytes reached the card with nothing pointing at them. No
+crossed files, no broken chains, so the volume survived -- that is luck, not
+design. T-245, and it outlives this bug.
+`../../docs/crashes/2026-09-02-t5s3-card/` has both.
 
 ## What is wrong or missing
 
@@ -458,14 +729,42 @@ are about this board and not about GNSS:
 
 ## Serial usually resets the board, and you cannot rely on either outcome
 
-**Clearing DTR and RTS does not stop the reset on this board.** A plain
-`pyserial` open with `dtr = False` / `rts = False` before `open()` still
-restarted it every time on 2026-09-02 -- the log timestamps went back to `[411]`
-on each of five opens. The port is USB Serial/JTAG, not a UART bridge with real
-modem lines, so there is no line to hold. Consequence for any observation run:
-**one capture per boot.** Open the port once, keep it open, and ask the person to
-press the thing while it is open -- reopening to "check" costs the state you were
-measuring.
+**It resets on some opens and not on others, and what decides it is not known.**
+Both have been measured on this board:
+
+- **2026-09-02, five opens, every one reset it.** A plain `pyserial` open with
+  `dtr = False` / `rts = False` before `open()` still restarted it -- the log
+  timestamps went back to `[411]` each time.
+- **2026-09-03, several opens, none reset it.** A plain `cat /dev/ttyACM0` and a
+  default `serial.Serial(...)` both attached to a **running** board: the first
+  line seen was at `[5578]`, and a later one at `[110393]`. The boot log was
+  gone and could not be retaken.
+
+The port is USB Serial/JTAG, not a UART bridge with real modem lines, so there is
+no line to hold either way. **Do not plan on either outcome.** Two lost boot-log
+measurements on 09-03 came from assuming the 09-02 behaviour, including the one
+reading that would have said whether the LoRa radio was powered during BUG-037.
+
+**So take the boot deliberately: open the port first, then cause the reset
+yourself.** This resets it from the same handle, no second opener fighting for
+the port:
+
+```python
+s = serial.Serial('/dev/ttyACM0', 115200, timeout=0.3)
+s.setDTR(False); s.setRTS(False); time.sleep(0.1)
+s.setDTR(True);  s.setRTS(False); time.sleep(0.1)
+s.setDTR(False); s.setRTS(True);  time.sleep(0.1)
+s.setDTR(False); s.setRTS(False)
+s.reset_input_buffer()      # then read; the boot log starts at [410]
+```
+
+Confirmed 2026-09-03: that sequence produced a boot from
+`[410] [INF] [BTN] User button` onward. `esptool --after hard-reset chip-id`
+also works and is the fallback, but it needs the port to itself, so a capture
+has to be closed and reopened around it -- which is the thing to avoid.
+
+**One capture per boot still holds**, for the other reason: reopening to "check"
+may reset the board and cost the state being measured.
 
 **A third data point, and a worse one: after a cold power-on, commands stopped
 arriving.** 2026-08-31, USB unplugged 21 s, then replugged. **The board kept
@@ -482,18 +781,64 @@ worked first try.
 firmware now logs the head byte it is refusing to consume, and it named it: `0x5B`
 (`[`) with 17 bytes pending -- the first character of this firmware's own log
 lines, arriving on its own RX. So the peek trap really was one of the causes, and
-the loop now also drains such a byte after five seconds. **That the drain fixes
-it is unverified** -- in the session where commands finally arrived the drain
-never fired at all (`gnss.md`). The other cause was **deep sleep**: `CMD:GNSS PROBE` answered
+the loop now also drains such a byte after five seconds. **The drain does
+recover the console unattended, measured 2026-09-03** -- see "The drain works,
+and it takes about a minute" below. The other cause was **deep sleep**: `CMD:GNSS PROBE` answered
 `reset=DEEPSLEEP`, so the board had put itself to sleep and the vanished device
 node was that, not an unplug. At least today's dropouts are therefore auto-sleep
 and not a bus fault, which is what this section previously suspected.
 
-Where 17 bytes of our own output come from is still unexplained. A loopback in
+Where our own output on our own RX comes from is still unexplained. A loopback in
 the USB Serial/JTAG peripheral would do it; so would something on the host
 writing back what it read. **Open**, and cheap to narrow: the drain now dumps the
 byte, so extend it to dump all of them once and the content will say whether it
-is our own log text.
+is our own log text. Two samples now, both `0x5B` (`[`): 17 bytes pending
+2026-08-31, about 15 bytes 2026-09-03. Small, and the same head byte twice.
+
+### The drain works, and it takes about a minute
+
+**Measured 2026-09-03 on the T5 S3 Pro**, firmware `0.2.0-t5s3pro`, over
+`/dev/ttyACM0` with pyserial. The board had been up 170 s and was logging
+normally. The first command sent produced the drain line:
+
+```
+[169589] [ERR] [MAIN] serial head byte 0x5B ([), 45 pending, unconsumed for 5 s
+                      -- draining it; every CMD: was being ignored
+```
+
+Then **every `CMD:` went unanswered for 69 s**, read-only ones included -- a
+`CMD:LIGHT` query answered nothing. At millis 238642, 238695 and 238748 all
+three queued commands answered, in the order they were sent.
+
+Three facts fall out of that, and the third is the useful one.
+
+**The drain recovers the console on its own.** This is what was `[open]` until
+now. No reset, no reflash, no host action.
+
+**It costs about 5 seconds per foreign byte.** The stuck-head block reads
+**one** byte per trigger (`src/main.cpp`, the `logSerial.read()` after the 5 s
+timeout), and the trigger needs 5 s of the *same* head byte, so each byte
+restarts the clock. Whitespace is free -- the peek loop above it consumes
+`\n`, `\r`, space and tab without limit. The 45 pending bytes included the
+~30 bytes of the command just written, so roughly 15 foreign bytes cleared in
+69 s. That is 5 s per byte, arithmetic agreeing with the code.
+
+**Commands are queued, not lost.** They sit behind the foreign bytes in the
+same RX ring and all run when the head clears. So a host script that "got no
+reply" has not failed -- its commands fire minutes later, at a moment nothing
+on the host is expecting them. A screenshot or a `CMD:SETTING` landing that
+late is the shape of a test that measured the wrong state.
+
+**And a leading newline does not clear this wedge.** Every command in this run
+was framed `\nCMD:...\n`, which is the fix T-113 asks `mapcmd.py` for, and the
+console stayed wedged for the full 69 s. Read off the code: the whitespace loop
+only consumes whitespace **at the head**, and a newline the host writes lands at
+the **tail**, behind the foreign bytes. The newline clears a wedge the host
+itself left -- its own torn partial line -- and nothing else.
+
+Only one drain line is ever logged (`reportedStuckHead` is a `static bool`), so
+the log says a wedge started and never says it ended. **Do not read a single
+drain line as a single drained byte.**
 
 **What was established before that was the symptom, not the layer.** The first version of this
 note called it "the CDC came up transmit-only", which places the fault in USB

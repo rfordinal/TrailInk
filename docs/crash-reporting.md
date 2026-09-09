@@ -74,6 +74,31 @@ Tracked as T-234. Note also that the task watchdog sets `g_panic_abort = true`
 directly instead of calling `panic_abort()`, so even if the reset reason were
 accepted, the reason string would still be empty.
 
+**Measured 2026-09-06, and it does not fit the five seconds above.** A WebDAV
+`GET` blocked `loopTask`, and the abort printed **15.97 s** after the handler
+logged its start:
+
+```text
+[179485] [DBG] [DAV] GET /trailink/base/13/4485/2842.tib
+E (195459) task_wdt: Task watchdog got triggered ... - loopTask (CPU 1)
+E (195459) task_wdt: Aborting.
+```
+
+Two things disagree with the config. The trigger named **`loopTask` (CPU 1)**,
+while `sdkconfig.defaults:2375` subscribes only `CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0`
+and explicitly leaves CPU 1's idle task out -- so Arduino subscribes `loopTask`
+itself, and possibly with a timeout this config never states. And the interval
+was 16 s, not 5.
+
+Two candidates, neither settled: the two log formats may be printing from
+different clocks (`[nnn]` is Arduino `millis()`, `E (nnn)` is the IDF log
+timestamp), or the effective timeout is not the 5 s written here. **Open.**
+Settle it by printing `esp_task_wdt_status(nullptr)` and the effective timeout
+once at boot, and by emitting both messages through one clock.
+
+Until then, treat "a five-second freeze resets the device" as the configured
+intent rather than an observed figure.
+
 ## Reading the coredump
 
 Enabled on every environment: `partitions.csv:7` puts a 64 kB `coredump`
@@ -195,6 +220,28 @@ before an hour went into decoding the wrong crash.
 **The matching ELF is often already gone.** None of the ELFs on the laptop
 matched `15463f308`, because the worktree that built it had been rebuilt since.
 Do not rebuild the commit to get one back: see the warning above.
+
+## A dead screen can be the ROM bootloader, not a hang
+
+Closing a host serial capture toggles DTR and RTS, and on an S3 that drops the
+board into download mode. The panel keeps its last image and the device answers
+nothing -- over USB, over Wi-Fi, over anything. It reads exactly like a firmware
+freeze, and it is not one.
+
+The serial log names it plainly:
+
+```text
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x1 (DOWNLOAD(USB/UART0))
+waiting for download
+```
+
+Happened 2026-09-06 when a background capture process was killed mid-session.
+The firmware had been healthy to the last line: `handleClient` ticking every
+10 s, heap flat at 128,532 bytes, no watchdog line anywhere.
+
+A reset or a power cycle brings it back. **Check the reset reason before opening
+a crash investigation** -- and before blaming the firmware for a freeze a host
+tool caused.
 
 ## No coredump and no report is itself evidence
 

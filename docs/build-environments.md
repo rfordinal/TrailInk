@@ -193,6 +193,31 @@ remains of it is CI, tracked as T-280. And the lesson is the one the whole secti
 demonstrates twice: **an env nobody builds is an env that is broken**, so a merge
 builds every env, not the one being worked in.
 
+## CrossPoint `develop` does not build here, with or without a patch
+
+`pio run -e default` on `upstream/develop` (`7db14a01`) fails after 14 minutes,
+before reaching a single source file:
+
+```text
+idf_tools.py installation failed (rc=1). Tail:
+    raise RuntimeError(f'at level {level}, expected 1 entry, got {contents}')
+RuntimeError: at level 0, expected 1 entry, got ['riscv32-esp-elf', 'picolibc',
+  'bin', 'package.json', 'include', 'share', 'lib', 'libexec']
+TypeError: expected str, bytes or os.PathLike object, not NoneType:
+  File "scripts/patch_pioarduino_cache.py", line 51
+```
+
+It is a toolchain-install problem in this environment against their pinned
+pioarduino 55.03.311, not a broken tree, and it happens with or without any
+patch applied. Measured 2026-09-06.
+
+**Consequence for upstream work:** a fix offered to CrossPoint cannot be
+compile-checked locally. Say so in the PR and lean on their CI rather than
+implying the branch was built. `crosspoint-reader/crosspoint-reader#3410` is
+written that way.
+
+Our own environments are unaffected -- they pin a different pioarduino.
+
 ## `platformio.ini` states a range, not a version
 
 A `lib_deps` line is a constraint, not a fact about the build. `h2zero/NimBLE-Arduino @ ^2.3.8` resolved to **2.5.1** on 2026-09-01, two minor

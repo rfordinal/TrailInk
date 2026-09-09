@@ -32,7 +32,12 @@ without reading all of them.
 > problem", has the arithmetic and the two ways out. Rows below are marked for
 > what they actually support. Nothing here is safe to put on the public site.
 
-**The instrument is the voltage slope, in mV/h. That is the measured column.**
+**The instrument is the voltage slope, in mV/h, on every X4 row. That is the
+measured column there.** On a board with a fuel gauge it is not: the T5 S3 Pro
+row's mA is read off a BQ27220 coulomb count and its mV/h is the derived one.
+The 2026-09-03 ride showed the two instruments disagreeing by 3.4x about which
+stretches of a ride were expensive, so which column is the measurement matters
+(see "The T5 S3 Pro's first ride").
 The mA column is derived, by scaling run 2's static window -- 32.9 mV/h against
 24.0 mA, where the mA came from `dPct/100 * 650 mAh` on the spec-sheet capacity
 (`power-plan.md`, run 2) -- and assuming the relation is proportional.
@@ -65,7 +70,10 @@ decides how much of a slope is the discharge curve rather than the load).
 > until that lands **no row carries a device** and the tables here say it instead
 > (`PowerLog.cpp`, `BoardConfig::ACTIVE.name`); rows older than that read
 > `UNRECORDED` and `tools/powercsv.py` says so out loud. **Every row in the tables
-> below is X4**, and that is stated rather than assumed.
+> below is X4 except the T5 S3 Pro row**, and that is stated rather than assumed.
+> That row is also the one taken with a different instrument: the T5 S3 Pro has a
+> BQ27220, so its mA is a coulomb count rather than a slope conversion, and it is
+> not comparable to the rows above it by the error bars alone.
 
 | Mode | Device | Radio | CPU | mV/h | ~mA | Date | Build | Band, duration | Confidence |
 |---|---|---|---|---|---|---|---|---|---|
@@ -75,6 +83,8 @@ decides how much of a slope is the discharge curve rather than the load).
 | Map, advertising, no phone | X4 | advertising | **80** | 10.6 +/- 1.1 | ~7.7 | 2026-08-21 | `55c9ed26` | 4068-4064 mV, 32 min | **not trustworthy** -- 4 mV of movement, four ADC counts; a repeat at 4046 mV read 5.3 |
 | Home, nothing running | X4 | down | 10 | -- | -- | -- | -- | run 3's phase 1 sat inside the relaxation window | **[open]** -- the cheapest missing number |
 | **Map in observation mode, radio off** | X4 | **down** | **10** | **12.27 +/- 0.18** | see note | 2026-08-22 | `0b99e70e` | 4151-4047 mV, **6 h 15 min** | **[measured]**, and the only row here taken across a wide enough band to trust: 104 mV of movement, 1.5 % error. **1.76 %/h, 56.8 h on a charge.** |
+| **Map, connected, frontlight 40 %, GNSS on** | **T5 S3 Pro** | connected | **80** | -66.2 | **135** | 2026-09-03 | `0.2.0-t5s3pro` | 4048-3832 mV, **3.21 h** | **[measured]**, and the only row here whose mA is *not* a voltage conversion -- a BQ27220 coulomb count. **27 steps in 3.005 h = 134.8 +/- 1.5 mA, 11.1 h on a charge.** Was printed as 131 until 2026-09-04; that came from first-row-to-last-row, which counts a boot-entry step it did not measure. See "The T5 S3 Pro's first ride" |
+| **Map, connected, frontlight OFF, GNSS on** | **T5 S3 Pro** | connected | **80** | -40.7 | **91** | 2026-09-04 | `0.2.0-t5s3pro` | 4013-3810 mV, **5.26 h** | **[measured]**, same gauge, same build, same screen. **31 steps in 5.092 h = 91.3 +/- 0.6 mA, 16.4 h on a charge.** The longest and tightest ride row in this file. See "The frontlight is tens of milliamps, not 8" |
 | Tile sync, transfer running | X4 | connected | 160 | -- | -- | -- | -- | never run | **[open]** (campaign state 4) |
 | Light sleep, radio up | X4 | advertising | -- | -- | -- | -- | -- | needs the `CONFIG_PM_ENABLE` build | **[open]** (experiment 3) |
 | Deep sleep, latch held | X4 | off | -- | -- | -- | -- | -- | needs a meter | **[open]** (experiment 1) |
@@ -603,6 +613,351 @@ whether the battery's discharge curve is linear enough at this state of
 charge for the mAh math above to hold. A bench measurement with an inline
 meter (the plan's step 1) is still the number to trust over either of these.
 
+## The T5 S3 Pro's first ride: 131 mA, and the panel is not the reason
+
+> **Corrected 2026-09-04, twice.** The ride drew **134.8 mA**, not 131 -- the
+> older figure counted a gauge step the boot did not measure. And the frontlight
+> was **~18 to ~43 mA of it, not ~8**: a frontlight-off ride the next day
+> measured a 43 mA difference, and how much of that is the light rather than a
+> GNSS rail that may have changed state between the runs is unresolved. The title keeps its number because five docs cite this section by
+> name. See "The frontlight is tens of milliamps, not 8".
+
+**Measured on hardware 2026-09-03**, one ride, map screen up, phone connected,
+frontlight at 40 %, GNSS enabled by the rider. Build `0.2.0-t5s3pro`. The log is
+boot 55 of the device's `power.csv`, pulled over the web server
+(`GET /download?path=/trailink/power.csv`).
+
+**This is the first device in the project with a real fuel gauge on the ride**,
+so it is the first ride whose draw does not come from a voltage slope. That
+changes what the numbers mean, and it is why this section does not just add a
+row to the scoreboard.
+
+| | |
+|---|---|
+| Duration | 191.3 min (3.21 h), 193 rows |
+| SoC, BQ27220 at `0x55` | 100 % -> 72 %, **-28 %** = **420 mAh** of the 1500 mAh nameplate |
+| Voltage | 4048 -> 3832 mV (-216 mV) |
+| **Average draw** | **134.8 +/- 1.5 mA**, about 519 mW at 3.85 V. Read 131 until 2026-09-04, when the endpoint counting error was found |
+| Full to flat at that rate | **11.1 h** |
+| Of which the frontlight at 40 % | **~18-43 mA, 13-32 %** -- measured by difference 2026-09-04; the range is an unresolved GNSS rail, see "The frontlight is tens of milliamps, not 8" |
+| BLE | connected 183 of 193 rows (`ble=2`) |
+| Panel busy | 23.8 min = **12.4 %** of the ride |
+| Refreshes | 1574: `ref_full` **0**, `ref_half` 3, `ref_fast` 159, `ref_window` 1412 |
+| Refresh rate | 8.2/min, about 905 ms panel busy each |
+| CPU | 240 MHz 7.8 %, 80 MHz 92.3 % |
+| Loop | busy 18.2 %, `loop_max_ms` **5278** |
+| Heap | 119-121 kB throughout, min 108.7 kB -- no leak |
+
+No crash during the ride. Both `crash_report.txt` files on the card are from
+other, shorter boots (uptime 29.8 min and 14.7 min).
+
+### `ref_full` is 0 because the map has no full-refresh path
+
+The rider reported "frequent partial and full refreshes at z2". The counters say
+zero full refreshes in 3.2 hours. Both are right, and the counters are not
+missing a path: `MapActivity` only ever asks for `FAST_REFRESH`, with
+`HALF_REFRESH` on an entry clean (`src/activities/map/MapActivity.cpp:4831`,
+`:5326`, `:5764`). Three half refreshes is three entries into the map.
+
+What the rider saw is in the next section: on this board a `ref_window` is a
+full-screen operation.
+
+### The draw does not follow the work, and two instruments disagree about that
+
+The ride has quiet stretches and busy ones. Split it:
+
+| Window | Panel | 240 MHz | `ref_window` | mV/h | mA from SoC |
+|---|---|---|---|---|---|
+| quiet, 5700-7000 s | 4.1 % | 0.1 % | 2.38/min | **-27.2** | **128.6** |
+| busy, 7900-9100 s | 17.3 % | 6.5 % | 10.30/min | **-92.1** | **141.9** |
+| busy, 600-2400 s | 13.3 % | 13.7 % | 8.36/min | **-96.7** | **123.8** |
+| whole ride | 12.4 % | 7.8 % | 7.36/min | -66.2 | 131.7 |
+
+mV/h is a least-squares slope over the rows in the window. mA is `dPct/100 *
+1500 mAh` over the window's duration.
+
+Panel work swings **4x** and the gauge's SoC barely moves (129 against 142 mA).
+The voltage slope swings **3.4x** over the same windows. One of the two is
+wrong about this ride.
+
+**The gauge is the one to believe, and the reason is in the shape of its
+output.** Its SoC steps one percent every 6-7 minutes, metronomically, for the
+whole ride, while mV/h is anything from -27 to -97 in the same stretches. A
+voltage-derived SoC would have tracked the voltage. This one does not, so it is
+integrating charge, not reading a curve -- which is what a BQ27220 with a sense
+resistor is for.
+
+That makes the steep busy-window slopes **IR sag under panel bursts**, not
+faster discharge. The +1.2 mV/min recovery at 9019 s, right after a busy
+stretch ends, is the same effect relaxing.
+
+**So the drain is a large constant load, and the panel and CPU ride on top of it
+for at most ~10 %.** That inverts the working assumption for this board.
+
+**The limit on this.** One ride, one device, and the gauge's own profile is
+probably not learned: it reported 100 % at 4048 mV, where a full LiPo is 4200.
+So the 420 mAh figure carries the nameplate assumption plus an unlearned gauge,
+and the -216 mV of voltage movement is what independently supports "about a
+quarter of the pack". Treat 134.8 mA as good to maybe 20 %, and the *constancy*
+as the finding rather than the value. **The 2026-09-04 walk narrows that:** two
+rides on the same nameplate assumption and the same unlearned gauge differ by
+43 mA, and a difference between two runs of one instrument does not carry the
+instrument's absolute error. What that difference is *made of* is a separate
+question, and it is the open one.
+
+### Where the 131 mA is not
+
+| Item | mA | Confidence |
+|---|---|---|
+| Frontlight at 40 % | **~18-43** | **[measured by difference]** 2026-09-04 -- two runs of one instrument, with the frontlight state attested by the maintainer rather than logged. Not the same confidence as a single direct reading. The range is the unresolved GNSS rail. Was `~8`, an `[arithmetic]` guess that assumed duty is linear in current. It is not. See "The frontlight is tens of milliamps, not 8" |
+| ESP32-S3 at 80 MHz, no light sleep | ~22-25 | **[open]**, datasheet not read |
+| BLE connected, 30 ms interval | ~10-20 | **[open]** |
+| L76K tracking, if the rail was up | ~20-25 | **[open]** -- the 7.6 mA figure in this file is the MIA-M10Q's, not the L76K's |
+| SX1262, held in reset | ~0 | reset is asserted before the rail goes up |
+| PSRAM, mounted SD, panel PMIC | ? | **[open]**, nobody has attributed it |
+| **Known items** | **~95-115** | was ~70-80 before the frontlight was measured |
+| **Measured** | **135** | |
+| **Unattributed** | **~20-40** | was ~50-60 |
+
+Two things that fall out of that table.
+
+**The frontlight is 32 % of the ride's draw** (corrected 2026-09-04; this
+paragraph read "6 %" and said the vendor number was confirmed). The 6 % came
+from the `[arithmetic]` row above, not from a measurement, and a frontlight-off
+ride the next day put the real cost at ~18 to ~43 mA. The board doc's "a night
+ride is affordable on this board" rests on the same vendor number and has to be
+reweighed (`../../docs/devices/lilygo-t5-s3-pro.md`, "The frontlight costs about
+20 mA"). See "The frontlight is tens of milliamps, not 8".
+
+**The panel PMIC is not a constant load.** `epdPowerOn()` and `epdPowerOff()`
+cycle the TPS65185 rails around each refresh and do not leave them up
+(`freeink-sdk/libs/hardware/BoardT5S3/src/LilyGoT5S3LgfxConfig.cpp:85-150`).
+**[read-off-code, not measured]** So the ~50 mA is somewhere else.
+
+**The GNSS/LoRa rail was probably up for the whole ride whatever the settings
+said**, which would put the receiver in the budget: one expander pin gates both
+parts, nothing calls `BoardT5S3::begin()`, so `disableGpsLora()` has never run
+on this board and the PCA9535 latches whatever was last written to it until it
+loses power (`gnss.md`, "The power rail is shared with the LoRa radio"). That is
+T-244 in the parent repo's `docs/TODO.md`, and this ride is the first
+measurement it has a claim on.
+
+### Against the X4
+
+| | X4 | T5 S3 Pro |
+|---|---|---|
+| Cell | 650 mAh | 1500 mAh (2.3x) |
+| Map connected, measured draw | ~44 mA | **134.8 mA (3.1x)**, frontlight 40 % |
+| Map connected, frontlight off | n/a, no frontlight | **91.3 mA (2.1x)** |
+| Map open, full to flat | ~14.6 h | **11.1 h** lit, **16.4 h** dark |
+
+**A 2.3x bigger cell and a shorter ride** -- and with the light off, a longer
+one, 16.4 h against 14.6. Half the gap this comparison originally showed was the
+frontlight, which the X4 does not have at all. The X4 figure is this file's "The
+state-3 baseline: ~45 mA over 11.5 hours"; it comes from a voltage slope on a
+board with no gauge, so the two columns are not the same instrument and the
+ratio is a ballpark rather than a measurement.
+
+### What this ride could not answer, and what the next one will
+
+The log has no column for the frontlight duty, none for the GNSS rail, and none
+for current. So nothing in it can separate the constant load into parts, and the
+gauge-against-voltage disagreement above had to be settled by argument rather
+than by reading.
+
+The fix is small and the gauge is already on the bus: log register `0x0C`. See
+"The BQ27220 already reads current, and throws it away" below. T-250.
+
+**And the GNSS half of the ride has an answer, which the budget above has to
+carry.** `mapGnssPosition` was 0, left over from the BLE regression run of
+2026-09-02, so the map drew from the phone and the firmware never opened the
+receiver's UART (`gnss.md`, "What a ride with the setting off costs the power
+log", and `gnss-to-map-plan.md` for the cause and the Settings row that now
+makes it visible). **That does not remove the L76K from the budget.** The rail
+is an expander pin that latches until it loses power and nothing on this board
+calls `disableGpsLora()`, so the receiver may have been powered and tracking the
+whole ride with nothing reading it. Powered-but-unread is the most expensive
+state it has, and no column in this log can tell it from powered-off.
+
+## The frontlight is tens of milliamps, not 8
+
+**Measured on hardware 2026-09-04.** A 5.26 h walk around Barcelona, map up,
+phone connected, **frontlight off all day**, same build `0.2.0-t5s3pro` as the
+2026-09-03 ride. **91.3 +/- 0.6 mA.**
+
+That `+/- 0.6` is **precision, not accuracy**: it is gauge-step timing only. The
+absolute figure still carries the nameplate-capacity assumption and an unlearned
+gauge, which this file elsewhere calls good to maybe 20 %. A **difference**
+between two runs of one instrument does not carry that error; a single value
+does. The ride the day before, same device, same
+screen, same build, **frontlight at 40 %**, drew **134.8 +/- 1.5 mA**.
+
+**The difference between the two runs is ~43 mA**, and the frontlight's own
+share of it is **~18 to ~43 mA** -- see "The rail is not provably identical"
+below for what takes the rest. The table above priced the frontlight at ~8 mA
+from LilyGo's "~20 mA at full current" scaled linearly to 40 %. That estimate
+was marked `[arithmetic]` and it was wrong by 5x. The measured cost is also more
+than **twice the vendor's full-current figure, at less than half brightness**.
+
+| | 2026-09-03 | 2026-09-04 (walk) | 2026-09-04 (before the walk) |
+|---|---|---|---|
+| Boot in `power.csv` | 55 | 78 | 77 |
+| Frontlight | **40 %** | **off** | **off** |
+| Duration | 3.21 h | **5.26 h** | 0.82 h |
+| Draw | **134.8 +/- 1.5 mA** | **91.3 +/- 0.6 mA** | 92.2 +/- 4.5 mA |
+| Runtime from full | 11.1 h | **16.4 h** | 16.3 h |
+| Panel busy | 12.35 % | 4.77 % | 11.07 % |
+| Refreshes/min | 8.2 | 2.9 | 7.1 |
+| BLE | connected | connected | connected |
+
+### Why the panel is not what changed
+
+Boot 77 is the control. It ran **the same day** as the walk with the frontlight
+off, and it carries **the same panel load as the 2026-09-03 ride** -- 11.07 %
+against 12.35 % panel busy, 7.1 against 8.2 refreshes a minute. It drew
+**92.2 mA against that ride's 134.8**.
+
+And boots 77 and 78 bracket the panel from the other side -- but **not to
+0.9 mA**, which is what this paragraph claimed until 2026-09-04. Boot 77 is
+92.2 mA **+/- 4.5**, because 4 gauge steps in 0.65 h is all it has. So the pair
+does not show that 2.3x the panel work costs 0.9 mA; it shows it costs **less
+than the measurement can resolve, and the bound is about 5 mA**, roughly 5 % of
+the draw. Still small, and not zero. What it does rule out is the panel carrying
+a 40 mA difference.
+
+That is the same conclusion the 2026-09-03 ride reached from one ride's internal
+variation, now with a between-ride control instead of an argument.
+
+### How the mA is counted, and why the older number moved
+
+The BQ27220 reports state of charge in whole percent. Differencing the first and
+last row of a boot counts **the step the device booted into**, which it did not
+measure -- the pack was already partway through that percent when the boot
+started. That biases a short boot high.
+
+So every mA here counts **from the first row of the second step to the first row
+of the last**, which measures only whole steps:
+
+```
+boot 55: 99 % -> 72 %, 27 steps in 3.005 h -> 134.8 mA
+boot 78: 90 % -> 59 %, 31 steps in 5.092 h ->  91.3 mA
+```
+
+That is why the 2026-09-03 ride now reads 134.8 where this file said **131**.
+Same log, same gauge, one fewer counting error; 131 was inside the endpoint
+method's own error bar.
+
+### What this does to the budget
+
+With the frontlight off, 91.3 mA measured:
+
+| Item | mA | Confidence |
+|---|---|---|
+| ESP32-S3 at 80 MHz, no light sleep | ~22-25 | **[open]**, datasheet not read |
+| BLE connected, 30 ms interval | ~10-20 | **[open]** |
+| L76K tracking, if the rail was up | ~20-25 | **[open]** |
+| **Known items** | **~52-70** | |
+| **Measured** | **91.3** | |
+| **Unattributed** | **~21-39** | |
+
+**The residual is the same from both ends.** Add the measured frontlight back
+and the frontlight-on ride reads 52-70 + 43 = 95-113 known against 134.8
+measured, leaving ~22-40 unattributed. Two rides, two frontlight states, the
+same ~20-40 mA nobody can name. That is now what T-250 is about; the frontlight
+half of it is answered.
+
+### Why the vendor number may be low -- all [open]
+
+- **Not two channels** -- ruled out. This board's frontlight is **warm only, one
+  PWM pin, `GPIO11`** into the `PT4103B23F` (`../../docs/devices/lilygo-t5-s3-pro.md`).
+  Warm plus cool on `GPIO8`/`GPIO9` is the **X4 Pro**, a different device
+  (`../../docs/device-fit.md`, the frontlight row). So the vendor's ~20 mA cannot
+  be a per-channel figure being doubled.
+- **"40 %" may not be 40 % duty.** It may be a step index into a table.
+- **The measurement is on the cell, the vendor's is on a rail.** `PT4103B23F` is
+  a boost LED driver; what it draws from a 3.9 V cell is its output current plus
+  conversion loss, not the LED current.
+- **Duty need not be linear in current** for a boost driver, whichever dimming
+  scheme it uses.
+
+Settling this needs no ride: `CMD:BATT` reads the gauge directly, so a bench run
+of off / 40 % / 100 % with nothing else changed and **USB unplugged** prices all
+three. T-250 in the parent repo's `docs/TODO.md`.
+
+### What this measurement rests on, and what it does not
+
+**The frontlight state is not in the log.** No column carries it. That both
+rides differed only in the frontlight is **the maintainer's own statement**, made
+2026-09-04, not something this file can check. It is the load-bearing input.
+
+**The two runs are not proven to be the same binary.** This is the strongest
+objection to the whole section. The `build` column is `TRAILINK_VERSION`, a
+version string: both runs read `0.2.0-t5s3pro` and neither records a commit. The
+walk's is known only from a coredump the crash session decoded that evening --
+`gnss-settings-row` @ `6b34fb69`, compiled 09-03 22:12
+(`../../docs/crashes/2026-09-04-map-exit-restart/`). The ride's is unrecorded.
+
+`PowerLog.h` says the `build` column is "the only thing that makes two runs
+comparable". **It is not, and this is the run that proves it.** Make it carry a
+commit. Folded into T-250.
+
+**Two candidate differences were checked, and neither takes the finding down.**
+
+- **The BLE connection interval.** `df62de7b` (09-03 16:08) pins the link at one
+  interval, **15 ms**, where it previously asked for 12-24 units and the central
+  answered 24 (**30 ms**). The walk's build carries it. If the ride's did not,
+  the walk ran the *costlier* link and still came out 43 mA lower -- which makes
+  **43 mA a floor for the difference between the two runs**, not a ceiling.
+  (It says nothing about how that difference splits between the frontlight and
+  the GNSS rail; that is the section below.) Which side of 16:08 the ride fell
+  on is not recorded.
+- **"One radio per session"** (`5c8797ab`, 09-03 21:46) never fired. It skips
+  `BlePositionServer::begin()` when `mapGnssPosition` is on; BLE was connected
+  for the whole walk, so it was off. It does not touch the GNSS/LoRa rail either
+  way.
+
+**The rail is not provably identical in both runs, and this was argued wrongly
+here on 2026-09-04.** The first version of this section said nothing calls
+`disableGpsLora()`. That is true and it is irrelevant: `disableGpsLora()` is not
+the function that controls the rail. The rail is raised by `Gnss::start()` ->
+`config_.powerEnable(true)` and lowered by `Gnss::stop()` ->
+`config_.powerEnable(false)` (`lib/Gnss/src/Gnss.cpp:116`, `:185-186`), wired to
+`main.cpp`'s `gnssPowerEnable()` at `src/main.cpp:287`. And
+`MapActivity.cpp:2309` states the policy outright: *the receiver comes up with
+the map and goes down with it*.
+
+So **any session that opened the map with `mapGnssPosition` on and then left it
+dropped the rail.** Twenty-one boots sit between the two measured runs in the
+log, and that evening was GNSS work -- the Settings row, one-radio-per-session,
+the UTC clock suffix. It is the **most** likely thing to have moved that rail,
+not the least.
+
+**What that does to the number.** If the rail was up for the 2026-09-03 ride
+(latched from earlier, which is what this file already argues) and down for the
+walk (dropped by a clean `stop()` during the evening's work), then the L76K --
+`[open]` at 20-25 mA in the budget above -- takes part of the 43.
+
+**So the frontlight costs somewhere between ~18 and ~43 mA.** The uncertainty is
+the GNSS rail and nothing else. **Every value in that range is more than double
+the ~8 mA this file carried**, so the correction to that figure stands on its
+own; the single number 43 does not.
+
+**What is solid:** the gauge is a coulomb counter, both numbers come from it,
+both boots ran the same build on the same device, and boot 78 is 31 whole steps
+over 5.09 hours -- the longest and tightest discharge measurement in this file.
+
+### The voltage slope lied again, the same way
+
+Within the walk, the 10-minute segments swing 1.7x in voltage slope
+(`+29.1 +/- 2.1` mV/h at 3.37 % panel busy, `+50.6 +/- 5.1` at 15.44 %) while
+the gauge steps at a flat 90-105 mA across the whole 5 hours regardless of panel
+load. Busy stretches sag the cell under load; they do not discharge it faster.
+
+Same artefact as 2026-09-03, reproduced on a longer log. **On a board with a
+gauge, read the gauge.** `tools/powercsv.py` in the parent repo fits voltage
+slopes and is the right tool for the X4, which has no gauge; on this board its
+mV/h columns are IR sag as much as discharge.
+
 ## A windowed update costs the same panel time as a fast full refresh
 
 **Derived from run 2's counters, 2026-08-16. Not directly measured per type --
@@ -674,6 +1029,46 @@ across all of them -- it barely depends on where the cut goes, because window
 updates dominate the counts on both sides. `ref_fast` is softer, 435-497 ms. So
 the headline ("both cost about the same; area does not set the price") is
 robust; the exact `ref_fast` figure is not.
+
+### On the T5 S3 Pro there is no windowed path at all (2026-09-03)
+
+The X4 finding above holds from the other direction on this board, and harder.
+`PanelDriver::displayWindow()` has a default body that **throws the rectangle
+away**:
+
+```cpp
+// freeink-sdk/libs/display/FreeInkDisplay/src/driver/PanelDriver.h:53
+virtual void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev,
+                           uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOff) {
+  display(bus, fb, prev, RefreshMode::Fast, turnOff);
+}
+```
+
+Exactly one driver overrides it, `Ssd1677Driver` (X4). The T5 S3 Pro runs
+`LgfxEpdDriver`, which does not (`LgfxEpdDriver.h:32-49` -- every `override` it
+declares, and `displayWindow` is not among them). So the ride's **1412
+`ref_window` calls each executed a full-screen `FAST_REFRESH`**, and with the
+159 real fast refreshes and 3 half that is 1574 whole-panel operations in 191
+minutes. That is what the rider saw at z2, and `ref_full` was 0 the whole time.
+
+**Do not read that as 1412 wasted full redraws.** LovyanGFX's `Panel_EPD` does a
+per-pixel diff and skips unchanged pixels
+(`freeink-sdk/libs/hardware/BoardT5S3/src/LilyGoT5S3LgfxConfig.cpp:19-25`), so
+the pixels driven are already close to what a window would have driven. What is
+not skipped is the panel's gate scan.
+
+**And implementing `displayWindow` here would probably buy nothing.** A
+row-ranged partial refresh on a parallel EPD does not shorten the scan:
+FastEPD's `bbepPartialUpdate` clocks out every row at full width regardless of
+the requested range, and the row range only decides which rows get a
+non-neutral drive (`fastepd.md`, "Row-ranged partial refresh saves data, not
+scan time"). Our own X4 numbers say the same thing from measurement -- window
+508 ms against fast 490 ms.
+
+So both boards, two drivers, and an upstream library all agree: **the price is
+per refresh, not per pixel.** The lever is the count. 8.2 refreshes a minute to
+move a dot is the thing to attack, and it is T-249 in the parent repo's
+`docs/TODO.md`.
 
 ## BLE modem sleep cuts the draw a third (measured 2026-08-16)
 
@@ -1745,8 +2140,50 @@ carries percentage, millivolts, `charging` and `externalPower`, and **no current
 field** (`BatteryMonitor.h`, the `Status` fields). Read off the code 2026-09-01,
 not measured.
 
-So on a board with this gauge the power campaign needs **no external meter**. It
-needs `currentMa` plus a `currentKnown` flag added where `0x0C` is already read.
+So on a board with this gauge the power campaign needs **no external meter**.
+One way to get it is `currentMa` plus a `currentKnown` flag added where `0x0C`
+is already read; the firmware took the other way, below.
+
+**Half done, and the better half.** `CMD:BATT` on this branch reads `0x08`,
+`0x2C`, `0x0C` and the charger's `0x0B` straight off the bus and answers
+`BATT:mv=4102 pct=100 curr_ma=-38 chg=1 gauge=0x55 charger=0x6b`
+(`src/main.cpp`, the `BATT` case). A field it cannot read prints `?`. It does
+this from our side on purpose rather than adding a field to `BatteryMonitor`,
+and it is `env:t5s3pro` only. **So a state can be priced on the bench today, by
+hand, with no meter and no SDK change.**
+
+Two things it is not. It is **not in `power.csv`**, so it prices a state
+somebody is standing in front of and says nothing about a ride -- which is
+exactly what the 2026-09-03 ride needed and did not have. And the sign is TI's:
+**positive into the cell**, so a charging board reports the opposite of what
+"draw" suggests, and a reading taken over USB is about the charge path.
+
+A logged column was written the same day and dropped unmerged. Two design
+points from it are worth keeping whenever it is written for real: the column has
+to be **empty rather than 0** on a board with no gauge, because 0 is a real
+reading on a rested cell; and `tools/powercsv.py` zips by column name, so a new
+column costs an older reader nothing. T-250.
+
+One stale comment to know about, not fixed here: the `CMD:BATT` block explains
+its from-our-side approach with "editing freeink-sdk, which is upstream's repo
+and whose submodule pointer stays on upstream main". **That stopped being true
+on 2026-09-03**, when the SDK was forked -- the same expiry that moved T-247.
+The approach is still the right one; only the reason given for it is out of
+date.
+
+**And there is a second instrument now**, since 2026-09-03: a Joy-IT JT-UM120
+USB meter, read with `tools/usbmeter_read.py --live` (parent `CLAUDE.md`, "The
+USB meter hangs if you write to it"). It is not a substitute here -- it reads
+VBUS with a charger in the path, not the cell -- so it prices a state only where
+the charge path is understood. `docs/usb-power-meter.md` has what a VBUS number
+does and does not mean.
+
+**The 2026-09-03 ride is what makes this the next thing to do, not a nice-to-have.**
+That ride's panel work swung 4x while the gauge's SoC held flat and the voltage
+slope swung 3.4x, and with no current column there was no way to read which of
+the two was describing the ride -- it had to be argued from the shape of the SoC
+steps. A `curr_ma` column in `power.csv` turns per-state attribution from a
+day-long discharge into a minute of log ("The T5 S3 Pro's first ride").
 That is a small change in `freeink-sdk`, which is upstream, so it is a candidate
 for the same PR queue as the frontlight fix rather than a local fork.
 
