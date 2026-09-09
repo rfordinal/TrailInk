@@ -30,9 +30,10 @@ slug matches the device's doc: `docs/devices/<slug>.md` in the parent repo, so
   go-ahead, same as any other merge into a production branch.
 - **Sync the other direction too.** `develop` keeps moving while a device's
   release branch is being worked — core fixes, shared refactors, other
-  devices' contributions. Periodically merge `develop` into `release/<device>`
-  so the device branch does not rot behind it. Do this whenever picking the
-  device work back up after a gap, not on a fixed schedule.
+  devices' contributions. Merge `develop` into `release/<device>` **before
+  forking any feature branch off it**, so the work starts on the current base.
+  See "Sync the device branch before forking a feature off it" below, including
+  the submodule pointer that merge will otherwise carry quietly.
 
 ## Why not just feature branches off `develop`
 
@@ -91,6 +92,52 @@ origin. Check the real question, then force:
 git -C firmware/explorink merge-base --is-ancestor <branch> origin/release/<device>
 git -C firmware/explorink branch -D <branch>
 ```
+
+## Sync the device branch before forking a feature off it
+
+**Maintainer's decision, 2026-09-09.** A feature branch forked from
+`release/<device>` must be forked from a base that already carries what
+`develop` has. So the order is: merge `develop` into `release/<device>`, then
+fork. Development happens on the current base, not on whatever the branch
+happened to hold.
+
+This replaces "periodically, whenever picking the device work back up after a
+gap". A gap is not the trigger; forking is.
+
+```
+git -C firmware/explorink fetch origin
+git -C <device worktree> log --oneline origin/develop ^HEAD    # what the sync brings
+git -C <device worktree> merge origin/develop
+```
+
+**The sync does not need its own hardware pass.** The device branch is the
+holding area for work that is allowed to be half-finished, and the feature's own
+hardware pass then measures the feature against the synced base, which is the
+combination that matters. Requiring a pass per sync is what makes people skip
+syncing, and skipping syncing is what produced the cherry-picks.
+
+**But the submodule pointer never rides along in a sync.** This is the one thing
+the merge will do quietly. Once `develop` and the device branch pin different
+`freeink-sdk` commits and one contains the other, git prints
+`Note: Fast-forwarding submodule freeink-sdk` and stages it resolved -- no
+conflict, nothing to stop at. Measured 2026-09-09: a sync of
+`release/lilygo-t5-s3-pro` would have carried the pin from `55a49587` to
+`955b2530`, **208 upstream commits**, inside a routine merge. An SDK bump is its
+own pass with its own hardware verification
+([`freeink-sdk-fork.md`](freeink-sdk-fork.md)), so:
+
+```
+git rev-parse HEAD:freeink-sdk          # before the merge
+git rev-parse HEAD:freeink-sdk          # after -- must be unchanged
+```
+
+If it moved, put it back (`git checkout HEAD~1 -- freeink-sdk` before
+committing, or amend) and bump the pin deliberately, separately. **Never merge a
+sync whose gitlink you have not compared.**
+
+Cost of the two syncs pending as this was written: `release/lilygo-t5-s3-pro` is
+53 commits behind `develop` and 212 ahead, and its pin differs;
+`release/xteink-x4-pro` is 6 behind, 1 ahead, same pin.
 
 ## No cherry-pick between our own branches
 
