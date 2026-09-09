@@ -32,6 +32,18 @@ without reading all of them.
 > problem", has the arithmetic and the two ways out. Rows below are marked for
 > what they actually support. Nothing here is safe to put on the public site.
 
+> **Two tables in this file give a draw for the map screen and they are not the
+> same measurement (added 2026-09-09).** The mode table directly below is runs 1
+> and 2 off `docs/power-runs/*.csv` in the parent repo -- 11.4 h of whole
+> discharge and a 9.5 h static window -- and it is the pair the public site
+> quotes as 35.6 and 24.0 mA. The older pair further down, ~46 mA and ~17 mA,
+> is derived from battery percentage in two ride recordings of 34 and 47 minutes
+> and is superseded. A reader who lands on the second one concludes the public
+> numbers rest on three quarters of an hour of riding: that happened on
+> 2026-09-09 during a site audit, and the wrong version reached the maintainer
+> before the right one did. **Match a number by its value before trusting the
+> section it sits in.**
+
 **The instrument is the voltage slope, in mV/h. That is the measured column.**
 The mA column is derived, by scaling run 2's static window -- 32.9 mV/h against
 24.0 mA, where the mA came from `dPct/100 * 650 mAh` on the spec-sheet capacity
