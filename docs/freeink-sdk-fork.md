@@ -229,30 +229,51 @@ touched before calling anything lost.
 
 Screen any pin against the fork before trusting it:
 
-```
-git -C freeink-sdk merge-base --is-ancestor origin/explorink $(git rev-parse HEAD:freeink-sdk)
-```
-
-Exit 0 means the pin contains the fork tip and therefore our patches.
-
-**The obvious version of this check does not work**, and it was written into
-four documents before anyone tried it against a bad pin:
+List the fork's own commits, then ask whether the pin contains each one:
 
 ```
-git -C freeink-sdk branch -r --contains <pin>     # WRONG
+git -C freeink-sdk rev-list origin/explorink --not origin/main --no-merges
+git -C freeink-sdk merge-base --is-ancestor <each of those> $(git rev-parse HEAD:freeink-sdk)
 ```
 
-Merging `cb9167d5` into `explorink` made `cb9167d5` reachable from
-`origin/explorink`, so `--contains` now lists our fork branch for the one pin
-this whole exercise was about -- a pin with no patch of ours in it.
-**Reachability is not containment of a change.** Same mistake as using
-`merge-base --is-ancestor <our commit> <pin>` to decide a patch was lost: that
-answers a question about history, and the content question needs a diff. When
-in doubt, look at the code:
+Exit 0 for every one means the pin carries our patches. A commit that fails is
+not automatically lost -- check whether upstream took its *content* before
+concluding anything (that is how `94e19f73` looks missing and is not).
+
+**Two earlier versions of this check were wrong, and both were written into
+four documents before anyone ran them against a pin known to be bad.** Keep
+them here, because the shape of the error repeats.
 
 ```
-grep -n esp_task_wdt_reset freeink-sdk/libs/hardware/SDCardManager/src/SDCardManager.cpp
+git -C freeink-sdk branch -r --contains <pin>                      # WRONG 1
+git -C freeink-sdk merge-base --is-ancestor origin/explorink <pin> # WRONG 2
 ```
+
+**Wrong 1 passes a bad pin.** Merging `cb9167d5` into `explorink` made
+`cb9167d5` reachable from `origin/explorink`, so `--contains` lists our fork
+branch for a pin with no patch of ours in it. Reachability is not containment
+of a change.
+
+**Wrong 2 fails a good pin.** It asks whether the pin contains the fork's
+*current tip*, so `release/lilygo-t5-s3-pro` -- which pins `55a49587`, an older
+fork tip that carries the patch perfectly well -- comes back FAIL. A branch is
+allowed to pin an older fork commit.
+
+Both mistakes are the same one: asking git a question about *history* when the
+question is about *content*. When in doubt, skip the plumbing and look at the
+code at that pin:
+
+```
+git -C freeink-sdk grep -c esp_task_wdt_reset <pin> -- libs/hardware/SDCardManager/src/SDCardManager.cpp
+```
+
+Run against every branch on 2026-09-09, the working check says:
+
+| branch | pin | verdict |
+|---|---|---|
+| `develop` | `955b2530` | PASS |
+| `release/lilygo-t5-s3-pro` | `55a49587` | PASS |
+| `release/xteink-x4` | `e514a868` | FAIL -- genuinely has neither patch, untouched since 2026-08-22 |
 
 **A pin an older branch still uses gets a tag before the fork branch moves.**
 `release/lilygo-t5-s3-pro` pins `55a49587`, which was `explorink`'s tip and on
