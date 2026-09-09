@@ -217,7 +217,7 @@ In flow order. Skipping a line is how the 2026-08-16 hangs happened twice.
 
 **Only now, the device:**
 
-- [ ] `python3 tools/x4lock.py acquire --owner <session> --reason "<exp>" --ttl <s>`
+- [ ] `python3 tools/devlock.py acquire --device <board> --owner <session> --reason "<exp>" --ttl <s>`
       (parent repo). Never take it before the binary exists.
 - [ ] Identify the port: `udevadm info -q property -n /dev/ttyACM0 | grep
       ID_VENDOR_ID` -- `303a` is the X4, `04e8` the phone. On the wrong port
