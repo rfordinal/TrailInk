@@ -176,6 +176,31 @@ draws a map and holds a BLE link on it.
 5. Say in the commit message what the bump is **for**. A pointer move with no reason
    cannot be reverted with confidence.
 
+## Moving the pin: record it, then test harder
+
+Moving the pin is a normal, deliberate act. It propagates to other branches
+through an ordinary sync, and that is wanted. What it is not is free, and it is
+almost invisible: the firmware repo stores no SDK files, only the one line
+saying which SDK commit to build against, so `git show --stat` renders any SDK
+change as `freeink-sdk | 2 +-`, one changed file, whatever is behind it.
+
+So a move obliges three things and blocks nothing:
+
+- **A row in [`freeink-sdk-pins.md`](freeink-sdk-pins.md)** — every move of the
+  pin, per branch, with what verified it.
+- **A full hardware pass on that branch, not a spot check.** The SDK is the
+  panel driver, the SD card and the input layer, so the set is: boot, a map
+  frame (SD read), `MKCOL` + `PUT` (SD write), and a large WebDAV GET
+  (`readFileToStream`). Both real defects found in this subsystem sat in the SD
+  path, and neither showed up at boot.
+- **A commit body that names both SHAs and why.**
+
+`scripts/sdk_pin_check.py` reports the direction, the span, and whether the
+patches on `origin/explorink` survive; `.githooks/post-merge` and `post-commit`
+call it. Both need `git config core.hooksPath .githooks` once per clone, and CI
+cannot stand in — [`branching.md`](branching.md), "Sync the device branch before
+forking a feature off it", has the reason.
+
 ## The pin can walk off the fork, and it did twice
 
 Our patches live only on `explorink`. Nothing checks that the commit a firmware
@@ -197,12 +222,32 @@ repo.
 **What that hardware pass does and does not cover.** LilyGo T5 S3 Pro (MAC
 `7c:2c:67:8a:4c:b4`), env `t5s3pro`, flashed over `/dev/ttyACM0`, hash verified.
 The device booted to Home and the map screen drew live tile linework. That is an
-SD **read**: tiles have one source in this firmware
-(`src/activities/map/HalFileSource.cpp:13`, `Storage.open`) and nothing about the map
-survives a reset (`src/activities/map/MapActivity.h:47`), so the frame cannot be
-a stale panel or a cache. It does **not** cover SD **writes**, which is what
-BUG-037 actually failed at (`ERR mkdir failed`), and it does not exercise
-`readFileToStream`, which needs a large WebDAV GET.
+SD **read** -- measured, in that the frame appeared. That tiles have only one
+source is **read, not measured**: `src/activities/map/HalFileSource.cpp:13`
+opens them with `Storage.open`, and `src/activities/map/MapActivity.h:47` states
+nothing about the map is held between resets. Both are this fork's own code and
+comment, and nobody has grepped for a second tile source. Strong enough to rule
+out a stale panel, since the frame came back through `CMD:SCREENSHOT` from the
+framebuffer; not strong enough to be called a measurement. It does **not** cover SD **writes**, which is what
+BUG-037 actually failed at (`ERR mkdir failed`).
+
+**`readFileToStream` was then exercised, 2026-09-09, and it holds.** The device
+on WiFi at `10.100.11.222`, `GET /trailink/base/13/4485/2842.tib` over WebDAV --
+**the same 733 kB file that triggered the watchdog on 2026-09-06**, which is what
+`55a49587` was written for:
+
+| | |
+|---|---|
+| HTTP | 200, 732,765 bytes, matching the `PROPFIND` length exactly |
+| Wall time | 9.6 s and 9.8 s over two runs, ~76 kB/s |
+| Two GETs | bit-identical (`cmp`), so the read repeats and does not corrupt |
+| Content | starts `TIB1`, 613,442 non-zero bytes of 732,765 |
+| `uptime` from `/api/status` | 142 s before, 165 s after the first, 215 s after the second -- **continuous** |
+| `freeHeap` | 123,032 B before, 123,016 B after |
+
+A task-watchdog reset would have zeroed `uptime`, so the continuity is the
+evidence, not the absence of an error message. The earlier failure sat in the
+task for 16 s; these runs blocked for a fraction of that and never tripped it.
 
 **A bump pass that lands on a mirror commit.** The 2026-09-08 SDK pass moved
 `develop` from `e514a868` to `cb9167d5`, 208 commits -- deliberate and measured, for the X4
