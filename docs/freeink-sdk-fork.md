@@ -36,8 +36,10 @@ theirs.
 - **`main`** mirrors upstream. Do not commit to it. A PR to upstream is branched
   from it, so it has to stay clean.
 - **`explorink`** is upstream plus our patches. This is what the firmware pins.
-  Today it is one commit: the T5 S3 Pro EPD config no longer asserting the LoRa
-  radio's chip select (`Free-Ink/freeink-sdk#73`).
+  Today that is one patch: `readFileToStream` feeding the task watchdog
+  (`55a49587`). The other one, the T5 S3 Pro EPD config no longer asserting the
+  LoRa radio's chip select, went upstream as `Free-Ink/freeink-sdk#73` and is
+  now in `main`, so the fork no longer carries it.
 
 `.gitmodules` says `branch = main` on every branch of this repo, deliberately.
 That field only steers `git submodule update --remote`, which is not part of the
@@ -84,10 +86,13 @@ own. Two consequences, and the second one is new:
   the SDK is a library whose API only grows, so a bump either builds or does not,
   while a CrossPoint sync is a judgement call per commit. Bundled, a red build says
   nothing about which half broke.
-- **A local SDK commit is a cost, not a feature.** The one patch this fork carried
-  on `explorink` (the T5 S3 Pro EPD config asserting the LoRa chip select) went
-  upstream as PR #73 and was **merged 2026-09-03**. So the right end state is what
-  we have: nothing of ours in the SDK line we pin.
+- **A local SDK commit is a cost, and getting it upstream retires the cost.** The
+  EPD config asserting the LoRa chip select went upstream as PR #73, **merged
+  2026-09-03**, so the fork no longer carries it. **Corrected 2026-09-08:** this
+  bullet used to end "nothing of ours in the SDK line we pin", which was already
+  untrue when it was written -- `55a49587` had landed on `explorink` on 09-06.
+  Assuming the fork is empty is how the pin walked off it; see "The pin can walk
+  off the fork".
 
 Measured 2026-09-08 through the GitHub compare API:
 
@@ -95,12 +100,16 @@ Measured 2026-09-08 through the GitHub compare API:
 |---|---|
 | Our `main` | `24003795`, 2026-09-02, **zero commits of its own** -- a plain ancestor of upstream `main` |
 | Upstream `main` ahead of our `main` | 18 commits |
-| `explorink` branch | one patch, now redundant: PR #73 is upstream |
+| `explorink` branch | one patch: `55a49587`, the `readFileToStream` watchdog fix. PR #73 is upstream and no longer carried |
 
 ### The pin has to sit on a branch of our own remote
 
-**Trap found 2026-09-08.** The pin `develop` now carries, `cb9167d5`, is **9 commits
-ahead of our fork's `main`**, so it is on no branch of `rfordinal/freeink-sdk`. It
+**Trap found 2026-09-08, resolved the same day.** The pin `develop` carried at the
+time, `cb9167d5`, was **9 commits ahead of our fork's `main`**, so it was on no
+branch of `rfordinal/freeink-sdk`. Merging `cb9167d5` into `explorink` (giving
+`955b2530`) fixed this as a side effect: the commit is now reachable from a
+branch of our own remote. The trap is still worth knowing, because it comes back
+the moment a pin is taken from upstream directly. It
 resolves only because GitHub keeps a fork network in one object store -- a property
 of the host, not of our repository. If that ever stops holding, a fresh clone fails
 `git submodule update` with a commit-not-found error that names nothing useful.
@@ -122,7 +131,9 @@ before any future push.
 
 ### The 2026-09-08 bump, and what it cost
 
-`e514a868` (2026-07-28) to `cb9167d5` (2026-09-04), 217 commits. What it is *for*:
+`e514a868` (2026-07-28) to `cb9167d5` (2026-09-04), 208 commits (`git rev-list
+--count e514a868..cb9167d5`; the entry first said 217, corrected 2026-09-08). What it
+is *for*:
 the **X4 Classic board profile** (`Board::XteinkX4Classic`, SDK
 `docs/xteink-x4c-support.md`, full pinout), which is what an S3 Xteink env needs.
 It also brings our own PR #73 in from upstream, so the `explorink` patch stops being
@@ -137,7 +148,7 @@ Evidence, all from a laptop, none from a device:
   `sticky` (S3), `simulator` (host).
 - **Host tests 437 of 437**, 2.73 s.
 - **Cost, measured by building the S3 env against each SDK commit in turn:**
-  RAM +296 B, flash +21,920 B (+21 kB) for 217 commits.
+  RAM +296 B, flash +21,920 B (+21 kB) for 208 commits.
 
 | Env | Chip | RAM | Flash |
 |---|---|---|---|
@@ -155,8 +166,99 @@ draws a map and holds a BLE link on it.
 1. `git -C freeink-sdk fetch upstream`, then read what changed under
    `libs/hardware/BoardConfig`, `libs/display` and `docs/`.
 2. Confirm no header was deleted or renamed.
-3. Pin a commit that is on our fork's `main`; fast-forward `main` first if it is not.
+3. **Bring `explorink` to the new base and pin that**, never the mirror commit
+   itself: a pin taken straight from `main` drops every patch of ours (that is the
+   2026-09-08 defect). Fast-forward our `main` to upstream first, then merge the
+   new base into `explorink`. Check the result with
+   `git -C freeink-sdk merge-base --is-ancestor origin/explorink <pin>`.
 4. Build every env, run the host tests, record RAM and flash for one C3 and one S3
    env here.
 5. Say in the commit message what the bump is **for**. A pointer move with no reason
    cannot be reverted with confidence.
+
+## The pin can walk off the fork, and it did twice
+
+Our patches live only on `explorink`. Nothing checks that the commit a firmware
+branch pins is on that branch, so the pin can leave it silently. Both ways
+happened and both were found on 2026-09-08.
+
+**A commit that moves the gitlink without saying so.** `44fe2972` on
+`release/lilygo-t5-s3-pro` (2026-09-07, *"feat(t5s3): the frontlight level is a
+Settings row"*) moved that branch's pin backwards from `55a49587` to
+`e514a868`, the base `explorink` forks from. Its body does not mention the
+submodule at all. That dropped both patches on that branch, including the LoRa
+chip-select fix BUG-037 had confirmed on hardware 2026-09-03. Restored and
+verified on a T5 S3 Pro the next day. The restore is `089d1d42`, merged as
+`1a816ff0`; the build it was confirmed with is the tag
+`good/2026-09-08-t5s3pro-sdk-pin` and the archived binary
+`docs/firmware-builds/2026-09-08-t5s3pro-sdk-pin-089d1d42.bin` in the parent
+repo.
+
+**What that hardware pass does and does not cover.** LilyGo T5 S3 Pro (MAC
+`7c:2c:67:8a:4c:b4`), env `t5s3pro`, flashed over `/dev/ttyACM0`, hash verified.
+The device booted to Home and the map screen drew live tile linework. That is an
+SD **read**: tiles have one source in this firmware
+(`src/activities/map/HalFileSource.cpp:13`, `Storage.open`) and nothing about the map
+survives a reset (`src/activities/map/MapActivity.h:47`), so the frame cannot be
+a stale panel or a cache. It does **not** cover SD **writes**, which is what
+BUG-037 actually failed at (`ERR mkdir failed`), and it does not exercise
+`readFileToStream`, which needs a large WebDAV GET.
+
+**A bump pass that lands on a mirror commit.** The 2026-09-08 SDK pass moved
+`develop` from `e514a868` to `cb9167d5`, 208 commits -- deliberate and measured, for the X4
+Classic board profile (parent `docs/PROGRESS.md`). But `cb9167d5` is on `main`,
+not on `explorink`, so it dropped `55a49587`.
+
+**It dropped one patch, not two, and the difference is the lesson.**
+`merge-base --is-ancestor 94e19f73 cb9167d5` answers NO, which says only that
+the *commit* is not an ancestor. The *change* was there: upstream had merged
+our PR, and `LilyGoT5S3LgfxConfig.cpp` is byte-identical between the two. A
+rebase of `explorink` onto `cb9167d5` says so out loud -- *"dropping 94e19f73
+... patch contents already upstream"*. **An ancestry check answers a question
+about history, not about content**; when it says NO, diff the files the patch
+touched before calling anything lost.
+
+**Two rules follow.**
+
+- **A bump pass brings `explorink` to the new base and pins that**, never the
+  mirror commit. The pass is not done while our patches are only on the old
+  base.
+- **A commit that moves the gitlink says so in its body**, with the old and new
+  SHA and why. A gitlink is one line in a diff and `--stat` counts it as one
+  changed file, so nothing else makes it visible in review.
+
+Screen any pin against the fork before trusting it:
+
+```
+git -C freeink-sdk merge-base --is-ancestor origin/explorink $(git rev-parse HEAD:freeink-sdk)
+```
+
+Exit 0 means the pin contains the fork tip and therefore our patches.
+
+**The obvious version of this check does not work**, and it was written into
+four documents before anyone tried it against a bad pin:
+
+```
+git -C freeink-sdk branch -r --contains <pin>     # WRONG
+```
+
+Merging `cb9167d5` into `explorink` made `cb9167d5` reachable from
+`origin/explorink`, so `--contains` now lists our fork branch for the one pin
+this whole exercise was about -- a pin with no patch of ours in it.
+**Reachability is not containment of a change.** Same mistake as using
+`merge-base --is-ancestor <our commit> <pin>` to decide a patch was lost: that
+answers a question about history, and the content question needs a diff. When
+in doubt, look at the code:
+
+```
+grep -n esp_task_wdt_reset freeink-sdk/libs/hardware/SDCardManager/src/SDCardManager.cpp
+```
+
+**A pin an older branch still uses gets a tag before the fork branch moves.**
+`release/lilygo-t5-s3-pro` pins `55a49587`, which was `explorink`'s tip and on
+no other ref, so a rebase of the fork branch would have left it unreachable and
+a fresh clone's `submodule update` would fail on it. It is kept alive as the tag
+`pin/release-lilygo-t5-s3-pro-2026-09-08`. **In the end the rebase did not
+happen** -- `explorink` merged instead, which keeps `55a49587` as a parent, so
+the tag is insurance rather than the thing that saved it. Take the tag anyway:
+the decision between merge and rebase came after.
