@@ -303,6 +303,25 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // IS a Settings-screen toggle, so the generic toJson/fromJson loop carries
   // it and nothing here has to.
   uint8_t mapAutoSyncTiles = 0;
+  // Take the map's position from a receiver on the device instead of from the
+  // phone, on a board that has one (GnssAccess.h). Off by default, and off is
+  // what every shipping device does today: the X4 and the X4 Pro have no
+  // receiver at all, so on those this field can only ever be 0 and the code
+  // that reads it is not even compiled in.
+  //
+  // In the settings file but **not** in SettingsList, unlike mapAutoSyncTiles
+  // above -- a Settings row would offer every rider a toggle for hardware only
+  // one development board has. It is reached from the host instead
+  // (CMD:SETTING mapGnssPosition 1, main.cpp), which is all step 3 of
+  // ../docs/gnss-to-map-plan.md needs. The day a shipping device carries a
+  // receiver, this gets a row and the row gets a board condition.
+  uint8_t mapGnssPosition = 0;
+  // Write one CSV row per accepted GNSS fix to /trailink/gnss.csv (GnssLog.h).
+  // Off by default and it must stay that way: the file is a **track log**, not
+  // a single point, so on a lost or stolen device it is a record of where the
+  // rider went. Turned on for one measurement, deliberately, and turned off
+  // after. Only exists on a build with a receiver.
+  uint8_t mapGnssLog = 0;
   // Edge markers for pins outside the viewport: a direction arrow and the
   // distance, drawn where the bearing ray leaves the screen
   // (MapActivity::drawPins(), ../docs/pins.md). Pins *inside* the viewport are
@@ -395,6 +414,16 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t uiTheme = LYRA;
   // Sunlight fading compensation
   uint8_t fadingFix = 0;
+  // Frontlight state, persisted so the light comes back the way the rider left
+  // it. Two fields rather than one brightness: turning the light off must not
+  // forget the level it was at, and a level of 0 would.
+  //
+  // Not in SettingsList, for the same reason as mapGnssPosition above -- only
+  // the LilyGo T5 S3 Pro has a frontlight in any env built today, and a
+  // Settings row would offer every rider a control for hardware they do not
+  // have. It is written by the user button's hold (main.cpp) and by CMD:LIGHT.
+  uint8_t frontlightOn = 0;
+  uint8_t frontlightBrightness = 50;
   // Power button return from footnotes (1 = enabled, 0 = disabled)
   uint8_t pwrBtnFootnoteBack = 1;
   // Use book's embedded CSS styles for EPUB rendering (1 = enabled, 0 = disabled)

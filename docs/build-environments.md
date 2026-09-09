@@ -17,6 +17,7 @@ is marked as such.
 | `gh_release_rc` | ESP32-C3 | X4 + X3 | **no** | on, `LOG_LEVEL=1` | release candidate, same gap |
 | `slim` | ESP32-C3 | X4 + X3 | **no** | off | size experiments |
 | `sticky` | ESP32-S3 | Seeed Sticky | **no** | on | a different MCU family, one binary per family |
+| `t5s3pro` | ESP32-S3 | LilyGo T5 S3 Pro | **yes** | on, `LOG_LEVEL=2` | bring-up on the non-Xteink validation board. Adds `CMD:LIGHT` and `CMD:GNSS`, neither of which is in any other env. See [`lilygo-t5s3-bringup.md`](lilygo-t5s3-bringup.md) and [`gnss.md`](gnss.md) |
 
 `TRAILINK_VERSION` is set explicitly in every env except `default`, where
 `scripts/git_branch.py` derives it from the branch and short SHA.
@@ -104,8 +105,13 @@ data) or `mapDebugInfo` (paints the rider's exact position on the panel), and
 the flip survives a reboot with nothing on screen to say who made it.
 
 It now has its own flag, `ENABLE_SETTING_CMD=1`, declared in `default`,
-`sticky` and `simulator` and in no release env. Same shape as
-`ENABLE_FRONTLIGHT_CMD` / `ENABLE_GNSS_CMD` on the T5 S3 Pro bring-up branch.
+`sticky`, `simulator` and `t5s3pro`, and in no release env. Same shape as
+`ENABLE_FRONTLIGHT_CMD` / `ENABLE_GNSS_CMD` here.
+
+`t5s3pro` exists only on this branch, so `develop` could not declare the flag
+in it. Merging `develop` here silently drops `CMD:SETTING` off the bench board
+until it is re-declared -- it happened on 2026-09-02 and the strings check below
+is what caught it. Check `t5s3pro` after every merge down from `develop`.
 
 **The gate is checkable without a device**, and the check can fail, which is
 why it is worth running. Build both, then look for the reply strings:
@@ -203,6 +209,20 @@ cat .pio/libdeps/t5s3pro/NimBLE-Arduino/.piopm
 Reading the ini instead put a wrong version into a bug report before it was
 caught (`ble-deinit-crash.md`). The same applies to anything else pinned with
 `^` or `~`.
+
+## A fresh worktree cannot build `env:default` offline
+
+`lib_deps` pulls JPEGDEC from a git URL, so the first build in a new worktree
+needs network and fails behind a sandbox with
+`could not read Username for 'https://github.com'`. Copying
+`.pio/libdeps/default/JPEGDEC` from another checkout gets past that and then hits
+a second wall: `lib/hal/HalPowerManager.cpp` includes `<esp_bt.h>`, which the
+isolated core rebuild only ships when something enables the BT controller.
+
+So a board-specific change (say T5S3-only) cannot be regression-built against
+`env:default` in a new worktree without setting that up first. Say that, rather
+than reporting the env as broken by the change -- on 2026-09-02 a session nearly
+did.
 
 ## Flashing: three images, three offsets
 

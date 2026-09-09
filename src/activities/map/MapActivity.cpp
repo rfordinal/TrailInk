@@ -18,9 +18,14 @@
 // APP_STATE.showBootScreen: the quick-resume-sleep decision, read in onExit().
 #include "CrossPointState.h"
 #include "GfxRendererCanvas.h"
+// The on-device receiver, on a build that has one. Inert everywhere else: the
+// header is entirely behind ENABLE_GNSS_CMD (GnssAccess.h).
+#include "GnssAccess.h"
+#include "GnssLog.h"
 #include "HeldTilesStore.h"
 #include "HikeIcons.h"
 #include "MapFollow.h"
+#include "MapGnssHeading.h"
 #include "MapHatch.h"
 // missingTileAnchorFromLastFix(), for `fake` -- it seeds around the same origin
 // the sync screen's fetch order uses, so the seeded tiles land where that
@@ -289,6 +294,20 @@ constexpr int kHeaderBtToBarsGap = 4;
 constexpr int kHeaderTransferIconSize = kHeaderIconHeight;
 constexpr int kHeaderTransferIconToBtGap = 6;
 constexpr int kHeaderGroupGap = 10;  // BLE group to battery block, and logo to bars
+
+#ifdef ENABLE_GNSS_CMD
+// The on-device receiver's state, three Lucide glyphs from one family:
+// locate-off when it is not running, locate while it is looking, locate-fixed
+// once it has a solution (map_header_icons.h). Only on a build that has a
+// receiver -- on the X4 and the X4 Pro there is nothing to report and the slot
+// must not eat a place name's width to say so.
+//
+// Always drawn, unlike the transfer icon next to it: "off" is one of the three
+// states, not the absence of the icon. A rider who cannot tell "no receiver
+// running" from "no icon yet" learns nothing from the row.
+constexpr int kHeaderGnssIconSize = kHeaderIconHeight;
+constexpr int kHeaderGnssIconToBtGap = 6;
+#endif
 
 // The clock sits leftmost in the status row, between the place name and the
 // transfer icon slot. Its width is measured from "00:00" at draw time, not
@@ -1473,7 +1492,14 @@ void MapActivity::updateHeaderStatus() {
   // the row was drawn only by a full frame, so closing the phone's GPS app left
   // the bars on the panel until something else forced a redraw. Reported from a
   // real session, 2026-08-07.
-  const bool structural = transferIconVisible != transferIconShown_ || connected != drawnLinkConnected_;
+  bool structural = transferIconVisible != transferIconShown_ || connected != drawnLinkConnected_;
+#ifdef ENABLE_GNSS_CMD
+  // Structural, not rate-capped: the receiver moves between three states a
+  // handful of times a ride (start, first fix, sky lost), so there is nothing
+  // to cap -- and each of those is exactly the moment the rider wants told.
+  // Unlike the bar count next to it, which flips on an RSSI threshold.
+  structural = structural || gnssHeaderState() != drawnGnssState_;
+#endif
   // A bar count moving while the link holds is the same story told slightly
   // differently, and RSSI sitting on a threshold flips it back and forth.
   // Every flip is a real waveform pass, so it is rate-capped.
@@ -1644,7 +1670,16 @@ void MapActivity::headerStatusRect(int& x, int& y, int& w, int& h) const {
   const int barsRight = batteryX - worstCasePercentWidth - BaseTheme::batteryPercentSpacing - kHeaderGroupGap;
   const int barsLeft = barsRight - kHeaderBleBarsWidth;
   const int logoLeft = barsLeft - kHeaderBtToBarsGap - kHeaderBtLogoWidth;
+#ifdef ENABLE_GNSS_CMD
+  // One more link in the right-to-left chain, between the Bluetooth logo and
+  // the transfer icon. Everything left of it (the transfer icon, the clock, and
+  // the place name that truncates against the clock) shifts left by itself,
+  // which is why this is a link and not a hardcoded x.
+  const int gnssIconLeft = logoLeft - kHeaderGnssIconToBtGap - kHeaderGnssIconSize;
+  const int transferIconLeft = gnssIconLeft - kHeaderTransferIconToBtGap - kHeaderTransferIconSize;
+#else
   const int transferIconLeft = logoLeft - kHeaderTransferIconToBtGap - kHeaderTransferIconSize;
+#endif
   const int clockLeft = transferIconLeft - kHeaderClockToTransferIconGap - headerClockSlotWidth(renderer);
   // Battery's real icon top is kHeaderMarginTop + 11, not +5: drawHeader()
   // hands drawBatteryRight() rect.y+5 (BaseTheme.cpp:374), and
@@ -1916,7 +1951,16 @@ void MapActivity::drawHeaderStatusStrip() {
   const int barsRight = batteryX - worstCasePercentWidth - BaseTheme::batteryPercentSpacing - kHeaderGroupGap;
   const int barsLeft = barsRight - kHeaderBleBarsWidth;
   const int logoLeft = barsLeft - kHeaderBtToBarsGap - kHeaderBtLogoWidth;
+#ifdef ENABLE_GNSS_CMD
+  // One more link in the right-to-left chain, between the Bluetooth logo and
+  // the transfer icon. Everything left of it (the transfer icon, the clock, and
+  // the place name that truncates against the clock) shifts left by itself,
+  // which is why this is a link and not a hardcoded x.
+  const int gnssIconLeft = logoLeft - kHeaderGnssIconToBtGap - kHeaderGnssIconSize;
+  const int transferIconLeft = gnssIconLeft - kHeaderTransferIconToBtGap - kHeaderTransferIconSize;
+#else
   const int transferIconLeft = logoLeft - kHeaderTransferIconToBtGap - kHeaderTransferIconSize;
+#endif
   const int batteryIconTop = kHeaderMarginTop + 5 + 6;
   const int iconBottom = batteryIconTop + BaseMetrics::values.batteryHeight;
   const int iconTop = iconBottom - kHeaderIconHeight;
@@ -1983,6 +2027,19 @@ void MapActivity::drawHeaderStatusStrip() {
                           true);
   }
   transferIconShown_ = autoSyncPending_ > 0;
+
+#ifdef ENABLE_GNSS_CMD
+  // The receiver's state, always drawn -- "off" is a state and not the absence
+  // of an icon. drawMono1bpp() for the same reason as the transfer icon above.
+  {
+    const GnssHeaderState state = gnssHeaderState();
+    const freeink::Icon& glyph = state == GnssHeaderState::Fixed     ? icon_gnssFixed
+                                 : state == GnssHeaderState::Seeking ? icon_gnssSearching
+                                                                     : icon_gnssOff;
+    renderer.drawMono1bpp(glyph.bits, gnssIconLeft, iconTop, glyph.w, glyph.h, true);
+    drawnGnssState_ = state;
+  }
+#endif
 
   // Logo: a small hand-drawn Bluetooth rune -- a vertical spine (the actual
   // Bluetooth glyph's ascender/descender) plus two chevron wings crossing it,
@@ -2200,6 +2257,38 @@ void MapActivity::onEnter() {
   // After begin(), so the characteristics exist before anything can be
   // written to them.
   transfer_.attach();
+
+#ifdef ENABLE_GNSS_CMD
+  // The receiver comes up with the map and goes down with it, when the rider
+  // asked for it. Deliberately not at boot: the rail it sits on also powers the
+  // LoRa radio (main.cpp's gnssPowerEnable()), so it is not something to leave
+  // on behind a screen that is not using a position.
+  //
+  // The price is that leaving the map and coming back drops the rail and pays
+  // acquisition again -- tens of seconds from cold, not the sub-second figure
+  // Gnss::timeToFirstFixMs() reports for a receiver that was already tracking.
+  // Whether that is the right trade is the duty-cycle question in step 5 of
+  // docs/gnss-to-map-plan.md, and it needs step 2b's numbers before anyone
+  // decides it. Until then: no silent power drain is the safer default of the
+  // two.
+  gnssStartedHere_ = false;
+  haveGnssFixMs_ = false;
+  if (SETTINGS.mapGnssPosition != 0) {
+    if (gnss.running()) {
+      // Somebody else's session -- CMD:GNSS ON from the host. Read it, but do
+      // not adopt it: onExit() must leave it exactly as it found it.
+      LOG_INF(kLogTag, "gnss: already running, not started here");
+    } else if (gnssStart()) {
+      gnssStartedHere_ = true;
+      LOG_INF(kLogTag, "gnss: started, rx ring %lu bytes", static_cast<unsigned long>(gnss.rxBufferSize()));
+    } else {
+      // Same class of failure as bleStartFailed_ above, and the same
+      // consequence: the waiting banner stays up with no explanation of why.
+      // Logged rather than drawn, because this build is a bring-up build.
+      LOG_ERR(kLogTag, "gnss: start failed, power rail or expander unavailable");
+    }
+  }
+#endif
   hasReceivedAny_ = false;
   lastDrawnSeq_ = 0;
   redrawDueMs_ = 0;
@@ -2497,6 +2586,18 @@ void MapActivity::onExit() {
   transfer_.detach();
   freeink::BlePositionServer::getInstance().end();
 
+#ifdef ENABLE_GNSS_CMD
+  // Only what this activity started. A CMD:GNSS ON session from the host runs
+  // on past the map, which is what a bring-up expects.
+  // Whatever is buffered belongs to the ride that just ended.
+  GnssLog::flush();
+  if (gnssStartedHere_) {
+    gnss.end();
+    gnssStartedHere_ = false;
+    LOG_INF(kLogTag, "gnss: stopped");
+  }
+#endif
+
   // Release order is the reverse of onEnter(): the source holds a reference
   // to the file source, so it goes first. HalFileSource's destructor closes
   // the member HalFile -- DESTRUCTOR_CLOSES_FILE only covers locals.
@@ -2693,6 +2794,17 @@ void MapActivity::loop() {
       armSave();
     }
   }
+
+#ifdef ENABLE_GNSS_CMD
+  // The third position source, after the BLE packet above and the console
+  // below. Deliberately after the BLE read rather than before it: with both
+  // sources live the later one wins the iteration, and choosing between them
+  // properly is step 5 of docs/gnss-to-map-plan.md, which needs the receiver's
+  // power numbers and a device-side heading first. This order is the smallest
+  // thing that is not that decision -- and the case step 3 is built for has no
+  // phone connected at all.
+  pollGnssFix();
+#endif
 
   // The command console, over both channels. Same parser, same state, same
   // replies -- only the transport differs (MapCommandConsole.h). poll()
@@ -2984,6 +3096,27 @@ void MapActivity::handleButtons() {
     } else {
       openMapMenu();
     }
+  }
+
+  // The same menu, by finger. A board can ship without a CONFIRM button at all
+  // -- the LilyGo T5 S3 Pro assigns none of the six logical buttons, only
+  // power on BOOT (`docs/lilygo-t5s3-bringup.md`) -- and CONFIRM is the only
+  // way to the zoom ladder, because Zoom in and Zoom out live in this menu
+  // (`docs/map-menu.md`). Without this a rider on such a board can enter the
+  // map, see it and leave it (Back is a left-edge swipe, Home a bottom-edge
+  // one, both synthesized below this activity) and change nothing about the
+  // view.
+  //
+  // wasMenuGesture() is a downward swipe from the top edge and already existed
+  // for the reader (`MappedInputManager.cpp:283`, `ReaderUtils.h:110`); this is
+  // its second consumer, not a new input model. It cannot collide with the two
+  // gestures that already work here: Back starts inside the left 25% and runs
+  // horizontally, Home starts in the bottom 14% and runs up.
+  //
+  // Guarded on hasTouch() so a button-only device cannot reach it at all.
+  if (mappedInput.hasTouch() && mappedInput.wasMenuGesture()) {
+    LOG_DBG(kLogTag, "menu gesture: opening map menu");
+    openMapMenu();
   }
 }
 
@@ -5289,6 +5422,97 @@ void MapActivity::moveMarker(int16_t sx, int16_t sy, uint8_t headingStep) {
           (unsigned)headingStep, (unsigned)MapFollow::relativeHeadingStep(headingStep, anchorHeading_),
           (unsigned)partialMoves_, (unsigned)partialMoveBudget());
 }
+
+#ifdef ENABLE_GNSS_CMD
+// GNSS as a third applyFix() caller, and that is the whole integration. Position
+// is already transport-agnostic from the moment it enters applyFix(): the follow
+// decision, the persisted-fix banner, the marker move and the save are all on
+// the far side of it, so a new source adds a reader and nothing else. No
+// interface, no base class -- there is one function and now three callers of it.
+//
+// main.cpp's loop() is what drains the UART (gnss.poll(), every iteration). This
+// only ever reads the parsed result, so it is cheap enough to call every loop
+// and it cannot lose a sentence by being late.
+// The map's side of the heading decision: hand the fix's speed and course to
+// MapGnssHeading, which owns the arithmetic and the thresholds, and keep the
+// state it carries between fixes. Split out for the same reason MapFollow is --
+// it is testable on the host and a second client has to reproduce it.
+uint8_t MapActivity::gnssHeadingStep(const GnssFix& fix) {
+  return MapGnssHeading::stepFor(fix.speedKmh, fix.courseDegrees, gnssHeadingState_);
+}
+
+// What the header row says about the receiver, in three states the rider can
+// tell apart at 14 px: not running, running with no solution, running with one.
+//
+// Deliberately NOT derived from whether a fix has ever been seen. GnssFix::valid
+// latches true on the first solution and stays true (Gnss.h), so a receiver that
+// has lost the sky would keep claiming a fix -- which is the one lie a "where am
+// I" device must not tell. quality is what says the solution is current, and 6
+// (dead reckoning, no satellites) is excluded here for the same reason
+// pollGnssFix() refuses to draw a position from it.
+MapActivity::GnssHeaderState MapActivity::gnssHeaderState() const {
+  if (SETTINGS.mapGnssPosition == 0 || !gnss.running()) return GnssHeaderState::Off;
+  const GnssFix& fix = gnss.fix();
+  if (!fix.valid || fix.quality == 0 || fix.quality == 6) return GnssHeaderState::Seeking;
+  return GnssHeaderState::Fixed;
+}
+
+void MapActivity::pollGnssFix() {
+  if (SETTINGS.mapGnssPosition == 0) return;
+  if (!gnss.running()) return;
+
+  const GnssFix& fix = gnss.fix();
+  // valid latches true on the first solution and stays true, so it says "has
+  // ever had a fix" and not "has one now" (Gnss.h). quality is what says the
+  // receiver still has satellites: 0 is no fix, and 6 is dead reckoning with
+  // nothing behind it, which must not move a map that claims to show where the
+  // rider is. Nothing has seen this receiver emit 6.
+  if (!fix.valid) return;
+  if (fix.quality == 0 || fix.quality == 6) return;
+
+  // Which sample this is. The driver's "something changed" answer is poll()'s
+  // return value and main.cpp already consumed it, so the change instant stands
+  // in for a sequence number: it is constant between changes and moves on every
+  // one of them.
+  const uint32_t changedMs = millis() - gnss.fixAgeMs();
+  if (haveGnssFixMs_ && changedMs == lastGnssFixMs_) return;
+  lastGnssFixMs_ = changedMs;
+  haveGnssFixMs_ = true;
+
+  // Decimal degrees as double into 1e-7 degrees as int32. The widest value this
+  // has to carry is a longitude of 180, which is 1.8e9 and inside int32's
+  // 2.147e9 -- so the cast cannot overflow for any position on Earth.
+  const int32_t latE7 = static_cast<int32_t>(llround(fix.latitude * 1e7));
+  const int32_t lonE7 = static_cast<int32_t>(llround(fix.longitude * 1e7));
+
+  // Heading comes from the receiver's course through gnssHeadingStep(), which
+  // holds the last one while the rider is too slow for a course to mean
+  // anything. It was hardcoded to 0 until 2026-09-01, and the ride that found
+  // that is worth keeping: the marker followed the rider correctly and its
+  // arrow pointed north the whole way, because a wrong heading and a missing
+  // one look identical on the panel.
+  const uint8_t headingStep = gnssHeadingStep(fix);
+
+  hasReceivedAny_ = true;
+  showingPersistedFix_ = false;
+  gnssSeq_++;
+  // course and moving are logged next to the step they produced: a heading that
+  // looks wrong on the panel is answered by this line and not by a rebuild.
+  LOG_DBG(kLogTag, "gnss fix: seq %u, quality %u, sats %u, hdop %.1f, speed %.1f km/h, course %.1f, moving %d, heading %u, age %lu ms",
+          static_cast<unsigned>(gnssSeq_), static_cast<unsigned>(fix.quality), static_cast<unsigned>(fix.satsUsed),
+          static_cast<double>(fix.hdop), static_cast<double>(fix.speedKmh), static_cast<double>(fix.courseDegrees),
+          gnssHeadingState_.moving ? 1 : 0, static_cast<unsigned>(headingStep), static_cast<unsigned long>(gnss.fixAgeMs()));
+  // Before applyFix(), not after: applyFix() can spend seconds rendering, and a
+  // row is worth having even if the frame that fix would have drawn never
+  // finishes.
+  GnssLog::record(fix, gnssHeadingState_.moving, headingStep);
+  applyFix(latE7, lonE7, headingStep, gnssSeq_);
+  // Same debounced save the BLE fix arms, for the same reason: the card must
+  // not be written once per fix, and the map still has to have somewhere to
+  // open next time.
+  armSave();
+}
+#endif
 
 void MapActivity::applyFix(int32_t latE7, int32_t lonE7, uint8_t headingStep, uint8_t seq) {
   updateManualHeadingCapture(headingStep);

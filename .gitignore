@@ -38,3 +38,5 @@ sdkconfig.*
 # ctest scratch, written when ctest runs from the repo root instead of build/test
 Testing/
 qa-artifacts
+
+/sdkconfig.t5s3pro
