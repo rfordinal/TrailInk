@@ -18,7 +18,7 @@ the span, and whether the patches on `origin/explorink` are in the new pin.
 
 | Commit | Date | From → to | Span | Verified by |
 |---|---|---|---|---|
-| `60612aab` | 2026-09-08 | `cb9167d5` → `955b2530` | +1, our watchdog patch | **Nothing on hardware.** Merged by maintainer exemption 2026-09-09; `default` and `sticky` build. No C3 on the desk since 2026-08-22, and `develop` has no env for the boards that are. |
+| `60612aab` | 2026-09-08 | `cb9167d5` → `955b2530` | +1, our watchdog patch | Merged 2026-09-09 by maintainer exemption with `default` and `sticky` building only. **Exemption retired the same day**: the X3 arrived and took the first flash of our firmware on a C3, `develop` 92c949ae, env `default` -- it boots, names itself X3 off the fingerprint probe, mounts the SD card and drew Bratislava with 4609 ways (parent `docs/PROGRESS.md`, 2026-09-09, and `docs/devices/xteink-x3.md`). **Still not covered on a C3**: `readFileToStream`, the fix this pin exists for. That pass moved tiles over BLE at ~6 kB/s, not a large WebDAV GET, so the S3 remains the only board the watchdog fix has been exercised on. |
 | `e06fca1b` | 2026-09-08 | `e514a868` → `cb9167d5` | +208 (the commit body says 217; corrected 2026-09-09) | Laptop only, and the entry said so: all six envs build, host tests 437/437, RAM +296 B / flash +21 kB on the S3 env. Deliberate, for the X4 Classic board profile. |
 
 ## `release/lilygo-t5-s3-pro`
