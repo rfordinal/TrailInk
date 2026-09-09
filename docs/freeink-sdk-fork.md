@@ -201,8 +201,25 @@ SD **read**: tiles have one source in this firmware
 (`src/activities/map/HalFileSource.cpp:13`, `Storage.open`) and nothing about the map
 survives a reset (`src/activities/map/MapActivity.h:47`), so the frame cannot be
 a stale panel or a cache. It does **not** cover SD **writes**, which is what
-BUG-037 actually failed at (`ERR mkdir failed`), and it does not exercise
-`readFileToStream`, which needs a large WebDAV GET.
+BUG-037 actually failed at (`ERR mkdir failed`).
+
+**`readFileToStream` was then exercised, 2026-09-09, and it holds.** The device
+on WiFi at `10.100.11.222`, `GET /trailink/base/13/4485/2842.tib` over WebDAV --
+**the same 733 kB file that triggered the watchdog on 2026-09-06**, which is what
+`55a49587` was written for:
+
+| | |
+|---|---|
+| HTTP | 200, 732,765 bytes, matching the `PROPFIND` length exactly |
+| Wall time | 9.6 s and 9.8 s over two runs, ~76 kB/s |
+| Two GETs | bit-identical (`cmp`), so the read repeats and does not corrupt |
+| Content | starts `TIB1`, 613,442 non-zero bytes of 732,765 |
+| `uptime` from `/api/status` | 142 s before, 165 s after the first, 215 s after the second -- **continuous** |
+| `freeHeap` | 123,032 B before, 123,016 B after |
+
+A task-watchdog reset would have zeroed `uptime`, so the continuity is the
+evidence, not the absence of an error message. The earlier failure sat in the
+task for 16 s; these runs blocked for a fraction of that and never tripped it.
 
 **A bump pass that lands on a mirror commit.** The 2026-09-08 SDK pass moved
 `develop` from `e514a868` to `cb9167d5`, 208 commits -- deliberate and measured, for the X4
