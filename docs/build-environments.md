@@ -318,3 +318,32 @@ environments are needed at once -- a device binary and a simulator run against
 the same commit, say -- give each its own worktree.
 
 Measured 2026-09-07, `settings-facade` on `develop`, `default` and `simulator`.
+
+## No CI has ever run on this repo
+
+**Measured 2026-09-09.** Five workflows are registered and `active` --
+`ci.yml`, `pr-formatting-check.yml`, `release.yml`, `release_candidate.yml`,
+`release-fonts.yml` -- and
+`gh api 'repos/rfordinal/explorink/actions/runs'` returns `total_count: 0`.
+Not one run, ever.
+
+`gh api repos/rfordinal/explorink/actions/permissions` answers
+`{"enabled": true, "allowed_actions": "all"}`, which is why this went
+unnoticed. That flag is not the gate. **This repo is a fork** of
+`crosspoint-reader/crosspoint-reader` (`gh api repos/rfordinal/explorink`,
+`"fork": true`), and GitHub disables Actions on a fork until somebody clicks
+enable in the Actions tab once. The API does not report that state.
+
+Three consequences:
+
+- **Nothing checks a build or the formatting.** The green-CI assurance the
+  `pr-formatting-check` workflow implies does not exist, which is one reason 35
+  files had drifted out of clang-format by 2026-09-09.
+- **`release.yml` does not fire on a tag** despite `on: push: tags: '*'`. Two
+  tags pushed 2026-09-08 produced no run. The two releases that exist were made
+  by hand.
+- **A local check is the only check.** `pio run -e <env>`, the host tests and
+  `./bin/clang-format-fix -g` are it.
+
+Enabling it is T-294 in the parent repo, and it is a decision rather than a
+chore: five workflows that have never executed will all fire at once.

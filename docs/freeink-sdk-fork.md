@@ -222,10 +222,13 @@ repo.
 **What that hardware pass does and does not cover.** LilyGo T5 S3 Pro (MAC
 `7c:2c:67:8a:4c:b4`), env `t5s3pro`, flashed over `/dev/ttyACM0`, hash verified.
 The device booted to Home and the map screen drew live tile linework. That is an
-SD **read**: tiles have one source in this firmware
-(`src/activities/map/HalFileSource.cpp:13`, `Storage.open`) and nothing about the map
-survives a reset (`src/activities/map/MapActivity.h:47`), so the frame cannot be
-a stale panel or a cache. It does **not** cover SD **writes**, which is what
+SD **read** -- measured, in that the frame appeared. That tiles have only one
+source is **read, not measured**: `src/activities/map/HalFileSource.cpp:13`
+opens them with `Storage.open`, and `src/activities/map/MapActivity.h:47` states
+nothing about the map is held between resets. Both are this fork's own code and
+comment, and nobody has grepped for a second tile source. Strong enough to rule
+out a stale panel, since the frame came back through `CMD:SCREENSHOT` from the
+framebuffer; not strong enough to be called a measurement. It does **not** cover SD **writes**, which is what
 BUG-037 actually failed at (`ERR mkdir failed`).
 
 **`readFileToStream` was then exercised, 2026-09-09, and it holds.** The device

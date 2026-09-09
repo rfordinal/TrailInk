@@ -214,7 +214,14 @@ clang-format hook had been running for no one and why 35 files had drifted out
 of format unnoticed.
 
 **Why the wait.** `core.hooksPath` is one setting for the whole repo, but a
-relative path resolves **per working tree** — so every worktree runs the hook
+relative path resolves **per working tree** -- measured 2026-09-09 with a
+discriminating instrument, because `git rev-parse --git-path hooks` only echoes
+the configured relative value and proves nothing. The two versions of
+`pre-commit` print different lines, so a commit in a detached worktree at
+`207e5a94` run with `git -c core.hooksPath=.githooks` said `Running clang-format
+fix before commit...`, the pre-fix wording, and left **35 files modified in that
+working tree** on a commit that touched only `README.md`. The rest of this
+paragraph follows from that — so every worktree runs the hook
 from *its own branch*, not from `develop`. When this was switched on for a few
 minutes on 2026-09-09, 21 of 23 worktrees still carried the pre-fix
 `pre-commit`, the one that reformats all 544 tracked C/C++ files instead of the
@@ -237,14 +244,25 @@ done
 
 Until then, run the pin check by hand — it is the same script the hook calls.
 
-**CI cannot cover this, and it is worth knowing why.** `.github/workflows/ci.yml`
-triggers on `push: branches: [master]` and on pull requests. This repo's trunk is
-`develop` and merges happen locally without PRs, so **CI never runs on our
-pushes at all**. The hook plus the log is the mechanism; there is no server-side
-net behind it.
+**CI cannot cover this, and the reason is bigger than the triggers.**
+`.github/workflows/ci.yml` does trigger only on `push: branches: [master]` and
+pull requests, and this repo's trunk is `develop` -- but even a PR would run
+nothing. `rfordinal/explorink` is a **fork** of
+`crosspoint-reader/crosspoint-reader`, and GitHub gates Actions on forks behind
+a manual one-time enable that the API does not report: measured 2026-09-09,
+`actions/permissions` says `{"enabled": true}`, five workflows are registered
+`active`, and `actions/runs` returns `total_count: 0` -- **no workflow has ever
+run in this repo.** So `release.yml`, wired to `on: push: tags`, did not fire
+for either tag pushed on 2026-09-08 either; the two releases that exist were
+made by hand. Tracked as T-294 in the parent repo. The hook plus the log is the
+mechanism; there is no server-side net behind it.
 
-Cost of the two syncs pending as this was written: `release/lilygo-t5-s3-pro` is
-53 commits behind `develop` and 212 ahead, and its pin differs;
+**Cost of the pending sync, measured 2026-09-09 with `merge-tree`:**
+`release/lilygo-t5-s3-pro` is 63 commits behind `develop` and 212 ahead, its pin
+differs, and the merge conflicts in **nine** files. It was eight earlier the
+same day; two of the nine are documentation this session wrote onto `develop`
+alone (`docs/freeink-sdk-fork.md` among them), which is the deferred cost of the
+no-cherry-pick rule working as intended rather than a new problem.
 `release/xteink-x4-pro` is 6 behind, 1 ahead, same pin.
 
 ## No cherry-pick between our own branches
@@ -277,9 +295,11 @@ Measured on 2026-09-09, on this repo:
   branches with an **identical commit subject**, a different SHA and 134 lines
   of divergence. Git cannot see those as the same patch, so the next sync hits
   it as an add/add conflict.
-- **Seven conflicts** in the pending `develop` -> release sync, five of them
-  produced by the cherry-picking itself, and every one of them resolved twice --
-  once on each branch.
+- **Eight conflicts** in the pending sync, five of them produced by the
+  cherry-picking itself, and every one of them resolved twice -- once on each
+  branch. Recounted 2026-09-09 from the recorded `merge-tree` output, which
+  lists eight files; this document said seven all day because nobody counted the
+  lines twice.
 
 So: carry a change by merging, which means **the target branch has to be kept
 current** rather than left to drift. A sync that drags 54 commits is a sync that
