@@ -70,18 +70,28 @@ was done, not how it is done.
 ## Existing branches
 
 - `release/lilygo-t5-s3-pro` — created 2026-08-31 from `develop`.
+- `release/xteink-x3` — created 2026-09-09 from `develop`, for the panel-layout
+  work the first flash uncovered. See "The X3 needed no branch for its binary"
+  below.
 - `release/xteink-x4-pro` — created 2026-09-09 from `develop`, carrying
   `[env:x4pro]`. Nothing has run on the board yet;
   [`xteink-x4-pro-bringup.md`](xteink-x4-pro-bringup.md) says what the first
   session has to settle.
 
-**The X3 needs no branch and no env.** It is an ESP32-C3 and `[env:default]`
-already builds one binary for the X4 and the X3 together
-(`platformio.ini`, `FREEINK_DEVICE_X4` and `FREEINK_DEVICE_X3` side by side);
-the framebuffer is sized to the largest selected panel (`BoardConfig.h`,
-`MAX_FRAMEBUFFER_BYTES`). A device gets its own branch when its bring-up would
-leave a board unreliably booting, and a device that already has a working
-binary is not that.
+**The X3 needed no branch for its binary, and got one anyway for its panel.**
+It is an ESP32-C3 and `[env:default]` already builds one binary for the X4 and
+the X3 together (`platformio.ini`, `FREEINK_DEVICE_X4` and `FREEINK_DEVICE_X3`
+side by side); the framebuffer is sized to the largest selected panel
+(`BoardConfig.h`, `MAX_FRAMEBUFFER_BYTES`). That is still why the X3 never
+needed a bring-up branch: it boots.
+
+`release/xteink-x3` exists anyway, created 2026-09-09 from `develop` 92c949ae on
+the maintainer's call, once the X3's first flash showed the binary is the easy
+half. Three layout defects are specific to its 528x792 panel and invisible on a
+480x800 X4 (T-295, T-296 in the parent repo), and work on those is exactly the
+hardware-conditional kind this model keeps off `develop`. So the rule stands as
+written -- a device gets a branch when its work would disturb other devices --
+and the X3 qualifies on layout, not on boot.
 
 ## Fork from `origin/release/<device>`, never from the local ref
 

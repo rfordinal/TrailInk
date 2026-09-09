@@ -142,6 +142,13 @@ altogether -- the fork's JSON socket (`docs/simulator.md`).
   out of power saving on the press. The `power` press was a 0 ms tap, so
   nothing about the long hold that the table above rules out has been measured
   (T-286 in the parent repo).
-- **Not run on a C3** (X4, X4 Pro). The injection point is board-agnostic
-  `src/` code and the `default` build is clean, but no C3 has been flashed with
-  it.
+- **Run on a C3 on 2026-09-09, on an Xteink X3.** Env `default`, build
+  `92c949ae`: `CMD:BUTTON back`, `up` and `down` each answered `BUTTON_OK`, and
+  on the map screen `up` zoomed one rung, the scale bar going 500 m to 200 m. So
+  the injector is confirmed on both chip families and the board-agnostic claim
+  above is no longer an inference.
+- **Still not run on an X4 or an X4 Pro.**
+- **The device has to be awake first.** At 10 MHz it does not read the line at
+  all, so a press sent to an idle device is silently dropped -- the same trap
+  that swallows `CMD:GOTO_MAP` (`power-management.md`, "And starves RX
+  outright"). It cost six minutes on the X3 run above.

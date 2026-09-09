@@ -1665,6 +1665,23 @@ never arrives.
 With the 80 MHz floor this only applies where the floor does not: screens with
 the BLE controller down, Home among them.
 
+**Reproduced on an Xteink X3, 2026-09-09**, so this is not an X4 quirk. Same
+shape as the 2026-08-16 run: after the device sat idle on Home,
+`CMD:GOTO_MAP`, `CMD:BUTTON` and `CMD:SCREENSHOT` all went unanswered for six
+minutes while the 10 s `[MEM]` heartbeat kept printing and the reported free
+heap stayed identical to the byte. **That combination reads like a hung main
+loop and is not one** -- it is a live device that cannot hear you, and the
+session spent those six minutes deciding whether the firmware had crashed. A
+button press on the device, then the same commands, worked immediately.
+
+**Do not read a low-power log line as the board's floor.** The same X3 printed
+`Going to low-power mode (80 MHz)` on the map screen, which is `BLE_SAFE_FREQ`
+because the BT controller was up (`lowPowerFloorMhz()`,
+`lib/hal/HalPowerManager.cpp`), not a per-board tier. The X3 has no PSRAM, so
+with the radio down its floor is `LOW_POWER_FREQ` = 10 MHz -- and 10 MHz is the
+state that starves RX. A session that reads 80 MHz off the map screen and
+concludes the board never throttles below it has the mechanism backwards.
+
 
 ### The RX side after idle: observed, not explained
 
