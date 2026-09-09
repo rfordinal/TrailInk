@@ -26,6 +26,32 @@ Pos posTrustFor(uint16_t accuracyM, State& state) {
   return state.pos;
 }
 
+Pos posTrustForHdop(float hdop, uint8_t satsUsed, State& state) {
+  // `!(hdop > 0)` rather than `hdop <= 0`, so a NaN lands here too instead of
+  // falling through every comparison below and leaving the latch untouched by
+  // accident rather than on purpose.
+  if (!(hdop > 0.0f)) {
+    return Pos::Unstated;
+  }
+  if (satsUsed < kMinSatsForTrust) {
+    // Latches, unlike Unstated: a 2D fix is a stated bad fix, not a missing
+    // figure.
+    state.pos = Pos::Loose;
+    return state.pos;
+  }
+  if (hdop >= kLooseAtOrAboveHdop) {
+    state.pos = Pos::Loose;
+  } else if (hdop <= kTrustedAtOrBelowHdop) {
+    state.pos = Pos::Trusted;
+  } else if (state.pos == Pos::Unstated) {
+    // Same call as the metre side makes, for the same reason: the first stated
+    // fix inside the dead band has no previous side to keep, and starting Loose
+    // would make the alarm the default.
+    state.pos = Pos::Trusted;
+  }
+  return state.pos;
+}
+
 Dir dirTrustFromWireCode(uint8_t code) {
   switch (code & 0x03) {
     case 1:

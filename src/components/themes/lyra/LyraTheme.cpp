@@ -366,6 +366,7 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   if (btn3FontId == 0) btn3FontId = fontId;
   if (btn4FontId == 0) btn4FontId = fontId;
   if (!TouchPolicy::hintsVisible()) {
+    drawTouchLockIndicator(renderer);
     return;
   }
   rememberFrontLabels(btn1, btn2, btn3, btn4);
@@ -404,6 +405,15 @@ void LyraTheme::drawButtonHints(GfxRenderer& renderer, const char* btn1, const c
   }
 
   renderer.setOrientation(orig_orientation);
+}
+
+void LyraTheme::drawTouchLockBox(GfxRenderer& renderer, const Rect box) const {
+  // The same pairing and the same corner flags this theme's own hint boxes use
+  // (drawButtonHints above): rounded at the top, square where they meet the
+  // bottom edge. A square box here read as a different kind of thing next to
+  // them, which is what the padlock must NOT be -- it stands in their place.
+  renderer.fillRoundedRect(box.x, box.y, box.width, box.height, cornerRadius, Color::White);
+  renderer.drawRoundedRect(box.x, box.y, box.width, box.height, 1, cornerRadius, true, true, false, false, true);
 }
 
 bool LyraTheme::frontHintBox(const int index, const int portraitWidth, const int portraitHeight, Rect& out) const {

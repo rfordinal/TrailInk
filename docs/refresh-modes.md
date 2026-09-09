@@ -188,6 +188,16 @@ The consequence for the rider is in [`map-follow.md`](map-follow.md), "A
 windowed refresh blocks the loop": at this cost the map's main loop spends up to
 a quarter of its wall clock inside a blocking panel call.
 
+**And that 1,081 ms is not a windowed refresh at all.** `LgfxEpdDriver` does not
+override `PanelDriver::displayWindow`, so every window request on this board
+falls through to a whole-panel push -- all 2,608 of the counted ones did. The
+flat quotient of that walk is 1,117 ms; the 1,081 above is the mean of its seven
+segments. A fast
+frame there is **11** LovyanGFX LUT passes and a clean frame **37**, and most of
+the cost is CPU and PSRAM traffic rather than panel time.
+[`t5s3-partial-refresh.md`](t5s3-partial-refresh.md) has the chain, the cost
+model, the power half and the plan.
+
 ## The map never asks for a clean after entry
 
 Everything above is about picking the right mode per frame. There is a separate
