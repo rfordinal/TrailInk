@@ -68,14 +68,24 @@ The short power press *is* covered: `main.cpp`'s force-refresh path reads
 
 **Paid for 2026-09-10.** A release pass sent `CMD:BUTTON confirm` and a run of
 `down` presses without a screenshot between them, to walk from the wait screen to
-Settings. The presses did not land where the script assumed: they went into
-menus and flipped `mapGnssPosition` off and the new GNSS wait limit to "no
-limit", both of which persist to the card.
+Settings. The presses did not land where the script assumed. Afterwards the board
+came up with its GNSS wait limit reading "no limit" on a fresh boot, and a map
+session running on BLE.
 
-The cost was not the settings. It was that the next screenshot then showed a map
-session on BLE and a wait screen with no countdown, and **both read as defects in
-code written the same hour**. Ten minutes went into looking for a bug that was a
-button press.
+**What caused which is not established, and the first version of this section
+said it was.** The BLE session is equally explained by a stray Confirm activating
+the wait screen's own "Take position from the phone" row, which changes nothing
+persisted; the wait limit reading zero has no such explanation and does point at
+a menu. Calling both "the injection flipped two settings" was a cause named from
+one observation.
+
+What would settle it: read those two rows on the panel before pressing anything,
+and again after.
+
+The cost was not the settings either way. It was that the next screenshot showed
+a map session on BLE and a wait screen with no countdown, and **both read as
+defects in code written the same hour**. Ten minutes went into looking for a bug
+that was a button press.
 
 So: **one press, one screenshot, or do not press.** A queue of presses is only
 safe on a screen whose layout is already on the glass in front of you. This is

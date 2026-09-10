@@ -1,10 +1,14 @@
 # The satellite wait: a screen in front of the map
 
-**Status: on hardware 2026-09-10.** The screen has been flashed to a T5 S3 Pro
-and read off the panel five times, which is where most of the design below comes
-from. What is still unverified: **the satellites themselves**. Every pass was
-indoors, the receiver never located one, and nothing has ever drawn a mark on
-that sky. See the bottom.
+**Status: on hardware 2026-09-10, seven flashes and thirteen panel reads**,
+which is where most of the design below comes from. The plot has drawn satellites
+and been judged: the mark sizes, the white halo where a mark lands in the ridge,
+and sixteen marks at once without crowding.
+
+**Against a synthetic sky** (`GnssFakeSky.h`), because a real one never arrived:
+indoors the receiver locates nothing, and the day it went outside the weather
+gave nothing stable. **A real acquisition is the one thing still open** -- see the
+bottom.
 
 On a board with a receiver, opening the map used to mean opening the map and
 finding out. This puts a screen in between: the sky as the receiver sees it,
@@ -277,6 +281,10 @@ So the screen accepts three things at once, and any one of them is enough:
   `satelliteCount()` and `satellite(i)`. GSV already parsed those four fields
   per satellite and threw three of them away.
 
+  `sizeof(GnssSatellite)` is 8 bytes by layout, so the array is 256 bytes plus
+  the stale mask and the count -- **derived, not measured**: no build was taken
+  with and without it to price it on its own.
+
   It updates **in place per talker** and sweeps at the end of each constellation's
   GSV cycle: an entry disappears only when a *complete* cycle stopped listing it.
   A lost GSV sentence is ordinary on a 9600 baud line, and dropping four
@@ -300,6 +308,38 @@ So the screen accepts three things at once, and any one of them is enough:
 - Ten `STR_GNSS_ACQ_*` strings in `lib/I18n/translations/english.yaml`. The
   build strips unused keys under SCons (`scripts/gen_i18n.py`), so a string added
   to the yaml and not yet drawn does not compile.
+
+## The synthetic sky, and why the plot needed one
+
+`CMD:GNSS SKY 16` fills the plot with a deterministic pattern; `CMD:GNSS SKY OFF`
+clears it. Devel only, behind `ENABLE_GNSS_CMD`, which is set in `env:t5s3pro`
+and in no release env -- a screen that claims satellites the device cannot see is
+a lie a shipped build must not be able to tell.
+
+**It exists because the screen's whole subject was unverifiable by waiting.**
+Five passes drew no mark at all. So the plot's placement, its mark sizes, the
+halo over the ridge and whether a dozen marks read at all could not be judged,
+on the one screen where they are the entire content.
+
+The numbers are chosen to exercise the drawing rather than to look like a sky
+(`src/GnssFakeSky.h`): elevations from 3 to 80 degrees, so the low ones land
+inside the ridge, which is where the halo either works or does not; C/N0 across
+all four calibrated rungs plus some zeros, so every mark size appears next to an
+outline; and two satellites heard but not located, which is the state that leaves
+a count with no mark and puts "N not located yet" on the readout. Azimuths are
+offset so nothing hides under a cardinal label.
+
+**It substitutes at five reads and nowhere else** (`skyCount()`,
+`skySatellite()`, `skyInView()`, `skyHeard()`, `skyBestSnr()`), so the drawing
+cannot tell the two skies apart. That is the only thing that makes a screenshot
+taken with it say anything about the real one. It never produces a position and
+never touches `Gnss`, so the map is unaffected.
+
+**No host test can replace it, and that is a property of the problem.** The
+drawn ridge and the geometry that decides "this satellite is behind terrain"
+both come from the same generator, so a test comparing them is a tautology
+against the same data. A mark drawn on the ridge is the only instrument there
+is, and this is what provides one.
 
 ## What a hardware pass has to check
 

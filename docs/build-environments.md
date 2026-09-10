@@ -296,6 +296,11 @@ builds NimBLE with. That cache (`~/.buildcache` by default) is per-machine and
 therefore **shared across every worktree and every session**, exactly like
 `framework-arduinoespressif32-libs/` two sections up.
 
+**The cause is isolated, not inferred.** The failing build had already had
+`.pio/build/t5s3pro` deleted, and the passing one differed from it in exactly one
+thing: `PLATFORMIO_BUILD_CACHE_DIR` pointing at a private directory. A clean
+environment directory on its own did not fix it.
+
 **The fix is a private cache for the run, not a global settings change:**
 
 ```
