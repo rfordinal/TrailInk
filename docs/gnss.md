@@ -31,7 +31,7 @@ shown, or labelled open.
 |---|---|
 | Receiver | Quectel L76K, on-board. GPS + GLONASS, both seen |
 | Reached by | `CMD:GNSS` over the USB serial console, `env:t5s3pro` only |
-| On any screen | the map's header row -- a three-state GNSS glyph, see [`map-header-status.md`](map-header-status.md). Nowhere else |
+| On any screen | the map's header row -- a three-state GNSS glyph plus four signal bars, see [`map-header-status.md`](map-header-status.md). Nowhere else |
 | Feeding the map | **yes, ridden 2026-09-01** -- behind `mapGnssPosition`, off by default. See "The map reads it" |
 | Verified on hardware | 3D fix indoors; parser correct for one N/E fix on one date; the rail's ON/OFF path works; the map drawing from the receiver on a ride, with no phone connected |
 | Still open | idle current, whether SPI contention is real, a TTFF from the receiver's own power-on, and the BLE path with `mapGnssPosition 0` |

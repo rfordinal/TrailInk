@@ -26,6 +26,7 @@
 #include "HeldTilesStore.h"
 #include "HikeIcons.h"
 #include "MapFollow.h"
+#include "MapGnssBars.h"
 #include "MapGnssHeading.h"
 #include "MapHatch.h"
 // missingTileAnchorFromLastFix(), for `fake` -- it seeds around the same origin
@@ -321,32 +322,19 @@ constexpr int kHeaderGnssIconToBtGap = 6;
 // zoom hints in drawZoomSideHints().
 constexpr const char* kHeaderUtcSuffix = " UTC";
 
-// GNSS bars: **how many** bars are filled says how many satellites are being
-// tracked, and **how tall** they all are says how strong the best one is. Two
-// numbers in one block, because they answer two different questions and a rider
-// needs both: four weak satellites and two strong ones are both "no fix", and
-// they need opposite things done about them.
+// GNSS bars: **how many** bars are filled says how many satellites the antenna
+// hears, and **how tall** they all are says how strong the best one is.
 //
-// Deliberately not the BLE staircase next to it. Those bars step up in height by
-// design, so a glance tells the two blocks apart without reading either.
+// The thresholds, the hysteresis and the reasons behind every number live in
+// MapGnssBars.h -- pure arithmetic, host-tested, out of this file for the same
+// reason MapGnssHeading and MapFixTrust are.
 //
-// Four is the count that matters: a position needs four satellites, so a full
-// block means a fix is due and a half-full one means it is not coming yet.
-constexpr int kHeaderGnssBarCount = kHeaderBleBarCount;
+// Deliberately not the BLE staircase next to it. Those bars step up in height
+// by design, so a glance tells the two blocks apart without reading either.
+constexpr int kHeaderGnssBarCount = MapGnssBars::kBarCount;
+static_assert(kHeaderGnssBarCount == kHeaderBleBarCount,
+              "the GNSS block reuses the BLE block's width and slot pitch (kHeaderBleBarsWidth)");
 
-// SNR here is C/N0 in dB-Hz, the satellite signal against the noise floor. The
-// steps are the two thresholds this whole problem turns on, measured elsewhere
-// and written down in Gnss::injectAidIni(): below about 24 a satellite is not
-// usable, from 24 it can be tracked when the receiver already holds the
-// ephemeris, and from about 31 the receiver can read the ephemeris off the air
-// by itself. So the top step is "this can fix unaided" and the middle is "this
-// needs aiding", which is exactly the distinction the panel should carry.
-int resolveGnssBarHeight(uint8_t bestSnr) {
-  if (bestSnr == 0) return 0;
-  if (bestSnr < 24) return kHeaderIconHeight / 4;
-  if (bestSnr < 31) return kHeaderIconHeight / 2;
-  return kHeaderIconHeight;
-}
 #endif
 
 // The clock sits leftmost in the status row, between the place name and the
@@ -1589,9 +1577,11 @@ void MapActivity::updateHeaderStatus() {
   bool barsMoved = connected && bars != drawnBleBars_;
 #ifdef ENABLE_GNSS_CMD
   if (!bleInUse_) {
-    const uint8_t tracked = gnss.satsWithSignal();
-    const int gnssBars = tracked > kHeaderGnssBarCount ? kHeaderGnssBarCount : static_cast<int>(tracked);
-    barsMoved = gnssBars != drawnGnssBars_ || resolveGnssBarHeight(gnss.bestSnr()) != drawnGnssBarHeight_;
+    // Against drawnGnssBlock_, which is both the panel's state and the
+    // hysteresis' memory -- resolve() reads it and does not write it, so asking
+    // here and drawing later cannot apply the slack twice.
+    const MapGnssBars::Block block = MapGnssBars::resolve(gnss.satsWithSignal(), gnss.bestSnr(), drawnGnssBlock_);
+    barsMoved = block.bars != drawnGnssBlock_.bars || block.heightStep != drawnGnssBlock_.heightStep;
   }
 #endif
 
@@ -2252,15 +2242,16 @@ void MapActivity::drawHeaderStatusStrip() {
     drawnGnssState_ = state;
 
     // Bars: count = satellites tracked, height = the best one's signal.
+    // MapGnssBars owns both ladders and their hysteresis.
     //
     // An empty block is the useful case, not a missing one. On 2026-09-04 the
     // receiver saw nothing at all for fifteen minutes outdoors and the panel
     // said only "searching" -- a state it also shows when a fix is two seconds
     // away. Four empty slots say "it hears nothing", which is a different
     // problem with a different answer, and it needs no cable to read.
-    const uint8_t tracked = gnss.satsWithSignal();
-    const int filled = tracked > kHeaderGnssBarCount ? kHeaderGnssBarCount : static_cast<int>(tracked);
-    const int barHeight = resolveGnssBarHeight(gnss.bestSnr());
+    const MapGnssBars::Block block = MapGnssBars::resolve(gnss.satsWithSignal(), gnss.bestSnr(), drawnGnssBlock_);
+    const int filled = block.bars;
+    const int barHeight = MapGnssBars::barHeightPx(block.heightStep, kHeaderIconHeight);
     for (int i = 0; i < kHeaderGnssBarCount; ++i) {
       const int x = gnssBarsLeft + i * (kHeaderBleBarWidth + kHeaderBleBarGap);
       if (i < filled && barHeight > 0) {
@@ -2272,8 +2263,7 @@ void MapActivity::drawHeaderStatusStrip() {
         renderer.fillRect(x, iconBottom - 1, kHeaderBleBarWidth, 1, true);
       }
     }
-    drawnGnssBars_ = filled;
-    drawnGnssBarHeight_ = barHeight;
+    drawnGnssBlock_ = MapGnssBars::State{block.bars, block.heightStep};
   }
 #endif
 
@@ -6709,8 +6699,7 @@ void MapActivity::renderViewport(int32_t latE7, int32_t lonE7, uint8_t headingSt
   // strip, so a snapshot sized for the padlock would leave a sliver of stale box
   // pixels above it, and e-ink holds that indefinitely.
   const int chromeBand = UITheme::getInstance().chromeBandHeight();
-  captureRegion(chromeFront_,
-                Rect{0, renderer.getScreenHeight() - chromeBand, renderer.getScreenWidth(), chromeBand});
+  captureRegion(chromeFront_, Rect{0, renderer.getScreenHeight() - chromeBand, renderer.getScreenWidth(), chromeBand});
   captureRegion(chromeSide_, GUI.sideButtonHintsRect(renderer));
 
   // Composited last, over the map's own bottom-edge pixels rather than into
