@@ -64,6 +64,25 @@ talking through.
 The short power press *is* covered: `main.cpp`'s force-refresh path reads
 `mappedInputManager.wasReleased(Power)`.
 
+## A press into an unknown screen is a write to persisted state
+
+**Paid for 2026-09-10.** A release pass sent `CMD:BUTTON confirm` and a run of
+`down` presses without a screenshot between them, to walk from the wait screen to
+Settings. The presses did not land where the script assumed: they went into
+menus and flipped `mapGnssPosition` off and the new GNSS wait limit to "no
+limit", both of which persist to the card.
+
+The cost was not the settings. It was that the next screenshot then showed a map
+session on BLE and a wait screen with no countdown, and **both read as defects in
+code written the same hour**. Ten minutes went into looking for a bug that was a
+button press.
+
+So: **one press, one screenshot, or do not press.** A queue of presses is only
+safe on a screen whose layout is already on the glass in front of you. This is
+also why the injector is worth having at all -- it is the only way to reach
+Settings from a laptop -- and why it must be driven like a thumb rather than like
+a script.
+
 ## The timing model
 
 `src/DebugInput.cpp`. One press at a time, the rest queued (8 deep), each press
