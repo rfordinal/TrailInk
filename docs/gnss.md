@@ -753,6 +753,10 @@ then priced it: 526 s to a first fix, three to five satellites, gaps of up to
 21 s while the map renders. Those numbers are below. Step 3 of
 [`gnss-to-map-plan.md`](gnss-to-map-plan.md).
 
+**The wait in front of the map** -- the screen a rider sees while the receiver
+searches, the sky panorama on it, and who owns the rail across the handover --
+is [`gnss-acquire.md`](gnss-acquire.md). Built 2026-09-10, not yet on hardware.
+
 **Three claims in this section are still read off the code, not observed**: the
 BLE path with `mapGnssPosition 0`, the rail's state after a map-exit crash, and
 the tiles under SPI contention. Each says so where it is written, and the third

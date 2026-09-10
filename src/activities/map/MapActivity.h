@@ -157,8 +157,19 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // RouteSelectActivity passes what the rider picked; every other caller --
   // `CMD:GOTO_MAP` over serial, the OOM fallbacks -- passes nothing and gets the
   // map exactly as it was before routes existed.
+  // `adoptRunningGnss` says the receiver was started by the screen that opened
+  // this one (GnssAcquireActivity) and this session now owns it -- so onExit()
+  // drops the rail, which it must not do for a receiver a host `CMD:GNSS ON`
+  // owns. Without it the acquisition screen's handover would leak the rail: the
+  // map would see a running receiver, decline ownership, and leave it powered
+  // after the rider went home.
+  //
+  // `forcePhonePosition` runs this session on BLE even though the GNSS setting
+  // is on -- the rider pressed "phone position" rather than waiting for the sky
+  // (../../../docs/gnss-acquire.md). One position source per session either way
+  // (bleInUse_), so this only chooses which one.
   MapActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const char* routePath = nullptr,
-              bool resumedFromSleep = false);
+              bool resumedFromSleep = false, bool adoptRunningGnss = false, bool forcePhonePosition = false);
 
   bool isMapActivity() const override { return true; }
 
@@ -928,6 +939,10 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // nonzero for a slightly different reason and stops being nonzero at a different
   // moment.
   bool resumedFromSleep_ = false;
+  // Both set by the acquisition screen's handover, both constructor arguments --
+  // see the constructor's comment for what each one buys.
+  bool adoptRunningGnss_ = false;
+  bool forcePhonePosition_ = false;
   // True while the panel holds the route overview rather than a follow frame.
   // Fixes are still recorded in that state but do not redraw -- see
   // renderRouteOverview().

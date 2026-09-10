@@ -13,9 +13,9 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
-#include "TouchPolicy.h"
 #include "MapPointMarks.h"
 #include "MapPointShards.h"
+#include "TouchPolicy.h"
 // APP_STATE.showBootScreen: the quick-resume-sleep decision, read in onExit().
 #include "CrossPointState.h"
 #include "GfxRendererCanvas.h"
@@ -2450,8 +2450,12 @@ void MapActivity::updateDebugOverlay() {
 }
 
 MapActivity::MapActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const char* routePath,
-                         bool resumedFromSleep)
-    : Activity("Map", renderer, mappedInput), transfer_(kTileRoot), resumedFromSleep_(resumedFromSleep) {
+                         bool resumedFromSleep, bool adoptRunningGnss, bool forcePhonePosition)
+    : Activity("Map", renderer, mappedInput),
+      transfer_(kTileRoot),
+      resumedFromSleep_(resumedFromSleep),
+      adoptRunningGnss_(adoptRunningGnss),
+      forcePhonePosition_(forcePhonePosition) {
   if (routePath != nullptr && routePath[0] != '\0') {
     // Truncation would open the wrong file or none, so a path that does not fit
     // is refused outright rather than shortened.
@@ -2502,7 +2506,11 @@ void MapActivity::onEnter() {
   // See bleInUse_'s comment (MapActivity.h) for what this costs and why the
   // trade was taken.
 #ifdef ENABLE_GNSS_CMD
-  bleInUse_ = SETTINGS.mapGnssPosition == 0;
+  // forcePhonePosition_ is the rider's own answer to that question, taken on the
+  // acquisition screen while the receiver was still searching: the sky is not
+  // opening, use the phone. It only ever moves the choice towards BLE -- the
+  // setting still decides every entry that did not come through that screen.
+  bleInUse_ = SETTINGS.mapGnssPosition == 0 || forcePhonePosition_;
 #else
   bleInUse_ = true;
 #endif
@@ -2538,11 +2546,15 @@ void MapActivity::onEnter() {
   // two.
   gnssStartedHere_ = false;
   haveGnssFixMs_ = false;
-  if (SETTINGS.mapGnssPosition != 0) {
+  if (!bleInUse_) {
     if (gnss.running()) {
-      // Somebody else's session -- CMD:GNSS ON from the host. Read it, but do
-      // not adopt it: onExit() must leave it exactly as it found it.
-      LOG_INF(kLogTag, "gnss: already running, not started here");
+      // Already up, and who owns it decides whether onExit() may drop the rail.
+      // adoptRunningGnss_ means the acquisition screen started it and handed it
+      // over, so this session finishes the job. Without that flag the owner is
+      // a host `CMD:GNSS ON` session and onExit() must leave it exactly as it
+      // found it.
+      gnssStartedHere_ = adoptRunningGnss_;
+      LOG_INF(kLogTag, "gnss: already running, %s", adoptRunningGnss_ ? "adopted from the acquire screen" : "not ours");
     } else if (gnssStart()) {
       gnssStartedHere_ = true;
       LOG_INF(kLogTag, "gnss: started, rx ring %lu bytes", static_cast<unsigned long>(gnss.rxBufferSize()));
@@ -2856,8 +2868,9 @@ void MapActivity::onExit() {
   freeink::BlePositionServer::getInstance().end();
 
 #ifdef ENABLE_GNSS_CMD
-  // Only what this activity started. A CMD:GNSS ON session from the host runs
-  // on past the map, which is what a bring-up expects.
+  // Only what this session owns -- what it started, or what the acquisition
+  // screen handed it (adoptRunningGnss_, onEnter()). A CMD:GNSS ON session from
+  // the host runs on past the map, which is what a bring-up expects.
   // Whatever is buffered belongs to the ride that just ended.
   GnssLog::flush();
   if (gnssStartedHere_) {
@@ -5916,14 +5929,20 @@ uint8_t MapActivity::gnssHeadingStep(const GnssFix& fix) {
 // (dead reckoning, no satellites) is excluded here for the same reason
 // pollGnssFix() refuses to draw a position from it.
 MapActivity::GnssHeaderState MapActivity::gnssHeaderState() const {
-  if (SETTINGS.mapGnssPosition == 0 || !gnss.running()) return GnssHeaderState::Off;
+  // bleInUse_ rather than the setting: a session the rider sent to the phone on
+  // the acquisition screen must not draw a receiver glyph, even with the setting
+  // on and a host-owned receiver running next to it.
+  if (bleInUse_ || !gnss.running()) return GnssHeaderState::Off;
   const GnssFix& fix = gnss.fix();
   if (!fix.valid || fix.quality == 0 || fix.quality == 6) return GnssHeaderState::Seeking;
   return GnssHeaderState::Fixed;
 }
 
 void MapActivity::pollGnssFix() {
-  if (SETTINGS.mapGnssPosition == 0) return;
+  // One position source per session (bleInUse_), so a BLE session ignores the
+  // receiver even when something else has it running -- otherwise a rider who
+  // chose the phone would get a dot from whichever source spoke last.
+  if (bleInUse_) return;
   if (!gnss.running()) return;
 
   const GnssFix& fix = gnss.fix();
@@ -6709,8 +6728,7 @@ void MapActivity::renderViewport(int32_t latE7, int32_t lonE7, uint8_t headingSt
   // strip, so a snapshot sized for the padlock would leave a sliver of stale box
   // pixels above it, and e-ink holds that indefinitely.
   const int chromeBand = UITheme::getInstance().chromeBandHeight();
-  captureRegion(chromeFront_,
-                Rect{0, renderer.getScreenHeight() - chromeBand, renderer.getScreenWidth(), chromeBand});
+  captureRegion(chromeFront_, Rect{0, renderer.getScreenHeight() - chromeBand, renderer.getScreenWidth(), chromeBand});
   captureRegion(chromeSide_, GUI.sideButtonHintsRect(renderer));
 
   // Composited last, over the map's own bottom-edge pixels rather than into
