@@ -538,6 +538,9 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // The style for the fix currently on screen. One place, so the full redraw
   // and the partial move cannot disagree about what the marker is claiming.
   MapFixTrust::MarkerStyle markerStyle() const { return MapFixTrust::styleFor(trust_); }
+  // Opens the session on the position the card remembers, with a marker that
+  // says so -- see the comment on the definition.
+  void seedFromPersistedFix();
 
   // Buttons, and the two timers they arm.
   void handleButtons();
@@ -1123,11 +1126,17 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
 
   // How much the marker is allowed to claim about the newest fix, and the
   // hysteresis latch behind it. Set by whichever ingest path accepted the fix
-  // (BLE, or the console's `pos`), read only through markerStyle().
+  // (BLE, the console's `pos`, or the receiver), read only through
+  // markerStyle().
   //
   // Starts Unstated, which draws the marker exactly as it drew before any of
-  // this existed -- so a source that says nothing about quality, and a device
-  // that has not had a fix yet, both look like they always did.
+  // this existed -- the right default for a source that says nothing about
+  // quality.
+  //
+  // **A device that has not had a fix yet is NOT that case**, and treating it as
+  // one was a defect: a frame drawn from the card's persisted fix showed a whole
+  // ring and a sharp arrow for a position and heading from another session
+  // (seedFromPersistedFix(), which now sets Loose and Unknown).
   MapFixTrust::Trust trust_{};
   MapFixTrust::State trustState_{};
   // What the marker on the panel is actually claiming right now, recorded where

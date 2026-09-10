@@ -2481,6 +2481,38 @@ MapActivity::MapActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
   debugTransferSlot_ = debug_.reserve("transfer");
 }
 
+// The fix off the card, as this session's opening picture.
+//
+// **The marker must claim nothing about it.** It is a position from a previous
+// session -- possibly days old, which is why pinFixAgeWarning() already says
+// "fix from last session" -- and a heading from whenever that was. Both entry
+// branches used to leave `trust_` at Unstated, and Unstated draws a whole ring
+// and a sharp arrow: the marker said "you are here, facing that way" about data
+// that supports neither half.
+//
+// Reported off the panel 2026-09-10, on a receiver that had never had a fix:
+// `gnss on q0 u0 v1 t1 s23` in the debug window, a solid ring and an arrow on
+// the glass. The satellite wait screen is what made it visible -- it hands
+// riders into the map with no fix on purpose -- but the defect is as old as the
+// persisted-fix path.
+//
+// Loose and Unknown, not Unstated: Unstated means "this source does not speak
+// accuracy", and the card does speak. It says the position is from another
+// session, which is exactly the claim the broken ring exists to make.
+void MapActivity::seedFromPersistedFix() {
+  hasReceivedAny_ = true;
+  showingPersistedFix_ = true;
+  lastLatE7_ = SETTINGS.mapLastLatE7;
+  lastLonE7_ = SETTINGS.mapLastLonE7;
+  lastHeading_ = SETTINGS.mapLastHeading;
+  updateManualHeadingCapture(lastHeading_);
+  trust_.pos = MapFixTrust::Pos::Loose;
+  trust_.dir = MapFixTrust::Dir::Unknown;
+  // The latch too, or the first real fix's hysteresis measures against a state
+  // the panel never showed.
+  trustState_.pos = MapFixTrust::Pos::Loose;
+}
+
 void MapActivity::onEnter() {
   Activity::onEnter();
   LOG_DBG(kLogTag, "onEnter start");
@@ -2755,14 +2787,7 @@ void MapActivity::onEnter() {
   if (route_) {
     // Remembered so a later button press can re-render around it, exactly as the
     // no-route path does.
-    if (SETTINGS.mapHasLastFix) {
-      hasReceivedAny_ = true;
-      showingPersistedFix_ = true;
-      lastLatE7_ = SETTINGS.mapLastLatE7;
-      lastLonE7_ = SETTINGS.mapLastLonE7;
-      lastHeading_ = SETTINGS.mapLastHeading;
-      updateManualHeadingCapture(lastHeading_);
-    }
+    if (SETTINGS.mapHasLastFix) seedFromPersistedFix();
     renderRouteOverview();
     LOG_DBG(kLogTag, "onEnter done");
     return;
@@ -2773,12 +2798,7 @@ void MapActivity::onEnter() {
   // clears the banner (see the BLE/console branches in loop()).
   LOG_DBG(kLogTag, "onEnter: mapHasLastFix=%d", (int)SETTINGS.mapHasLastFix);
   if (SETTINGS.mapHasLastFix) {
-    hasReceivedAny_ = true;
-    showingPersistedFix_ = true;
-    lastLatE7_ = SETTINGS.mapLastLatE7;
-    lastLonE7_ = SETTINGS.mapLastLonE7;
-    lastHeading_ = SETTINGS.mapLastHeading;
-    updateManualHeadingCapture(lastHeading_);
+    seedFromPersistedFix();
     LOG_DBG(kLogTag, "onEnter: rendering persisted fix %d,%d", (int)lastLatE7_, (int)lastLonE7_);
     // Before the read, not after: this is the only viewport reset with no
     // feedback of any kind in front of it (a zoom or menu redraw gets the busy
@@ -5950,12 +5970,18 @@ void MapActivity::pollGnssFix() {
   // showing whatever a previous BLE session had latched, which is to say
   // nothing about the receiver. posTrustForHdop() is that missing half.
   trust_.pos = MapFixTrust::posTrustForHdop(fix.hdop, fix.satsUsed, trustState_);
-  // `trust_.dir` is deliberately left alone. MapFixTrust says outright that
-  // there is no degrees-to-state mapping and that a receiver's course would
-  // have to come from whether it is moving, not from a figure -- and nobody has
-  // written that mapping. Leaving it Unstated draws the glyph this screen has
-  // always drawn, which is honest; inventing a rule here would put a second,
-  // unreviewed opinion next to the one that file exists to hold.
+  // `trust_.dir` goes back to Unstated rather than being computed. MapFixTrust
+  // says outright that there is no degrees-to-state mapping and that a
+  // receiver's course would have to come from whether it is moving, not from a
+  // figure -- and nobody has written that mapping. Unstated draws the glyph this
+  // screen has always drawn, which is honest; inventing a rule here would put a
+  // second, unreviewed opinion next to the one that file exists to hold.
+  //
+  // **Assigned, not left alone.** It used to be left, which was correct while
+  // nothing else ever wrote it. seedFromPersistedFix() now sets Unknown, so a
+  // session that opened on the card's fix would otherwise never draw a heading
+  // again once the receiver started working.
+  trust_.dir = MapFixTrust::Dir::Unstated;
 
   // **One gate, and it only catches a fix that contradicts itself.**
   //
