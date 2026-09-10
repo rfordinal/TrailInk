@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "MapGnssBars.h"
+
 // Where a satellite lands on the acquisition screen's sky, and how strong its
 // signal reads. Pure arithmetic, no renderer, no driver -- so it is host-tested
 // (test/gnss_sky_view) and the activity above it only draws.
@@ -54,21 +56,33 @@ struct Dot {
 // than trusting the field.
 inline constexpr uint8_t kMaxElevation = 90;
 
-// Signal buckets for the strength meter, and the dot radius ladder. Both are
-// bucketed rather than continuous because the panel cannot show the difference:
-// one device pixel of radius is the smallest step there is.
+// How strong one satellite reads, bucketed for the dot ladder.
 //
-// The thresholds come from what the receiver here actually delivers. 24 dB-Hz
-// is the number the firmware already treats as the line between a satellite
-// that can carry a solution and one that cannot (MapActivity's marker trust,
-// and Gnss::injectAidIni's comment on reading ephemeris off the air); indoors
-// this antenna sits in the teens, and 40 is a clear sky.
+// **The thresholds are not this screen's own.** They are the map header's
+// calibrated C/N0 rungs (MapGnssBars::kBestSnrForHeightStep -- 26, 31, 36, 40
+// dB-Hz, the maintainer's numbers against real readings from this L76K). Two
+// screens that scored the same sky differently would teach the rider two
+// instruments, and the header's ladder is the one with evidence behind it.
+//
+// Bucketed rather than continuous because the panel cannot show the difference:
+// one device pixel of radius is the smallest step there is. The top rung folds
+// into the one below it for the same reason -- a fifth radius would need a
+// 14 px wide mark, which is too big for a plot holding sixteen of them.
+//
+// 0 is reserved for "in view, not tracked" (snr == 0), which is the distinction
+// the whole plot exists to draw.
+inline constexpr uint8_t kMaxBucket = 4;
+
 inline uint8_t snrBucket(uint8_t snr) {
   if (snr == 0) return 0;
-  if (snr < 18) return 1;
-  if (snr < 24) return 2;
-  if (snr < 34) return 3;
-  return 4;
+  // 1 is "tracked, below the first rung", so a satellite the antenna hears
+  // weakly is still a mark and still different from one it does not hear at
+  // all. Every rung passed adds one from there.
+  int bucket = 1;
+  for (int step = 0; step < MapGnssBars::kHeightStepCount; ++step) {
+    if (snr >= MapGnssBars::kBestSnrForHeightStep[step]) bucket = step + 2;
+  }
+  return static_cast<uint8_t>(bucket > kMaxBucket ? kMaxBucket : bucket);
 }
 
 // Radius in device pixels for a bucket. Deliberately small and deliberately

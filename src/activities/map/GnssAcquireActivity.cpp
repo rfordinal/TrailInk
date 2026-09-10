@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "GnssAccess.h"
+#include "MapGnssBars.h"
 #include "MappedInputManager.h"
 #include "activities/ActivityManager.h"
 #include "components/UITheme.h"
@@ -27,9 +28,6 @@ constexpr uint32_t kMinRedrawMs = 5000;
 // moves when the screen redraws anyway costs nothing, and a fine one would
 // force a redraw with nothing new in it.
 constexpr uint32_t kClockStepMs = 5000;
-
-// Four blocks, the same buckets as the dot sizes (GnssSkyView::snrBucket).
-constexpr int kMeterBlocks = 4;
 
 // The cardinal ticks under the sky. Drawn as bare letters, not translated, the
 // same choice the map's compass makes for its "N" (MapActivity::drawCompass()):
@@ -415,21 +413,31 @@ void GnssAcquireActivity::drawReadout() {
   renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, line, true);
   y += lineHeight;
 
-  // The best signal, as a number and as four blocks. The blocks exist because
-  // "31 dB" means nothing to a rider and a meter that is one block short of
-  // full does: the number is for the log, the blocks are for the decision.
+  // The best signal as a number, and next to it the map header's own GNSS block
+  // at a readable size: how many bars are lit says how many satellites the
+  // antenna hears, how tall they are says how strong the best one is
+  // (MapGnssBars.h). **The same instrument on both screens, deliberately** --
+  // this is where a rider learns to read it, and a wait screen that scored the
+  // sky on its own ladder would teach them the wrong one.
+  //
+  // No hysteresis state: a default State() applies none, which is right here.
+  // The block on the header wobbles because the map repaints per fix; this
+  // screen redraws at most once every five seconds and has nothing to damp.
   snprintf(line, sizeof(line), tr(STR_GNSS_ACQ_BEST), static_cast<int>(best));
   renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, line, true);
+  const MapGnssBars::Block block = MapGnssBars::resolve(heard, best, MapGnssBars::State{});
   const int meterX = metrics.contentSidePadding + renderer.getTextWidth(UI_10_FONT_ID, line) + lineHeight / 2;
   const int blockWidth = lineHeight / 2;
   const int blockGap = blockWidth / 3 + 1;
-  const uint8_t bucket = GnssSkyView::snrBucket(best);
-  for (int block = 0; block < kMeterBlocks; ++block) {
-    const int bx = meterX + block * (blockWidth + blockGap);
-    // Rising blocks, so a glance reads the shape and not the count.
-    const int bh = lineHeight * (block + 2) / (kMeterBlocks + 2);
+  const int barHeight = MapGnssBars::barHeightPx(block.heightStep, lineHeight);
+  for (int bar = 0; bar < MapGnssBars::kBarCount; ++bar) {
+    const int bx = meterX + bar * (blockWidth + blockGap);
+    // The header draws nothing at all below the first rung. Here the empty
+    // slots stay as outlines: this screen is up for minutes with nothing to
+    // show, and an instrument that disappears reads as a broken one.
+    const int bh = barHeight > 0 ? barHeight : 2;
     const int by = y + lineHeight - bh - 2;
-    if (block < bucket) {
+    if (bar < block.bars && barHeight > 0) {
       renderer.fillRect(bx, by, blockWidth, bh, true);
     } else {
       renderer.drawRect(bx, by, blockWidth, bh, true);

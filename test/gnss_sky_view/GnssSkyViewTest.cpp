@@ -1,6 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstdlib>
+
 #include "GnssSkyView.h"
+#include "MapGnssBars.h"
 
 namespace {
 
@@ -65,10 +69,10 @@ TEST(GnssSkyView, ZeroSnrIsAnOutline) {
 
 TEST(GnssSkyView, SnrBucketsRiseAndSaturate) {
   EXPECT_EQ(GnssSkyView::snrBucket(0), 0);
-  EXPECT_EQ(GnssSkyView::snrBucket(12), 1);
-  EXPECT_EQ(GnssSkyView::snrBucket(20), 2);
-  EXPECT_EQ(GnssSkyView::snrBucket(30), 3);
-  EXPECT_EQ(GnssSkyView::snrBucket(40), 4);
+  EXPECT_EQ(GnssSkyView::snrBucket(12), 1);  // heard, below the first rung
+  EXPECT_EQ(GnssSkyView::snrBucket(30), 2);
+  EXPECT_EQ(GnssSkyView::snrBucket(33), 3);
+  EXPECT_EQ(GnssSkyView::snrBucket(38), 4);
   EXPECT_EQ(GnssSkyView::snrBucket(55), 4);
 
   uint8_t previous = 0;
@@ -76,6 +80,24 @@ TEST(GnssSkyView, SnrBucketsRiseAndSaturate) {
     const uint8_t bucket = GnssSkyView::snrBucket(snr);
     EXPECT_GE(bucket, previous);
     previous = bucket;
+  }
+}
+
+// The dot ladder is the map header's calibrated C/N0 ladder, on purpose: two
+// screens must not score the same sky differently. Asserted against the
+// constants rather than against copies of them, so moving a rung in
+// MapGnssBars fails here if this stops following it.
+TEST(GnssSkyView, SnrBucketsFollowTheHeaderBarLadder) {
+  const int cap = GnssSkyView::kMaxBucket;
+  for (int step = 0; step < MapGnssBars::kHeightStepCount; ++step) {
+    const uint8_t rung = MapGnssBars::kBestSnrForHeightStep[step];
+    // Bucket 1 is "heard, below the first rung", so passing rung `step` lands
+    // on step + 2, capped.
+    const int atRung = std::min(step + 2, cap);
+    const int justBelow = std::min(step + 1, cap);
+    EXPECT_EQ(GnssSkyView::snrBucket(rung), atRung) << "at rung " << static_cast<int>(rung);
+    EXPECT_EQ(GnssSkyView::snrBucket(static_cast<uint8_t>(rung - 1)), justBelow)
+        << "just below rung " << static_cast<int>(rung);
   }
 }
 

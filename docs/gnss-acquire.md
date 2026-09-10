@@ -38,7 +38,8 @@ Top to bottom:
   has an answer. Bare letters, not translated, the same choice the map's compass
   makes for its `N`.
 - **The readout**: satellites in view and satellites heard, the best signal in
-  dB-Hz with a four-block meter, the elapsed wait, and one line of advice.
+  dB-Hz next to **the map header's own GNSS block** at a readable size, the
+  elapsed wait, and one line of advice.
 - **Two action rows**, and a Back that goes home.
 
 ### Why a panorama and not a skyplot
@@ -64,6 +65,33 @@ give.
 The profile itself is eleven hand-drawn numbers
 (`GnssSkyView::kRidgeProfile`), interpolated per column. It is the one part of
 this screen that is art rather than data.
+
+### The signal ladder is the header's, not this screen's
+
+Both the block next to the readout and the size of each satellite's mark read
+`MapGnssBars`' calibrated rungs -- 4/8/12/16 satellites tracked for the bar
+count, 26/31/36/40 dB-Hz of best C/N0 for the height (`map-header-status.md`,
+the maintainer's numbers against real readings from this L76K, 2026-09-10).
+
+**Deliberately the same instrument on both screens.** This is where a rider
+first meets it, with minutes to look at it, and a wait screen that scored the
+sky on its own invented ladder would teach them to read the header wrongly. The
+earlier version of this screen had exactly that: thresholds of 18/24/34 picked
+by eye. `test/gnss_sky_view` now asserts the two agree against the constants
+rather than against copies of them.
+
+Two differences, both stated in code:
+
+- **No hysteresis here.** `MapGnssBars::resolve()` takes a default `State`, so
+  no slack is applied. The header damps because the map repaints per fix; this
+  screen redraws at most once every five seconds and has nothing to damp.
+- **Empty slots stay as outlines.** The header draws nothing below the first
+  rung. Here the screen is up for minutes with nothing to show, and an
+  instrument that disappears reads as a broken one.
+
+The per-satellite mark folds the top rung into the one below it: the radius
+ladder is 3/4/5/6 px and a fifth step would need a 14 px wide mark, which is too
+big for a plot holding sixteen of them.
 
 ## The two ways out, and what they really choose
 

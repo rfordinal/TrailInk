@@ -301,6 +301,14 @@ header pass on a deaf receiver would decide it was already correct.
 The block is rate-capped with the BLE bars (30 s floor), not treated as
 structural like the glyph beside it.
 
+**The satellite wait screen reads the same two ladders**, at a bigger size and
+with no hysteresis: it is where a rider first meets this instrument, with
+minutes to study it, so scoring the same sky differently there would teach them
+to read this block wrongly ([`gnss-acquire.md`](gnss-acquire.md), "The signal
+ladder is the header's"). Its per-satellite marks use the C/N0 rungs too. So
+**moving a rung here moves it on two screens** -- `test/gnss_sky_view` asserts
+the agreement against these constants and fails if the two drift apart.
+
 **Not verified on hardware.** The numbers are calibrated against the five
 readings above and 2,269 logged fixes; nobody has looked at the panel with this
 code on it. What a hardware pass has to check: an indoor bench draws no bars and
