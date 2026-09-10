@@ -12,6 +12,7 @@
 #include "MapDebugOverlay.h"
 #include "MapFixTrust.h"
 #include "MapFollow.h"
+#include "MapGnssBars.h"
 #include "MapGnssHeading.h"
 #include "MapMarkerMetrics.h"
 #include "MapModeMask.h"
@@ -1020,8 +1021,10 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   double lastAcceptedLon_ = 0.0;
   uint32_t lastAcceptedFixMs_ = 0;
 
-  int drawnGnssBars_ = -1;
-  int drawnGnssBarHeight_ = -1;
+  // What the GNSS block last painted, and the memory its hysteresis is measured
+  // against. Starts at "nothing drawn yet" (MapGnssBars::State), which must not
+  // compare equal to an empty block or the first header pass would skip it.
+  MapGnssBars::State drawnGnssBlock_;
 
   // Set from BlePositionServer::begin()'s return in onEnter(). Without this,
   // a BLE stack that failed to come up (plausible: init costs ~75 KB heap,
