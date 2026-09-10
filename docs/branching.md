@@ -153,6 +153,30 @@ git -C <worktree> log --oneline origin/release/<device> ^HEAD
 
 Empty means current. Anything listed means rebase, rebuild, then flash.
 
+**It happened again on 2026-09-10, and this time nothing caught it.** A session
+building the T5 S3 Pro's first release forked from the local
+`release/lilygo-t5-s3-pro`, which was **53 commits behind origin**. The build
+was clean, so nothing complained; the board was flashed twice; and what the
+maintainer saw on the panel was a device with **no double-tap touch lock and
+none of the S3 input work**. The session then spent an hour deciding the feature
+had never landed on that branch, on the evidence that the X4 Pro line's commit
+`dcb8e023` is not an ancestor of it -- while `origin/release/lilygo-t5-s3-pro`
+carried the same work in its own commits all along, in four files.
+
+Two rules out of that hour:
+
+- **The pre-flash check is for a release build too**, not only for a feature
+  branch. A wrong base does not fail a build; it ships a device that looks like
+  it regressed.
+- **When a feature is expected to be in a build, grep the ref for it** rather
+  than reasoning about ancestry. Ancestry answers "is this commit in here",
+  which is a different question from "is this work in here" the moment the same
+  work exists as two commits:
+
+  ```
+  git grep -il "<symbol>" origin/release/<device> -- src lib
+  ```
+
 The same stale ref makes `git branch -d` lie. It compares against the local
 branch and answers `not fully merged` for a branch that is fully merged into
 origin. Check the real question, then force:
