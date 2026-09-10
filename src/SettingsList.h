@@ -278,6 +278,19 @@ inline std::vector<SettingInfo> getSettingsList(const SdCardFontRegistry* regist
         // receiver.
         SettingInfo::Toggle(StrId::STR_MAP_GNSS_POSITION, &CrossPointSettings::mapGnssPosition, "mapGnssPosition",
                             StrId::STR_CAT_MAP),
+        // How long the satellite wait screen holds before it opens the map by
+        // itself (GnssAcquireActivity.h). Same build gate as the row above --
+        // without a receiver there is no wait to limit.
+        //
+        // A row rather than a constant because the right answer is the rider's
+        // and it changes with what they are doing: somebody parked and watching
+        // the sky fill wants no limit, somebody who just wants their map wants
+        // two minutes. The screen states the countdown while it runs, so the
+        // setting is never something that happens to them silently.
+        SettingInfo::Enum(StrId::STR_MAP_GNSS_WAIT, &CrossPointSettings::mapGnssWaitLimit,
+                          {StrId::STR_GNSS_WAIT_NEVER, StrId::STR_GNSS_WAIT_2MIN, StrId::STR_GNSS_WAIT_5MIN,
+                           StrId::STR_GNSS_WAIT_10MIN},
+                          "mapGnssWaitLimit", StrId::STR_CAT_MAP),
         // One CSV row per accepted fix to /trailink/gnss.csv (GnssLog.h). Same
         // build gate and the same reason as the row above.
         //

@@ -1,7 +1,10 @@
 # The satellite wait: a screen in front of the map
 
-**Status: built 2026-09-10, never run on hardware.** Nothing below is a
-measurement. What a hardware pass has to check is at the bottom.
+**Status: on hardware 2026-09-10.** The screen has been flashed to a T5 S3 Pro
+and read off the panel five times, which is where most of the design below comes
+from. What is still unverified: **the satellites themselves**. Every pass was
+indoors, the receiver never located one, and nothing has ever drawn a mark on
+that sky. See the bottom.
 
 On a board with a receiver, opening the map used to mean opening the map and
 finding out. This puts a screen in between: the sky as the receiver sees it,
@@ -27,19 +30,32 @@ thesis position too -- the device answers *where am I and what is around me*, so
 
 Top to bottom:
 
-- **The home screen's own header art** (`src/images/HomeHeader.h`) -- logo,
-  wordmark, mountain line. Reused rather than drawn again so this reads as part
-  of the device rather than as a diagnostic panel.
-- **The sky**, as a panorama: azimuth left to right, elevation up from a mountain
-  ridge along the bottom. South at both ends, north in the middle. One mark per
-  satellite the receiver has located, filled when it is being heard and an
-  outline when it is not.
-- **Cardinal ticks** under the horizon -- S W N E S -- so "which way do I move"
-  has an answer. Bare letters, not translated, the same choice the map's compass
-  makes for its `N`.
-- **The readout**: satellites in view and satellites heard, the best signal in
-  dB-Hz next to **the map header's own GNSS block** at a readable size, the
-  elapsed wait, and one line of advice.
+- **The title and its subtitle**, and nothing else at the top. No logo and no
+  wordmark: the device does not need to introduce itself on a screen the rider
+  reached by pressing Explore on it, and every pixel spent on branding is a pixel
+  of sky.
+
+  It carried the home screen's header art for one round and that was a mistake
+  worth writing down. **The art has mountains in it, so the panel showed a
+  mountain range above the sky and another below it** -- the sky read as being
+  underground. The horizon has to be the lowest thing in the picture.
+- **The elapsed wait**, directly under the subtitle and in the second-largest
+  type on the screen. It is the number the rider is actually watching; it spent
+  one round buried at the bottom of the readout.
+- **The countdown**, when the wait has a limit: `Opens the map on its own in
+  4:12`.
+- **The sky**, as a panorama: azimuth left to right, elevation up from the
+  horizon. South at both ends, north in the middle. One mark per satellite the
+  receiver has located, filled when it is being heard and an outline when it is
+  not.
+- **The horizon**: the mountain line art, running off both edges and cut off at
+  the bottom.
+- **Cardinal labels with a tick between each pair** -- S | W | N | E | S -- so
+  "which way do I move" has an answer and the row reads as a scale rather than as
+  five loose letters. Bare letters, not translated, the same choice the map's
+  compass makes for its `N`.
+- **The readout**, three lines and three sizes: the state in one sentence, the
+  best signal with a five-slot meter, and one line of advice.
 - **Two action rows**, and a Back that goes home.
 
 ### Why a panorama and not a skyplot
@@ -53,25 +69,60 @@ action available to someone waiting for a fix.**
 It is also cheaper: two divisions per satellite, no trigonometry
 (`src/activities/map/GnssSkyView.h`).
 
-### Why the ridge is not decoration
+### The horizon is the asset, and so is the geometry
 
-The bottom of the sky is a mountain silhouette, and it states the physical fact
-behind a slow fix: a satellite low in the sky is behind terrain. A mark that
-sits inside the ridge is one the rider should not expect help from. Those marks
-are drawn **in white** so they read against the black silhouette instead of
-disappearing into it -- they are exactly the information the screen exists to
-give.
+The ridge is `src/images/mountains.svg` baked by `scripts/gen_mountains.py`, and
+it states the physical fact behind a slow fix: a satellite low in the sky is
+behind terrain. A mark that sits inside the ridge is one the rider should not
+expect help from, and it is drawn with a **white halo** rubbing out the ground
+behind it -- the art is line work, so a white mark would vanish in its white
+interior and a black one would read as another ridge line.
 
-The profile itself is eleven hand-drawn numbers
-(`GnssSkyView::kRidgeProfile`), interpolated per column. It is the one part of
-this screen that is art rather than data.
+**The generator emits the silhouette's own top edge alongside the bitmap**
+(`MountainsTop`, one entry per column), and `GnssSkyView::ridgeHeight()` reads
+that. The first version drew this ridge from eleven hand-typed numbers while the
+art came from somewhere else: a drawing and a claim that can disagree, on the one
+screen whose whole job is to say which way the sky is open.
+
+Three geometry decisions, all from the panel:
+
+- **Wider than the screen.** The asset is 700 px against a 540 px panel, so the
+  ridge runs off both edges. A silhouette that ends inside the frame reads as a
+  picture of mountains; one that leaves it reads as terrain the rider is standing
+  in.
+- **Seated 60 px below the horizon** (`GnssSkyView::kRidgeCrop`), so its bottom
+  is cut off. Terrain does not end tidily above a caption.
+- **Clipped by our own blit.** `GfxRenderer::drawMono1bpp()` goes through
+  `drawPixel()`, which LOG_ERRs every out-of-range pixel rather than dropping it,
+  so blitting an over-wide asset straight would be tens of thousands of serial
+  lines per frame. `drawRidgeClipped()` is the two loops that avoid that.
+- **A horizon line under it, edge to edge.** Not needed to carry the ridge across
+  a wider panel any more, but it is what makes the crop read as ground rather
+  than as art that ran out of pixels.
+
+The art is drawn 1:1 and never scaled, which is also why `ridgeHeight()` returns
+the asset's own pixels rather than a fraction of the box height (parent repo's
+CLAUDE.md, "Map rendering").
 
 ### The signal ladder is the header's, not this screen's
 
-Both the block next to the readout and the size of each satellite's mark read
-`MapGnssBars`' calibrated rungs -- 4/8/12/16 satellites tracked for the bar
-count, 26/31/36/40 dB-Hz of best C/N0 for the height (`map-header-status.md`,
-the maintainer's numbers against real readings from this L76K, 2026-09-10).
+Both the meter next to the readout and the size of each satellite's mark read
+`MapGnssBars`' calibrated C/N0 rungs -- 26/31/36/40 dB-Hz of the best satellite
+(`map-header-status.md`, the maintainer's numbers against real readings from
+this L76K, 2026-09-10).
+
+The meter is **five slots for four rungs**, one lit per rung passed. The fifth
+is not a spare: it is the "heard, below the first rung" state, the same one
+`GnssSkyView::snrBucket()` draws as its smallest mark. So an empty meter means
+nothing worth hearing, one lit slot is a satellite that cannot read its own
+ephemeris off the air, and full is open sky.
+
+Slots are filled solid rather than part-height. A two-thirds bar inside a box at
+this size reads as a rendering fault, and the number beside it already carries
+the value. Empty slots stay outlined: four 2 px outlines read as four
+missing-glyph boxes on the panel (seen 2026-09-10), and this screen stands for
+minutes with nothing to show, so its instrument has to look like one while
+empty.
 
 **Deliberately the same instrument on both screens.** This is where a rider
 first meets it, with minutes to look at it, and a wait screen that scored the
@@ -151,6 +202,43 @@ Three paths deliberately do not:
 - **The trip picker's OOM fallback** -- an allocation has already failed there,
   and the wait screen is another one.
 
+## The wait has a limit, and the screen says so while it runs
+
+`Wait for the sky` in Settings (category Map, `mapGnssWaitLimit`): **No limit /
+2 min / 5 min / 10 min, five by default**. When it runs out the screen opens the
+map by itself, exactly as the first action row does -- receiver handed over, still
+searching behind the map frame.
+
+The default matters more than the value. A ride took 526 s to first fix and a
+walk never got one, so a wait with no end is a screen that can hold a rider out
+of their own map indefinitely -- and the map is useful without a fix, because it
+draws from the persisted last position. The wait is a courtesy, not a gate.
+
+"No limit" stays offered because somebody parked and watching the sky fill is
+exactly who this screen was built for, and a timeout would cut them off
+mid-observation.
+
+**The countdown is on the panel the whole time it runs.** A screen that jumps to
+the map on its own without having said it would is a screen that took a decision
+away from the rider.
+
+## The type ladder, and the 813 kB it did not spend
+
+Four steps, biggest first: the title (12 pt bold), the subtitle (10 pt bold),
+the clock and the readout's first line (12 pt), the signal line (10 pt), the
+countdown and the advice (8 pt).
+
+The mockup asks for a title around 18 pt, and **the UI font family stops at
+12**. Registering NotoSans 14/16/18 would fix that and costs **813 kB of flash**
+as full families, or **251 kB** as only the four rezes actually drawn (both
+measured on t5s3pro, 2026-09-10, against a 3,896,147-byte baseline).
+Maintainer's call: not for a title. The ladder carries the hierarchy with weight
+and spacing instead.
+
+NotoSerif 14 is linked in every build and is the one genuinely larger face
+available for free. Deliberately unused: every other screen here is sans, and a
+serif title would read as a different device.
+
 ## The refresh budget, which is the reason the clock is coarse
 
 A windowed refresh on the T5 S3 Pro costs **1,081 ms measured**
@@ -195,9 +283,13 @@ So the screen accepts three things at once, and any one of them is enough:
   satellites out of the plot every time one goes missing would read as the sky
   emptying. Costs 32 entries of internal RAM, fixed, never grown.
 - `src/activities/map/GnssSkyView.h` -- the projection, the signal buckets, the
-  ridge profile. Pure arithmetic, no renderer, host-tested in
-  `test/gnss_sky_view` (13 tests: north centring, azimuth wrap, out-of-range
-  clamping, ridge continuity, a degenerate box).
+  ridge geometry and the inset plot area. Pure arithmetic, no renderer,
+  host-tested in `test/gnss_sky_view` (19 tests: north centring, azimuth wrap,
+  out-of-range clamping, the crop, the asset offset, the inset, a degenerate
+  box).
+- `scripts/gen_mountains.py` and `src/images/Mountains.h` -- the horizon asset
+  and its per-column top edge.
+- `CrossPointSettings::mapGnssWaitLimit` plus its `Wait for the sky` row.
 - `src/activities/map/GnssAcquireActivity.{h,cpp}` -- the screen.
 - `ActivityManager::goToGnssAcquire()`, plus two new `goToMap()` arguments
   (`adoptRunningGnss`, `forcePhonePosition`).
@@ -213,19 +305,28 @@ So the screen accepts three things at once, and any one of them is enough:
 
 Nothing here has been on a panel. In rough order of what would embarrass us:
 
-1. **Does the layout fit** on the T5 S3 Pro's 540x960 portrait screen -- the art
-   is 480 px wide and centred, and the sky takes whatever the bottom-anchored
-   rows leave. Check the ridge is not squeezed to nothing.
-2. **Do the white marks read** against the black ridge, and do the black ones
-   read against white sky at 3-6 px.
-3. **Is the 5 s cadence right**, or does a wait screen that redraws twelve times
-   a minute feel worse than one that redraws four times?
-4. **Does the handover actually keep the fix?** `Gnss::begin()` treats a second
+Settled on the panel, 2026-09-10, on a T5 S3 Pro:
+
+- the layout fits 540x960, and the readout, rows and hints all land
+- the redraw cadence works -- the clock was read at 0:05 and again at 2:10
+- the countdown runs and the texts render, middle dot included
+- the meter's empty state is legible now that its slots are full height
+
+Still open, and the first one is the big one:
+
+1. **Nothing has ever drawn a satellite.** Every pass was indoors: the receiver
+   heard one or two, located none, and the sky stayed empty. Untested therefore:
+   the panorama's placement, the mark sizes, the white halo over the ridge, and
+   whether the plot reads at all with a dozen marks on it. This needs a walk
+   outside.
+2. **Elevation and azimuth from this receiver.** The snapshot is read off GSV
+   fields nothing here has ever used. Confirm with `CMD:GNSS RAW ON` that the
+   marks land where the sentences say.
+3. **Does the handover actually keep the fix?** `Gnss::begin()` treats a second
    call as a no-op by design, so the map must not restart the receiver -- and the
    rail must be **down** after the map exits, which is the `adoptRunningGnss`
    flag's whole job. Read it back with `CMD:GNSS STATUS` after leaving the map.
-5. **Does the phone row leave BLE working**, with the setting still on.
-6. **Does the screen leave by itself** when the fix lands, and how long after.
-7. **Elevation and azimuth from this receiver**: the snapshot is read off GSV
-   fields nothing here has ever used. Confirm with `CMD:GNSS RAW ON` that the
-   marks land where the sentences say.
+4. **Does the phone row leave BLE working**, with the setting still on.
+5. **Does the screen leave by itself** when the fix lands, and how long after.
+6. **Does the limit fire** at the minute it promises, and does the map that
+   follows carry the receiver.

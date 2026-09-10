@@ -333,6 +333,21 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // row's label says "track" rather than "log" so that switching it on tells
   // the rider what it writes.
   uint8_t mapGnssLog = 0;
+  // How long the satellite wait screen stands there before it opens the map
+  // anyway, as an index into the row's own values: 0 no limit, 1 two minutes,
+  // 2 five minutes, 3 ten minutes (SettingsList.h, GnssAcquireActivity.h).
+  //
+  // **Five minutes by default, and the default matters more than the value.**
+  // A ride on 2026-09-01 took 526 s to first fix and a walk on 2026-09-04 never
+  // got one, so a screen with no limit is a screen that can hold a rider out of
+  // their own map indefinitely. The map is useful without a fix -- it draws from
+  // the persisted last position and the receiver keeps searching behind it --
+  // so the wait is a courtesy, not a gate.
+  //
+  // "No limit" stays offered because somebody standing still watching the sky
+  // fill is exactly who this screen was built for, and a timeout would cut them
+  // off mid-observation.
+  uint8_t mapGnssWaitLimit = 2;
   // Edge markers for pins outside the viewport: a direction arrow and the
   // distance, drawn where the bearing ray leaves the screen
   // (MapActivity::drawPins(), ../docs/pins.md). Pins *inside* the viewport are

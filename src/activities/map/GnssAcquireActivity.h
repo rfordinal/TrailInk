@@ -94,9 +94,18 @@ class GnssAcquireActivity final : public Activity {
   static constexpr int kActionCount = 2;
 
   void renderScreen();
+  void drawClock();
   void drawSky();
   void drawReadout();
   void drawActions();
+  // The asset is wider than the panel and seated so its bottom runs past the
+  // horizon, and GfxRenderer's blit LOG_ERRs rather than clips. So this one
+  // clips: see its comment in the .cpp.
+  void drawRidgeClipped(int x, int y, int clipTop, int clipBottom);
+  // 0 when the rider chose no limit (CrossPointSettings::mapGnssWaitLimit).
+  uint32_t waitLimitMs() const;
+  int clockTop() const;
+  int clockHeight() const;
   // The two bands that change while the screen is up. Kept apart because a
   // selection move must not spend a refresh on the sky, and a satellite arriving
   // must not spend one on the rows.
@@ -105,6 +114,7 @@ class GnssAcquireActivity final : public Activity {
   GnssSkyView::Box skyBox() const;
   void actionRect(int index, int& x, int& y, int& w, int& h) const;
   int readoutTop() const;
+  int readoutHeight() const;
 
   // Refreshes only the band that changed, and falls back to a whole panel when
   // the driver refuses the window (it does on this board today --

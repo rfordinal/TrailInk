@@ -4,6 +4,7 @@ add_executable(GnssSkyViewTest
 
 target_include_directories(GnssSkyViewTest PRIVATE
   ${REPO_ROOT}/src/activities/map
+  ${REPO_ROOT}/src
 )
 
 target_link_libraries(GnssSkyViewTest PRIVATE

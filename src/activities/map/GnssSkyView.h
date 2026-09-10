@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "MapGnssBars.h"
+#include "images/Mountains.h"
 
 // Where a satellite lands on the acquisition screen's sky, and how strong its
 // signal reads. Pure arithmetic, no renderer, no driver -- so it is host-tested
@@ -23,12 +24,18 @@
 // per satellite, no trigonometry, on a board that has a fix to wait for and no
 // cycles to spare on drawing while it waits.
 //
-// ## The ridge is not decoration
+// ## The ridge is not decoration, and it is not a second drawing either
 //
-// The bottom of the box is a mountain silhouette, and the same profile that
-// makes the screen look like the home screen's art also states the physical
-// fact behind a slow fix: a satellite low in the sky is behind terrain. A dot
-// that sits in the ridge is one the rider cannot expect to help.
+// The bottom of the box is the mountain line art (src/images/mountains.svg,
+// baked by scripts/gen_mountains.py), and it states the physical fact behind a
+// slow fix: a satellite low in the sky is behind terrain. A dot that sits in
+// the ridge is one the rider cannot expect to help.
+//
+// **The geometry below reads the asset's own top edge**, `MountainsTop`, rather
+// than a profile typed next to it. The first version had eleven hand-typed
+// numbers under art that came from somewhere else -- a drawing and a claim that
+// can disagree, on the one screen whose whole job is to say which way the sky
+// is open. Now moving the SVG moves both.
 namespace GnssSkyView {
 
 // The sky area in logical screen pixels. y is its top, y + h - 1 the horizon
@@ -126,35 +133,42 @@ inline Dot plot(const Box& box, uint8_t elevation, uint16_t azimuth, uint8_t snr
   return dot;
 }
 
-// The ridge profile: height above the box's bottom edge, in thousandths of the
-// box height, sampled at eleven evenly spaced points across the width.
-//
-// Hand-drawn numbers, not a formula. They are the one place on this screen that
-// is art rather than data, and they exist so the horizon under the satellites
-// is the same mountain line the home screen's header carries -- one visual
-// language, not a chart bolted under a logo.
-inline constexpr int kRidgeSamples = 11;
-inline constexpr int kRidgeProfile[kRidgeSamples] = {60, 110, 90, 190, 140, 250, 170, 120, 200, 100, 70};
+// How much of the art's bottom sits below the horizon and is never drawn. Must
+// match GnssAcquireActivity's kRidgeCrop -- the drawing and the geometry read
+// the same asset and have to read it from the same baseline.
+inline constexpr int kRidgeCrop = 60;
 
-// Ridge height at a pixel column, linearly interpolated between samples. Takes
-// the column as an offset from box.x so a caller can walk the box's width.
+// The art is drawn 1:1 and centred, never scaled -- the parent repo's standing
+// rule, and the reason this returns the asset's own pixels rather than a
+// fraction of the box height. The offset is NEGATIVE on every panel here: the
+// asset is deliberately wider than the screen so the ridge runs off both edges.
+inline int ridgeOffset(const Box& box) { return (box.w - MOUNTAINS_WIDTH) / 2; }
+
+// Height of the silhouette above the horizon at a pixel column, taken as an
+// offset from box.x, with the cropped-off bottom already subtracted.
 inline int ridgeHeight(const Box& box, int column) {
-  if (box.w <= 1) return 0;
-  if (column < 0) column = 0;
-  if (column > box.w - 1) column = box.w - 1;
+  if (box.w <= 0 || box.h <= 0) return 0;
+  const int assetColumn = column - ridgeOffset(box);
+  if (assetColumn < 0 || assetColumn >= MOUNTAINS_WIDTH) return 0;
+  const int height = static_cast<int>(MountainsTop[assetColumn]) - kRidgeCrop;
+  if (height <= 0) return 0;
+  return height > box.h ? box.h : height;
+}
 
-  // Position along the profile in 1/256 steps of a sample interval, so the
-  // interpolation is integer and monotonic. Fixed point rather than float
-  // because this runs once per column of a ~460 px box on every redraw.
-  const int span = (kRidgeSamples - 1) * 256;
-  const int t = column * span / (box.w - 1);
-  const int index = t / 256;
-  if (index >= kRidgeSamples - 1) return kRidgeProfile[kRidgeSamples - 1] * box.h / 1000;
-  const int frac = t % 256;
-  const int a = kRidgeProfile[index];
-  const int b = kRidgeProfile[index + 1];
-  const int perMille = a + (b - a) * frac / 256;
-  return perMille * box.h / 1000;
+// The band the satellites are plotted across, inset from the sky's own edges.
+//
+// Two reasons it is not the full band. The ticks: with south at both ends, the
+// two S labels sat half off the screen (seen on the panel 2026-09-10). And the
+// marks: a satellite due south is a 6 px diamond centred on the edge column, so
+// half of it would be off the panel.
+inline constexpr int kPlotInset = 22;
+
+inline Box plotArea(const Box& band) {
+  Box plot = band;
+  plot.x = band.x + kPlotInset;
+  plot.w = band.w - kPlotInset * 2;
+  if (plot.w < 1) plot = band;
+  return plot;
 }
 
 // True when a satellite is drawn inside the terrain rather than above it. Not

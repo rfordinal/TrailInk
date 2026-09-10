@@ -7,13 +7,14 @@
 #include <cstdio>
 #include <cstring>
 
+#include "CrossPointSettings.h"
 #include "GnssAccess.h"
 #include "MapGnssBars.h"
 #include "MappedInputManager.h"
 #include "activities/ActivityManager.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
-#include "images/HomeHeader.h"
+#include "images/Mountains.h"
 
 namespace {
 
@@ -28,6 +29,41 @@ constexpr uint32_t kMinRedrawMs = 5000;
 // moves when the screen redraws anyway costs nothing, and a fine one would
 // force a redraw with nothing new in it.
 constexpr uint32_t kClockStepMs = 5000;
+
+// ## The type ladder
+//
+// Four steps, biggest at the top, following the maintainer's mockup
+// (2026-09-10). The hierarchy is the reading order: what the screen is, what it
+// is waiting for, how long it has been, and then the numbers behind it.
+//
+// **Built from the faces this build already has, not from new ones.** The
+// mockup's title is about 18 pt and the UI family stops at 12, so the obvious
+// move was to register NotoSans 14/16/18 -- which costs **813 kB of flash** as
+// full families, or 251 kB as the four rezes actually drawn (both measured on
+// t5s3pro, 2026-09-10, against 3,896,147 bytes). The maintainer's call: not for
+// a title. So the ladder is 12 pt bold, 12 pt, 10 pt and 8 pt, and it carries
+// the hierarchy with weight and spacing where it runs out of size.
+//
+// NotoSerif 14 is linked in every build and is the one genuinely larger face
+// available for free. It is deliberately not used here: every other screen on
+// this device is sans, and a serif title would read as a different device.
+constexpr int kTitleFont = UI_12_FONT_ID;     // bold
+constexpr int kSubtitleFont = UI_10_FONT_ID;  // bold
+constexpr int kClockFont = UI_12_FONT_ID;     // regular
+constexpr int kHeadlineFont = UI_12_FONT_ID;  // the readout's first line
+constexpr int kBodyFont = UI_10_FONT_ID;      // the signal line
+constexpr int kSmallFont = SMALL_FONT_ID;     // the countdown and the hint
+
+// Five slots for four C/N0 rungs -- see drawReadout() for why the fifth is a
+// state and not a spare.
+constexpr int kMeterSlots = 5;
+
+// The Settings row's four values, in minutes, index 0 meaning no limit
+// (CrossPointSettings::mapGnssWaitLimit, SettingsList.h). Kept next to the
+// screen that enforces them rather than in the settings struct, because the
+// struct stores an index and only this screen knows what the index means.
+constexpr uint16_t kWaitLimitMinutes[] = {0, 2, 5, 10};
+constexpr uint8_t kWaitLimitCount = 4;
 
 // The cardinal ticks under the sky. Drawn as bare letters, not translated, the
 // same choice the map's compass makes for its "N" (MapActivity::drawCompass()):
@@ -101,6 +137,17 @@ void GnssAcquireActivity::loop() {
     return;
   }
 
+  // The limit the rider set in Settings, if any. The map is useful without a
+  // fix -- it draws from the persisted last position and the receiver carries on
+  // searching behind it -- so a wait with no end would hold them out of their
+  // own map for nothing (CrossPointSettings::mapGnssWaitLimit).
+  const uint32_t limitMs = waitLimitMs();
+  if (limitMs > 0 && millis() - enteredMs_ >= limitMs) {
+    LOG_INF(kLogTag, "wait limit of %lu ms reached with no fix, opening the map", static_cast<unsigned long>(limitMs));
+    openMap(false);
+    return;
+  }
+
   bool selectionMoved = false;
   if (mappedInput.wasPressed(MappedInputManager::Button::Up) ||
       mappedInput.wasPressed(MappedInputManager::Button::Left)) {
@@ -157,6 +204,7 @@ void GnssAcquireActivity::loop() {
   if (millis() - lastRedrawMs_ < kMinRedrawMs) return;
   if (!skyChanged()) return;
   lastRedrawMs_ = millis();
+  drawClock();
   drawSky();
   drawReadout();
   drawn_ = currentDrawn();
@@ -199,17 +247,20 @@ void GnssAcquireActivity::openMap(bool usePhone) {
 // written against either one's pixels would be a defect on the other (parent
 // repo's CLAUDE.md, "Styles must be universal").
 
+// Three lines, three sizes: the state in one sentence, the signal with its
+// meter, and the line of advice. The clock is in the head block.
+int GnssAcquireActivity::readoutHeight() const {
+  return renderer.getLineHeight(kHeadlineFont) + renderer.getLineHeight(kBodyFont) + renderer.getLineHeight(kSmallFont);
+}
+
 int GnssAcquireActivity::readoutTop() const {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   int ax, ay, aw, ah;
   actionRect(0, ax, ay, aw, ah);
   (void)ax;
   (void)aw;
   (void)ah;
-  // Four lines: the counts, the best signal with its meter, the clock, and the
-  // one line of advice the screen exists to give.
-  return ay - metrics.verticalSpacing - lineHeight * 4;
+  return ay - metrics.verticalSpacing - readoutHeight();
 }
 
 void GnssAcquireActivity::actionRect(int index, int& x, int& y, int& w, int& h) const {
@@ -231,15 +282,14 @@ GnssSkyView::Box GnssAcquireActivity::skyBox() const {
   const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
 
   GnssSkyView::Box box;
-  box.x = metrics.contentSidePadding;
-  box.w = pageWidth - metrics.contentSidePadding * 2;
+  // Full panel width, not the content inset every other screen uses: a horizon
+  // that stops short of the edges is not a horizon. The cardinal ticks under it
+  // clamp themselves back inside.
+  box.x = 0;
+  box.w = pageWidth;
 
-  // The art is the top of the screen and the sky starts under it. Skipped
-  // whole on a panel where keeping it would squeeze the sky into a strip --
-  // the plot is the instrument, the art is not.
-  const int artHeight = pageWidth >= HOMEHEADER_WIDTH ? HOMEHEADER_HEIGHT : 0;
-  const int titleHeight = renderer.getLineHeight(UI_12_FONT_ID) + lineHeight;
-  const int top = metrics.topPadding + artHeight + titleHeight + metrics.verticalSpacing;
+  // Under the head block: title, subtitle, the clock and its countdown.
+  const int top = clockTop() + clockHeight() + metrics.verticalSpacing;
   // One line for the cardinal ticks under the horizon.
   const int bottom = readoutTop() - metrics.verticalSpacing - lineHeight;
 
@@ -258,10 +308,13 @@ void GnssAcquireActivity::skyBand(int& x, int& y, int& w, int& h) const {
   (void)ah;
   // The sky, its ticks and the readout under it, as one rectangle: they change
   // together on every satellite update, and two windows cost two refreshes.
+  // From the clock down: the clock, the sky, its ticks and the readout change on
+  // the same tick, and two windows would cost two refreshes of ~1,081 ms each.
   x = 0;
   w = renderer.getScreenWidth();
-  y = box.y;
-  h = ay - metrics.verticalSpacing - box.y;
+  y = clockTop();
+  h = ay - metrics.verticalSpacing - y;
+  (void)box;
 }
 
 void GnssAcquireActivity::actionsBand(int& x, int& y, int& w, int& h) const {
@@ -290,30 +343,19 @@ void GnssAcquireActivity::refreshBand(int x, int y, int w, int h) {
 
 void GnssAcquireActivity::renderScreen() {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int pageWidth = renderer.getScreenWidth();
 
   renderer.clearScreen();
 
-  // The home screen's own header art: the logo, the wordmark and the mountain
-  // line under it. Reused rather than redrawn so this screen reads as part of
-  // the same device and not as a diagnostic panel -- and the mountains are what
-  // the sky below is drawn against.
-  int y = metrics.topPadding;
-  if (pageWidth >= HOMEHEADER_WIDTH) {
-    renderer.drawMono1bpp(HomeHeader, (pageWidth - HOMEHEADER_WIDTH) / 2, y, HOMEHEADER_WIDTH, HOMEHEADER_HEIGHT, true);
-    y += HOMEHEADER_HEIGHT;
-  }
+  // No wordmark and no logo up here. The device does not need to introduce
+  // itself on a screen the rider reached by pressing Explore on it, and every
+  // pixel spent on branding is a pixel of sky (maintainer's call, 2026-09-10 --
+  // it replaced the home header art, which had put a second mountain range
+  // ABOVE the sky and made the sky read as underground).
+  renderer.drawCenteredText(kTitleFont, metrics.topPadding, tr(STR_GNSS_ACQ_TITLE), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(kSubtitleFont, metrics.topPadding + renderer.getLineHeight(kTitleFont),
+                            tr(STR_GNSS_ACQ_SUB), true, EpdFontFamily::BOLD);
 
-  // Title and subtitle centred under the art, so the head of the screen reads
-  // as one block with it rather than as a heading bolted underneath.
-  const char* title = tr(STR_GNSS_ACQ_TITLE);
-  const int titleWidth = renderer.getTextWidth(UI_12_FONT_ID, title);
-  renderer.drawText(UI_12_FONT_ID, (pageWidth - titleWidth) / 2, y, title, true);
-  const char* subtitle = tr(STR_GNSS_ACQ_SUB);
-  const int subtitleWidth = renderer.getTextWidth(UI_10_FONT_ID, subtitle);
-  renderer.drawText(UI_10_FONT_ID, (pageWidth - subtitleWidth) / 2, y + renderer.getLineHeight(UI_12_FONT_ID), subtitle,
-                    true);
-
+  drawClock();
   drawSky();
   drawReadout();
   drawActions();
@@ -323,6 +365,68 @@ void GnssAcquireActivity::renderScreen() {
 
   drawn_ = currentDrawn();
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
+}
+
+uint32_t GnssAcquireActivity::waitLimitMs() const {
+  const uint8_t index = SETTINGS.mapGnssWaitLimit < kWaitLimitCount ? SETTINGS.mapGnssWaitLimit : 0;
+  return static_cast<uint32_t>(kWaitLimitMinutes[index]) * 60u * 1000u;
+}
+
+// Where the head block ends: the title, its subtitle, the elapsed clock and,
+// when a limit is set, the line that says the map opens by itself. Both the
+// clock and the sky measure from this, so they cannot drift apart.
+int GnssAcquireActivity::clockTop() const {
+  const auto& metrics = UITheme::getInstance().getMetrics();
+  return metrics.topPadding + renderer.getLineHeight(kTitleFont) + renderer.getLineHeight(kSubtitleFont);
+}
+
+int GnssAcquireActivity::clockHeight() const {
+  // Two lines when a limit is running, one when it is not.
+  return renderer.getLineHeight(kClockFont) + (waitLimitMs() > 0 ? renderer.getLineHeight(kSmallFont) : 0);
+}
+
+// The elapsed wait, big and directly under the subtitle rather than buried in
+// the readout at the bottom: it is the number the rider is actually watching
+// (maintainer's call, 2026-09-10). Under it, when the wait has a limit, what
+// happens when it runs out -- stated while it runs, so the jump into the map is
+// never something that happens to them without warning.
+void GnssAcquireActivity::drawClock() {
+  const int pageWidth = renderer.getScreenWidth();
+  const int y = clockTop();
+  renderer.fillRect(0, y, pageWidth, clockHeight(), false);
+
+  const uint32_t waitedS = (millis() - enteredMs_) / 1000;
+  char line[96];
+  snprintf(line, sizeof(line), tr(STR_GNSS_ACQ_WAITED), static_cast<int>(waitedS / 60), static_cast<int>(waitedS % 60));
+  renderer.drawCenteredText(kClockFont, y, line, true);
+
+  const uint32_t limitMs = waitLimitMs();
+  if (limitMs == 0) return;
+  const uint32_t elapsedMs = millis() - enteredMs_;
+  const uint32_t leftS = elapsedMs >= limitMs ? 0 : (limitMs - elapsedMs) / 1000;
+  snprintf(line, sizeof(line), tr(STR_GNSS_ACQ_AUTO_IN), static_cast<int>(leftS / 60), static_cast<int>(leftS % 60));
+  renderer.drawCenteredText(kSmallFont, y + renderer.getLineHeight(kClockFont), line, true);
+}
+
+// A blit that clips instead of complaining. GfxRenderer::drawMono1bpp() goes
+// through drawPixel(), which LOG_ERRs every pixel outside the panel rather than
+// dropping it -- and this asset is deliberately wider than the panel and seated
+// so its bottom runs past the horizon. Blitting it straight would be tens of
+// thousands of serial lines per frame.
+void GnssAcquireActivity::drawRidgeClipped(int x, int y, int clipTop, int clipBottom) {
+  const int rowBytes = (MOUNTAINS_WIDTH + 7) / 8;
+  const int pageWidth = renderer.getScreenWidth();
+  for (int row = 0; row < MOUNTAINS_HEIGHT; ++row) {
+    const int py = y + row;
+    if (py < clipTop || py > clipBottom) continue;
+    for (int col = 0; col < MOUNTAINS_WIDTH; ++col) {
+      const int px = x + col;
+      if (px < 0 || px >= pageWidth) continue;
+      const uint8_t byte = Mountains[row * rowBytes + (col >> 3)];
+      const bool ink = ((byte >> (7 - (col & 7))) & 1) == 0;
+      if (ink) renderer.drawPixel(px, py, true);
+    }
+  }
 }
 
 void GnssAcquireActivity::drawSky() {
@@ -336,14 +440,16 @@ void GnssAcquireActivity::drawSky() {
   // frame, and a satellite that moved has to leave nothing behind.
   renderer.fillRect(box.x, box.y, box.w, box.h + lineHeight, false);
 
-  // The ridge, one column at a time. A filled polygon would need a point per
-  // sample and would still be interpolated by hand; the per-column fill is the
-  // same arithmetic the host test checks (GnssSkyView::ridgeHeight).
-  for (int column = 0; column < box.w; ++column) {
-    const int height = GnssSkyView::ridgeHeight(box, column);
-    if (height <= 0) continue;
-    renderer.fillRect(box.x + column, horizon - height, 1, height, true);
-  }
+  // The mountain line art, 1:1 and never scaled (parent repo's CLAUDE.md, "Map
+  // rendering"), centred on a panel narrower than it is and seated kRidgeCrop
+  // below the horizon so its bottom is cut off. Clipped to the box, top and
+  // bottom, by our own blit -- see drawRidgeClipped().
+  drawRidgeClipped(box.x + GnssSkyView::ridgeOffset(box), horizon - MOUNTAINS_HEIGHT + GnssSkyView::kRidgeCrop, box.y,
+                   horizon);
+  // Ground level, edge to edge, under the cut. Not needed to carry the horizon
+  // any more -- the asset is wider than every panel here -- but it is what makes
+  // the crop read as ground rather than as art that ran out of pixels
+  // (maintainer's call, 2026-09-10, after seeing it without).
   renderer.drawLine(box.x, horizon, box.x + box.w - 1, horizon, true);
 
   // The satellites. Diamonds rather than circles because the renderer has no
@@ -358,99 +464,137 @@ void GnssAcquireActivity::drawSky() {
     // and not drawn.
     if (!sat.hasPosition) continue;
 
-    const GnssSkyView::Dot dot = GnssSkyView::plot(box, sat.elevation, sat.azimuth, sat.snr);
-    // White in the silhouette, black in the sky. A satellite low in a blocked
-    // direction is exactly what a rider needs to see, so it is drawn either
-    // way -- and in black it would vanish into the ridge.
-    const bool ink = !GnssSkyView::behindRidge(box, dot);
+    const GnssSkyView::Dot dot = GnssSkyView::plot(GnssSkyView::plotArea(box), sat.elevation, sat.azimuth, sat.snr);
     const int r = dot.radius;
+    // A mark landing in the terrain gets the ground rubbed out behind it. The
+    // ridge is line art, not a filled silhouette, so a white mark would
+    // disappear into its white interior and a black one would read as another
+    // ridge line. The halo keeps it a mark -- and it has to stay drawn, because
+    // a satellite low in a blocked direction is the finding this screen exists
+    // to report.
+    if (GnssSkyView::behindRidge(box, dot)) {
+      renderer.fillRect(dot.x - r - 1, dot.y - r - 1, r * 2 + 3, r * 2 + 3, false);
+    }
     const int xs[4] = {dot.x, dot.x + r, dot.x, dot.x - r};
     const int ys[4] = {dot.y - r, dot.y, dot.y + r, dot.y};
     if (dot.filled) {
-      renderer.fillPolygon(xs, ys, 4, ink);
+      renderer.fillPolygon(xs, ys, 4, true);
     } else {
       for (int p = 0; p < 4; ++p) {
         const int q = (p + 1) % 4;
-        renderer.drawLine(xs[p], ys[p], xs[q], ys[q], ink);
+        renderer.drawLine(xs[p], ys[p], xs[q], ys[q], true);
       }
     }
   }
 
-  // Cardinal ticks under the horizon, so "which way do I move" has an answer.
+  // Cardinal labels under the horizon, so "which way do I move" has an answer,
+  // with a tick between each pair. The ticks are what make the row read as a
+  // scale rather than as five loose letters (maintainer's mockup, 2026-09-10).
+  //
+  // Against the inset plot area, not the panel edge: at the edge the two S
+  // labels sat half off the screen (seen on the panel 2026-09-10), and the row
+  // has to name the azimuth the marks above it are actually plotted against.
+  const GnssSkyView::Box plot = GnssSkyView::plotArea(box);
+  const int labelTop = horizon + 2;
+  const int tickHeight = renderer.getLineHeight(UI_10_FONT_ID) / 2;
   for (int i = 0; i < kCardinalCount; ++i) {
-    const int x = box.x + (box.w - 1) * i / (kCardinalCount - 1);
+    const int x = plot.x + (plot.w - 1) * i / (kCardinalCount - 1);
     const int labelWidth = renderer.getTextWidth(UI_10_FONT_ID, kCardinals[i]);
     int labelX = x - labelWidth / 2;
     if (labelX < box.x) labelX = box.x;
     if (labelX + labelWidth > box.x + box.w) labelX = box.x + box.w - labelWidth;
-    renderer.drawText(UI_10_FONT_ID, labelX, horizon + 2, kCardinals[i], true);
+    renderer.drawText(UI_10_FONT_ID, labelX, labelTop, kCardinals[i], true);
+
+    if (i + 1 < kCardinalCount) {
+      const int next = plot.x + (plot.w - 1) * (i + 1) / (kCardinalCount - 1);
+      renderer.drawLine((x + next) / 2, labelTop + 2, (x + next) / 2, labelTop + 2 + tickHeight, true);
+    }
   }
 }
 
 void GnssAcquireActivity::drawReadout() {
   const auto& metrics = UITheme::getInstance().getMetrics();
-  const int lineHeight = renderer.getLineHeight(UI_10_FONT_ID);
   const int pageWidth = renderer.getScreenWidth();
   int y = readoutTop();
 
-  renderer.fillRect(0, y, pageWidth, lineHeight * 4, false);
+  renderer.fillRect(0, y, pageWidth, readoutHeight(), false);
 
-  const uint8_t inView = gnss.satsInView();
   const uint8_t heard = gnss.satsWithSignal();
   const uint8_t best = gnss.bestSnr();
 
-  char line[96];
+  // A satellite the receiver hears but has not located carries no elevation or
+  // azimuth, so the plot cannot draw it -- (0,0) is due north on the horizon,
+  // a real position and the worst one there is. Seen on the panel 2026-09-10:
+  // "2 heard" over a completely empty sky, which reads as a broken plot. So the
+  // readout says it in words instead.
+  uint8_t unplaced = 0;
+  const uint8_t satellites = gnss.satelliteCount();
+  for (uint8_t i = 0; i < satellites; ++i) {
+    const GnssSatellite& sat = gnss.satellite(i);
+    if (sat.snr > 0 && !sat.hasPosition) ++unplaced;
+  }
+
+  // The first line is the whole state in one sentence: how many satellites the
+  // antenna hears, and why that is not a position yet. Satellites HEARD and not
+  // satellites in view, deliberately -- in view is the almanac's opinion about
+  // what is above the horizon and it reads 19 from indoors, which is the number
+  // that would make a rider stand still and wait for nothing.
+  char heardText[48];
+  char line[128];
   if (startFailed_) {
     snprintf(line, sizeof(line), "%s", tr(STR_GNSS_ACQ_NO_RECEIVER));
-  } else if (inView == 0) {
-    // Not the same thing as a weak sky: the receiver has not finished its first
-    // GSV sweep, or it is hearing nothing at all. Either way there is no count
-    // worth printing yet, and a "0 in view" reads as a broken antenna.
+  } else if (heard == 0) {
     snprintf(line, sizeof(line), "%s", tr(STR_GNSS_ACQ_SEARCHING));
   } else {
-    snprintf(line, sizeof(line), tr(STR_GNSS_ACQ_COUNTS), static_cast<int>(inView), static_cast<int>(heard));
-  }
-  renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, line, true);
-  y += lineHeight;
-
-  // The best signal as a number, and next to it the map header's own GNSS block
-  // at a readable size: how many bars are lit says how many satellites the
-  // antenna hears, how tall they are says how strong the best one is
-  // (MapGnssBars.h). **The same instrument on both screens, deliberately** --
-  // this is where a rider learns to read it, and a wait screen that scored the
-  // sky on its own ladder would teach them the wrong one.
-  //
-  // No hysteresis state: a default State() applies none, which is right here.
-  // The block on the header wobbles because the map repaints per fix; this
-  // screen redraws at most once every five seconds and has nothing to damp.
-  snprintf(line, sizeof(line), tr(STR_GNSS_ACQ_BEST), static_cast<int>(best));
-  renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, line, true);
-  const MapGnssBars::Block block = MapGnssBars::resolve(heard, best, MapGnssBars::State{});
-  const int meterX = metrics.contentSidePadding + renderer.getTextWidth(UI_10_FONT_ID, line) + lineHeight / 2;
-  const int blockWidth = lineHeight / 2;
-  const int blockGap = blockWidth / 3 + 1;
-  const int barHeight = MapGnssBars::barHeightPx(block.heightStep, lineHeight);
-  for (int bar = 0; bar < MapGnssBars::kBarCount; ++bar) {
-    const int bx = meterX + bar * (blockWidth + blockGap);
-    // The header draws nothing at all below the first rung. Here the empty
-    // slots stay as outlines: this screen is up for minutes with nothing to
-    // show, and an instrument that disappears reads as a broken one.
-    const int bh = barHeight > 0 ? barHeight : 2;
-    const int by = y + lineHeight - bh - 2;
-    if (bar < block.bars && barHeight > 0) {
-      renderer.fillRect(bx, by, blockWidth, bh, true);
+    if (heard == 1) {
+      snprintf(heardText, sizeof(heardText), "%s", tr(STR_GNSS_ACQ_HEARD_ONE));
     } else {
-      renderer.drawRect(bx, by, blockWidth, bh, true);
+      snprintf(heardText, sizeof(heardText), tr(STR_GNSS_ACQ_HEARD_MANY), static_cast<int>(heard));
+    }
+    // "not located yet" where it applies, because it is the more specific
+    // answer and it is the one that explains an empty sky over a non-zero
+    // count. Otherwise the general one: there is no fix, and that is why the
+    // screen is up.
+    if (unplaced > 0) {
+      snprintf(line, sizeof(line), tr(STR_GNSS_ACQ_NOT_PLACED), heardText, static_cast<int>(unplaced));
+    } else {
+      snprintf(line, sizeof(line), tr(STR_GNSS_ACQ_NOT_STABLE), heardText);
     }
   }
-  y += lineHeight;
+  renderer.drawText(kHeadlineFont, metrics.contentSidePadding, y, line, true);
+  y += renderer.getLineHeight(kHeadlineFont);
 
-  const uint32_t waitedS = (millis() - enteredMs_) / 1000;
-  snprintf(line, sizeof(line), tr(STR_GNSS_ACQ_WAITED), static_cast<int>(waitedS / 60), static_cast<int>(waitedS % 60));
-  renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, line, true);
-  y += lineHeight;
+  // The best signal as a number, and next to it five slots: the C/N0 ladder the
+  // map header's bars are calibrated against, one lit slot per rung passed
+  // (MapGnssBars::kBestSnrForHeightStep -- 26, 31, 36, 40 dB-Hz). So an empty
+  // meter means nothing worth hearing, one lit slot is a satellite that cannot
+  // read its own ephemeris off the air, and full is open sky.
+  //
+  // **Five slots for four rungs**, which is what the mockup asks for and what
+  // the ladder actually says: the fifth is the "heard, below the first rung"
+  // state, the same one GnssSkyView::snrBucket() draws as its smallest mark.
+  snprintf(line, sizeof(line), tr(STR_GNSS_ACQ_BEST), static_cast<int>(best));
+  renderer.drawText(kBodyFont, metrics.contentSidePadding, y, line, true);
 
-  renderer.drawText(UI_10_FONT_ID, metrics.contentSidePadding, y, tr(STR_GNSS_ACQ_HINT), true);
+  const int bodyHeight = renderer.getLineHeight(kBodyFont);
+  const int slot = bodyHeight * 2 / 3;
+  const int gap = slot / 2;
+  const int meterX = metrics.contentSidePadding + renderer.getTextWidth(kBodyFont, line) + bodyHeight;
+  const int slotTop = y + (bodyHeight - slot) / 2;
+  const int lit = MapGnssBars::resolve(heard, best, MapGnssBars::State{}).heightStep;
+  for (int i = 0; i < kMeterSlots; ++i) {
+    const int sx = meterX + i * (slot + gap);
+    renderer.drawRect(sx, slotTop, slot, slot, true);
+    // Filled solid rather than part-height: at this size a two-thirds bar
+    // inside a box reads as a rendering fault, and the count already carries
+    // the value.
+    if (i < lit) renderer.fillRect(sx, slotTop, slot, slot, true);
+  }
+  y += bodyHeight;
+
+  // One line of advice, smallest on the screen: it is the only thing here a
+  // rider does not need to read twice.
+  renderer.drawText(kSmallFont, metrics.contentSidePadding, y, tr(STR_GNSS_ACQ_HINT), true);
 }
 
 void GnssAcquireActivity::drawActions() {

@@ -9,7 +9,7 @@
 namespace {
 
 // The box the acquisition screen actually gives it on a 480 px wide panel.
-constexpr GnssSkyView::Box kBox{16, 240, 448, 200};
+constexpr GnssSkyView::Box kBox{0, 240, 480, 340};
 
 TEST(GnssSkyView, NorthSitsInTheMiddle) {
   const GnssSkyView::Dot north = GnssSkyView::plot(kBox, 45, 0, 30);
@@ -110,22 +110,86 @@ TEST(GnssSkyView, DotRadiusGrowsWithTheBucket) {
   }
 }
 
-// The ridge is drawn column by column, so a discontinuity is a visible notch in
-// the silhouette rather than a wrong number.
-TEST(GnssSkyView, RidgeIsContinuousAcrossTheBox) {
-  int previous = GnssSkyView::ridgeHeight(kBox, 0);
-  for (int column = 1; column < kBox.w; ++column) {
+// The ridge is the asset's own top edge, so this asserts the wiring rather than
+// a shape: no column may claim more height than the box, and the art has to
+// actually reach somewhere near its own top.
+TEST(GnssSkyView, RidgeStaysInsideTheBoxAndHasPeaks) {
+  int highest = 0;
+  for (int column = 0; column < kBox.w; ++column) {
     const int height = GnssSkyView::ridgeHeight(kBox, column);
-    EXPECT_LE(std::abs(height - previous), 3) << "notch at column " << column;
     EXPECT_GE(height, 0);
-    EXPECT_LT(height, kBox.h);
-    previous = height;
+    EXPECT_LE(height, kBox.h);
+    if (height > highest) highest = height;
+  }
+  EXPECT_GT(highest, kBox.h / 4) << "the horizon is flat -- did the asset bake?";
+}
+
+// A column reads the asset column under it, cropped, and the asset is wider
+// than the panel so the offset is negative and the ridge runs off both edges.
+TEST(GnssSkyView, RidgeFollowsTheAssetWithTheCropTakenOff) {
+  const GnssSkyView::Box wide{0, 0, 540, 400};
+  const int offset = GnssSkyView::ridgeOffset(wide);
+  EXPECT_LT(offset, 0) << "the asset must be wider than the panel";
+  EXPECT_EQ(offset, (540 - MOUNTAINS_WIDTH) / 2);
+
+  for (int column = 0; column < wide.w; column += 7) {
+    const int assetColumn = column - offset;
+    const int raw = static_cast<int>(MountainsTop[assetColumn]) - GnssSkyView::kRidgeCrop;
+    EXPECT_EQ(GnssSkyView::ridgeHeight(wide, column), raw > 0 ? raw : 0) << "at column " << column;
   }
 }
 
-TEST(GnssSkyView, RidgeClampsOutsideTheBox) {
-  EXPECT_EQ(GnssSkyView::ridgeHeight(kBox, -50), GnssSkyView::ridgeHeight(kBox, 0));
-  EXPECT_EQ(GnssSkyView::ridgeHeight(kBox, kBox.w + 50), GnssSkyView::ridgeHeight(kBox, kBox.w - 1));
+// The crop is what seats the art below the horizon. Without it every one of
+// these columns would report the art's full height.
+TEST(GnssSkyView, RidgeIsShorterThanTheAssetByTheCrop) {
+  const GnssSkyView::Box wide{0, 0, 540, 400};
+  const int offset = GnssSkyView::ridgeOffset(wide);
+  int peak = 0;
+  for (int column = 0; column < wide.w; ++column) {
+    const int height = GnssSkyView::ridgeHeight(wide, column);
+    if (height > peak) peak = height;
+  }
+  const int assetPeak = *std::max_element(MountainsTop - offset, MountainsTop - offset + wide.w);
+  EXPECT_EQ(peak, assetPeak - GnssSkyView::kRidgeCrop);
+}
+
+TEST(GnssSkyView, RidgeClampsColumnsOutsideTheAsset) {
+  const GnssSkyView::Box wide{0, 0, 540, 400};
+  const int offset = GnssSkyView::ridgeOffset(wide);
+  // Columns that would index before the asset's first byte or past its last.
+  EXPECT_EQ(GnssSkyView::ridgeHeight(wide, offset - 1), 0);
+  EXPECT_EQ(GnssSkyView::ridgeHeight(wide, offset + MOUNTAINS_WIDTH), 0);
+}
+
+// The plot is inset from the sky's edges, so a satellite due south is drawn
+// whole rather than half off the panel, and the S ticks have room.
+TEST(GnssSkyView, PlotAreaIsInsetAndKeepsSouthOnScreen) {
+  const GnssSkyView::Box band{0, 100, 540, 300};
+  const GnssSkyView::Box plot = GnssSkyView::plotArea(band);
+  EXPECT_EQ(plot.x, band.x + GnssSkyView::kPlotInset);
+  EXPECT_EQ(plot.w, band.w - GnssSkyView::kPlotInset * 2);
+
+  const GnssSkyView::Dot south = GnssSkyView::plot(plot, 45, 180, 40);
+  EXPECT_GE(south.x - south.radius, band.x);
+  const GnssSkyView::Dot southEast = GnssSkyView::plot(plot, 45, 179, 40);
+  EXPECT_LE(southEast.x + southEast.radius, band.x + band.w - 1);
+}
+
+// A band too narrow for the inset falls back to itself rather than to a
+// negative width, which would divide by zero in plot().
+TEST(GnssSkyView, PlotAreaFallsBackOnANarrowBand) {
+  const GnssSkyView::Box narrow{0, 0, 20, 100};
+  const GnssSkyView::Box plot = GnssSkyView::plotArea(narrow);
+  EXPECT_EQ(plot.w, narrow.w);
+}
+
+// A box shorter than the art must not report a peak taller than itself: the
+// screen skips drawing the art there, and the geometry has to agree.
+TEST(GnssSkyView, RidgeClampsToAShortBox) {
+  const GnssSkyView::Box shortBox{0, 0, 480, 40};
+  for (int column = 0; column < shortBox.w; ++column) {
+    EXPECT_LE(GnssSkyView::ridgeHeight(shortBox, column), shortBox.h);
+  }
 }
 
 TEST(GnssSkyView, LowSatellitesReadAsBehindTheRidgeAndHighOnesDoNot) {
