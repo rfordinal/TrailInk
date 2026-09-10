@@ -278,6 +278,38 @@ parallel build in another worktree swapped it mid-compile. Seen 2026-09-06 on
 deleting or hand-editing anything in it breaks every other build on the machine,
 and there was never anything wrong with it.
 
+## `undefined reference to ble_store_config_*` is the shared build cache
+
+A link that failed 2026-09-10 on `t5s3pro`, with every source file compiling
+clean:
+
+```
+ble_store_nvs.c.o: undefined reference to `ble_store_config_num_our_secs'
+ble_store_nvs.c.o: undefined reference to `ble_store_config_our_bond_count'
+collect2: error: ld returned 1 exit status
+```
+
+Nothing in the tree was wrong: the symbols live in `ble_store_config.c`, which
+the same log shows the build **retrieved from cache** rather than compiling. So
+the object in PlatformIO's build cache did not match the flags this environment
+builds NimBLE with. That cache (`~/.buildcache` by default) is per-machine and
+therefore **shared across every worktree and every session**, exactly like
+`framework-arduinoespressif32-libs/` two sections up.
+
+**The fix is a private cache for the run, not a global settings change:**
+
+```
+PLATFORMIO_BUILD_CACHE_DIR=<scratch>/piocache pio run -e t5s3pro
+```
+
+That is an environment variable for one process. `pio settings set` would change
+the cache for every build on the machine, which is the shared-config blast
+radius this repo has already been bitten by -- measure who a shared setting hits
+before moving it.
+
+The two shared-state failures read differently and both look like a broken
+checkout: this one names a symbol, the framework one names a header.
+
 ## `file format not recognized` from objdump is a corrupt object, not a broken tree
 
 Three builds failed 2026-09-05 on

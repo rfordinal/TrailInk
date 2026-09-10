@@ -31,7 +31,7 @@ shown, or labelled open.
 |---|---|
 | Receiver | Quectel L76K, on-board. GPS + GLONASS, both seen |
 | Reached by | `CMD:GNSS` over the USB serial console, `env:t5s3pro` only |
-| On any screen | the map's header row -- a three-state GNSS glyph, see [`map-header-status.md`](map-header-status.md). Nowhere else |
+| On any screen | the map's header row -- a three-state GNSS glyph plus four signal bars, see [`map-header-status.md`](map-header-status.md). Nowhere else |
 | Feeding the map | **yes, ridden 2026-09-01** -- behind `mapGnssPosition`, off by default. See "The map reads it" |
 | Verified on hardware | 3D fix indoors; parser correct for one N/E fix on one date; the rail's ON/OFF path works; the map drawing from the receiver on a ride, with no phone connected |
 | Still open | idle current, whether SPI contention is real, a TTFF from the receiver's own power-on, and the BLE path with `mapGnssPosition 0` |
@@ -752,6 +752,10 @@ the device: the marker followed the rider. The logged ride, read out 2026-09-02,
 then priced it: 526 s to a first fix, three to five satellites, gaps of up to
 21 s while the map renders. Those numbers are below. Step 3 of
 [`gnss-to-map-plan.md`](gnss-to-map-plan.md).
+
+**The wait in front of the map** -- the screen a rider sees while the receiver
+searches, the sky panorama on it, and who owns the rail across the handover --
+is [`gnss-acquire.md`](gnss-acquire.md). Built 2026-09-10, not yet on hardware.
 
 **Three claims in this section are still read off the code, not observed**: the
 BLE path with `mapGnssPosition 0`, the rail's state after a map-exit crash, and

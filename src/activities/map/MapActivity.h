@@ -12,6 +12,7 @@
 #include "MapDebugOverlay.h"
 #include "MapFixTrust.h"
 #include "MapFollow.h"
+#include "MapGnssBars.h"
 #include "MapGnssHeading.h"
 #include "MapMarkerMetrics.h"
 #include "MapModeMask.h"
@@ -157,8 +158,19 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // RouteSelectActivity passes what the rider picked; every other caller --
   // `CMD:GOTO_MAP` over serial, the OOM fallbacks -- passes nothing and gets the
   // map exactly as it was before routes existed.
+  // `adoptRunningGnss` says the receiver was started by the screen that opened
+  // this one (GnssAcquireActivity) and this session now owns it -- so onExit()
+  // drops the rail, which it must not do for a receiver a host `CMD:GNSS ON`
+  // owns. Without it the acquisition screen's handover would leak the rail: the
+  // map would see a running receiver, decline ownership, and leave it powered
+  // after the rider went home.
+  //
+  // `forcePhonePosition` runs this session on BLE even though the GNSS setting
+  // is on -- the rider pressed "phone position" rather than waiting for the sky
+  // (../../../docs/gnss-acquire.md). One position source per session either way
+  // (bleInUse_), so this only chooses which one.
   MapActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const char* routePath = nullptr,
-              bool resumedFromSleep = false);
+              bool resumedFromSleep = false, bool adoptRunningGnss = false, bool forcePhonePosition = false);
 
   bool isMapActivity() const override { return true; }
 
@@ -526,6 +538,9 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // The style for the fix currently on screen. One place, so the full redraw
   // and the partial move cannot disagree about what the marker is claiming.
   MapFixTrust::MarkerStyle markerStyle() const { return MapFixTrust::styleFor(trust_); }
+  // Opens the session on the position the card remembers, with a marker that
+  // says so -- see the comment on the definition.
+  void seedFromPersistedFix();
 
   // Buttons, and the two timers they arm.
   void handleButtons();
@@ -928,6 +943,10 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // nonzero for a slightly different reason and stops being nonzero at a different
   // moment.
   bool resumedFromSleep_ = false;
+  // Both set by the acquisition screen's handover, both constructor arguments --
+  // see the constructor's comment for what each one buys.
+  bool adoptRunningGnss_ = false;
+  bool forcePhonePosition_ = false;
   // True while the panel holds the route overview rather than a follow frame.
   // Fixes are still recorded in that state but do not redraw -- see
   // renderRouteOverview().
@@ -1005,8 +1024,10 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   double lastAcceptedLon_ = 0.0;
   uint32_t lastAcceptedFixMs_ = 0;
 
-  int drawnGnssBars_ = -1;
-  int drawnGnssBarHeight_ = -1;
+  // What the GNSS block last painted, and the memory its hysteresis is measured
+  // against. Starts at "nothing drawn yet" (MapGnssBars::State), which must not
+  // compare equal to an empty block or the first header pass would skip it.
+  MapGnssBars::State drawnGnssBlock_;
 
   // Set from BlePositionServer::begin()'s return in onEnter(). Without this,
   // a BLE stack that failed to come up (plausible: init costs ~75 KB heap,
@@ -1105,11 +1126,17 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
 
   // How much the marker is allowed to claim about the newest fix, and the
   // hysteresis latch behind it. Set by whichever ingest path accepted the fix
-  // (BLE, or the console's `pos`), read only through markerStyle().
+  // (BLE, the console's `pos`, or the receiver), read only through
+  // markerStyle().
   //
   // Starts Unstated, which draws the marker exactly as it drew before any of
-  // this existed -- so a source that says nothing about quality, and a device
-  // that has not had a fix yet, both look like they always did.
+  // this existed -- the right default for a source that says nothing about
+  // quality.
+  //
+  // **A device that has not had a fix yet is NOT that case**, and treating it as
+  // one was a defect: a frame drawn from the card's persisted fix showed a whole
+  // ring and a sharp arrow for a position and heading from another session
+  // (seedFromPersistedFix(), which now sets Loose and Unknown).
   MapFixTrust::Trust trust_{};
   MapFixTrust::State trustState_{};
   // What the marker on the panel is actually claiming right now, recorded where

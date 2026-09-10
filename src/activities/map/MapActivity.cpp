@@ -13,9 +13,9 @@
 #include <vector>
 
 #include "CrossPointSettings.h"
-#include "TouchPolicy.h"
 #include "MapPointMarks.h"
 #include "MapPointShards.h"
+#include "TouchPolicy.h"
 // APP_STATE.showBootScreen: the quick-resume-sleep decision, read in onExit().
 #include "CrossPointState.h"
 #include "GfxRendererCanvas.h"
@@ -26,6 +26,7 @@
 #include "HeldTilesStore.h"
 #include "HikeIcons.h"
 #include "MapFollow.h"
+#include "MapGnssBars.h"
 #include "MapGnssHeading.h"
 #include "MapHatch.h"
 // missingTileAnchorFromLastFix(), for `fake` -- it seeds around the same origin
@@ -321,32 +322,19 @@ constexpr int kHeaderGnssIconToBtGap = 6;
 // zoom hints in drawZoomSideHints().
 constexpr const char* kHeaderUtcSuffix = " UTC";
 
-// GNSS bars: **how many** bars are filled says how many satellites are being
-// tracked, and **how tall** they all are says how strong the best one is. Two
-// numbers in one block, because they answer two different questions and a rider
-// needs both: four weak satellites and two strong ones are both "no fix", and
-// they need opposite things done about them.
+// GNSS bars: **how many** bars are filled says how many satellites the antenna
+// hears, and **how tall** they all are says how strong the best one is.
 //
-// Deliberately not the BLE staircase next to it. Those bars step up in height by
-// design, so a glance tells the two blocks apart without reading either.
+// The thresholds, the hysteresis and the reasons behind every number live in
+// MapGnssBars.h -- pure arithmetic, host-tested, out of this file for the same
+// reason MapGnssHeading and MapFixTrust are.
 //
-// Four is the count that matters: a position needs four satellites, so a full
-// block means a fix is due and a half-full one means it is not coming yet.
-constexpr int kHeaderGnssBarCount = kHeaderBleBarCount;
+// Deliberately not the BLE staircase next to it. Those bars step up in height
+// by design, so a glance tells the two blocks apart without reading either.
+constexpr int kHeaderGnssBarCount = MapGnssBars::kBarCount;
+static_assert(kHeaderGnssBarCount == kHeaderBleBarCount,
+              "the GNSS block reuses the BLE block's width and slot pitch (kHeaderBleBarsWidth)");
 
-// SNR here is C/N0 in dB-Hz, the satellite signal against the noise floor. The
-// steps are the two thresholds this whole problem turns on, measured elsewhere
-// and written down in Gnss::injectAidIni(): below about 24 a satellite is not
-// usable, from 24 it can be tracked when the receiver already holds the
-// ephemeris, and from about 31 the receiver can read the ephemeris off the air
-// by itself. So the top step is "this can fix unaided" and the middle is "this
-// needs aiding", which is exactly the distinction the panel should carry.
-int resolveGnssBarHeight(uint8_t bestSnr) {
-  if (bestSnr == 0) return 0;
-  if (bestSnr < 24) return kHeaderIconHeight / 4;
-  if (bestSnr < 31) return kHeaderIconHeight / 2;
-  return kHeaderIconHeight;
-}
 #endif
 
 // The clock sits leftmost in the status row, between the place name and the
@@ -1589,9 +1577,11 @@ void MapActivity::updateHeaderStatus() {
   bool barsMoved = connected && bars != drawnBleBars_;
 #ifdef ENABLE_GNSS_CMD
   if (!bleInUse_) {
-    const uint8_t tracked = gnss.satsWithSignal();
-    const int gnssBars = tracked > kHeaderGnssBarCount ? kHeaderGnssBarCount : static_cast<int>(tracked);
-    barsMoved = gnssBars != drawnGnssBars_ || resolveGnssBarHeight(gnss.bestSnr()) != drawnGnssBarHeight_;
+    // Against drawnGnssBlock_, which is both the panel's state and the
+    // hysteresis' memory -- resolve() reads it and does not write it, so asking
+    // here and drawing later cannot apply the slack twice.
+    const MapGnssBars::Block block = MapGnssBars::resolve(gnss.satsWithSignal(), gnss.bestSnr(), drawnGnssBlock_);
+    barsMoved = block.bars != drawnGnssBlock_.bars || block.heightStep != drawnGnssBlock_.heightStep;
   }
 #endif
 
@@ -2252,15 +2242,16 @@ void MapActivity::drawHeaderStatusStrip() {
     drawnGnssState_ = state;
 
     // Bars: count = satellites tracked, height = the best one's signal.
+    // MapGnssBars owns both ladders and their hysteresis.
     //
     // An empty block is the useful case, not a missing one. On 2026-09-04 the
     // receiver saw nothing at all for fifteen minutes outdoors and the panel
     // said only "searching" -- a state it also shows when a fix is two seconds
     // away. Four empty slots say "it hears nothing", which is a different
     // problem with a different answer, and it needs no cable to read.
-    const uint8_t tracked = gnss.satsWithSignal();
-    const int filled = tracked > kHeaderGnssBarCount ? kHeaderGnssBarCount : static_cast<int>(tracked);
-    const int barHeight = resolveGnssBarHeight(gnss.bestSnr());
+    const MapGnssBars::Block block = MapGnssBars::resolve(gnss.satsWithSignal(), gnss.bestSnr(), drawnGnssBlock_);
+    const int filled = block.bars;
+    const int barHeight = MapGnssBars::barHeightPx(block.heightStep, kHeaderIconHeight);
     for (int i = 0; i < kHeaderGnssBarCount; ++i) {
       const int x = gnssBarsLeft + i * (kHeaderBleBarWidth + kHeaderBleBarGap);
       if (i < filled && barHeight > 0) {
@@ -2272,8 +2263,7 @@ void MapActivity::drawHeaderStatusStrip() {
         renderer.fillRect(x, iconBottom - 1, kHeaderBleBarWidth, 1, true);
       }
     }
-    drawnGnssBars_ = filled;
-    drawnGnssBarHeight_ = barHeight;
+    drawnGnssBlock_ = MapGnssBars::State{block.bars, block.heightStep};
   }
 #endif
 
@@ -2450,8 +2440,12 @@ void MapActivity::updateDebugOverlay() {
 }
 
 MapActivity::MapActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const char* routePath,
-                         bool resumedFromSleep)
-    : Activity("Map", renderer, mappedInput), transfer_(kTileRoot), resumedFromSleep_(resumedFromSleep) {
+                         bool resumedFromSleep, bool adoptRunningGnss, bool forcePhonePosition)
+    : Activity("Map", renderer, mappedInput),
+      transfer_(kTileRoot),
+      resumedFromSleep_(resumedFromSleep),
+      adoptRunningGnss_(adoptRunningGnss),
+      forcePhonePosition_(forcePhonePosition) {
   if (routePath != nullptr && routePath[0] != '\0') {
     // Truncation would open the wrong file or none, so a path that does not fit
     // is refused outright rather than shortened.
@@ -2487,6 +2481,38 @@ MapActivity::MapActivity(GfxRenderer& renderer, MappedInputManager& mappedInput,
   debugTransferSlot_ = debug_.reserve("transfer");
 }
 
+// The fix off the card, as this session's opening picture.
+//
+// **The marker must claim nothing about it.** It is a position from a previous
+// session -- possibly days old, which is why pinFixAgeWarning() already says
+// "fix from last session" -- and a heading from whenever that was. Both entry
+// branches used to leave `trust_` at Unstated, and Unstated draws a whole ring
+// and a sharp arrow: the marker said "you are here, facing that way" about data
+// that supports neither half.
+//
+// Reported off the panel 2026-09-10, on a receiver that had never had a fix:
+// `gnss on q0 u0 v1 t1 s23` in the debug window, a solid ring and an arrow on
+// the glass. The satellite wait screen is what made it visible -- it hands
+// riders into the map with no fix on purpose -- but the defect is as old as the
+// persisted-fix path.
+//
+// Loose and Unknown, not Unstated: Unstated means "this source does not speak
+// accuracy", and the card does speak. It says the position is from another
+// session, which is exactly the claim the broken ring exists to make.
+void MapActivity::seedFromPersistedFix() {
+  hasReceivedAny_ = true;
+  showingPersistedFix_ = true;
+  lastLatE7_ = SETTINGS.mapLastLatE7;
+  lastLonE7_ = SETTINGS.mapLastLonE7;
+  lastHeading_ = SETTINGS.mapLastHeading;
+  updateManualHeadingCapture(lastHeading_);
+  trust_.pos = MapFixTrust::Pos::Loose;
+  trust_.dir = MapFixTrust::Dir::Unknown;
+  // The latch too, or the first real fix's hysteresis measures against a state
+  // the panel never showed.
+  trustState_.pos = MapFixTrust::Pos::Loose;
+}
+
 void MapActivity::onEnter() {
   Activity::onEnter();
   LOG_DBG(kLogTag, "onEnter start");
@@ -2502,7 +2528,11 @@ void MapActivity::onEnter() {
   // See bleInUse_'s comment (MapActivity.h) for what this costs and why the
   // trade was taken.
 #ifdef ENABLE_GNSS_CMD
-  bleInUse_ = SETTINGS.mapGnssPosition == 0;
+  // forcePhonePosition_ is the rider's own answer to that question, taken on the
+  // acquisition screen while the receiver was still searching: the sky is not
+  // opening, use the phone. It only ever moves the choice towards BLE -- the
+  // setting still decides every entry that did not come through that screen.
+  bleInUse_ = SETTINGS.mapGnssPosition == 0 || forcePhonePosition_;
 #else
   bleInUse_ = true;
 #endif
@@ -2538,11 +2568,15 @@ void MapActivity::onEnter() {
   // two.
   gnssStartedHere_ = false;
   haveGnssFixMs_ = false;
-  if (SETTINGS.mapGnssPosition != 0) {
+  if (!bleInUse_) {
     if (gnss.running()) {
-      // Somebody else's session -- CMD:GNSS ON from the host. Read it, but do
-      // not adopt it: onExit() must leave it exactly as it found it.
-      LOG_INF(kLogTag, "gnss: already running, not started here");
+      // Already up, and who owns it decides whether onExit() may drop the rail.
+      // adoptRunningGnss_ means the acquisition screen started it and handed it
+      // over, so this session finishes the job. Without that flag the owner is
+      // a host `CMD:GNSS ON` session and onExit() must leave it exactly as it
+      // found it.
+      gnssStartedHere_ = adoptRunningGnss_;
+      LOG_INF(kLogTag, "gnss: already running, %s", adoptRunningGnss_ ? "adopted from the acquire screen" : "not ours");
     } else if (gnssStart()) {
       gnssStartedHere_ = true;
       LOG_INF(kLogTag, "gnss: started, rx ring %lu bytes", static_cast<unsigned long>(gnss.rxBufferSize()));
@@ -2753,14 +2787,7 @@ void MapActivity::onEnter() {
   if (route_) {
     // Remembered so a later button press can re-render around it, exactly as the
     // no-route path does.
-    if (SETTINGS.mapHasLastFix) {
-      hasReceivedAny_ = true;
-      showingPersistedFix_ = true;
-      lastLatE7_ = SETTINGS.mapLastLatE7;
-      lastLonE7_ = SETTINGS.mapLastLonE7;
-      lastHeading_ = SETTINGS.mapLastHeading;
-      updateManualHeadingCapture(lastHeading_);
-    }
+    if (SETTINGS.mapHasLastFix) seedFromPersistedFix();
     renderRouteOverview();
     LOG_DBG(kLogTag, "onEnter done");
     return;
@@ -2771,12 +2798,7 @@ void MapActivity::onEnter() {
   // clears the banner (see the BLE/console branches in loop()).
   LOG_DBG(kLogTag, "onEnter: mapHasLastFix=%d", (int)SETTINGS.mapHasLastFix);
   if (SETTINGS.mapHasLastFix) {
-    hasReceivedAny_ = true;
-    showingPersistedFix_ = true;
-    lastLatE7_ = SETTINGS.mapLastLatE7;
-    lastLonE7_ = SETTINGS.mapLastLonE7;
-    lastHeading_ = SETTINGS.mapLastHeading;
-    updateManualHeadingCapture(lastHeading_);
+    seedFromPersistedFix();
     LOG_DBG(kLogTag, "onEnter: rendering persisted fix %d,%d", (int)lastLatE7_, (int)lastLonE7_);
     // Before the read, not after: this is the only viewport reset with no
     // feedback of any kind in front of it (a zoom or menu redraw gets the busy
@@ -2856,8 +2878,9 @@ void MapActivity::onExit() {
   freeink::BlePositionServer::getInstance().end();
 
 #ifdef ENABLE_GNSS_CMD
-  // Only what this activity started. A CMD:GNSS ON session from the host runs
-  // on past the map, which is what a bring-up expects.
+  // Only what this session owns -- what it started, or what the acquisition
+  // screen handed it (adoptRunningGnss_, onEnter()). A CMD:GNSS ON session from
+  // the host runs on past the map, which is what a bring-up expects.
   // Whatever is buffered belongs to the ride that just ended.
   GnssLog::flush();
   if (gnssStartedHere_) {
@@ -5916,14 +5939,20 @@ uint8_t MapActivity::gnssHeadingStep(const GnssFix& fix) {
 // (dead reckoning, no satellites) is excluded here for the same reason
 // pollGnssFix() refuses to draw a position from it.
 MapActivity::GnssHeaderState MapActivity::gnssHeaderState() const {
-  if (SETTINGS.mapGnssPosition == 0 || !gnss.running()) return GnssHeaderState::Off;
+  // bleInUse_ rather than the setting: a session the rider sent to the phone on
+  // the acquisition screen must not draw a receiver glyph, even with the setting
+  // on and a host-owned receiver running next to it.
+  if (bleInUse_ || !gnss.running()) return GnssHeaderState::Off;
   const GnssFix& fix = gnss.fix();
   if (!fix.valid || fix.quality == 0 || fix.quality == 6) return GnssHeaderState::Seeking;
   return GnssHeaderState::Fixed;
 }
 
 void MapActivity::pollGnssFix() {
-  if (SETTINGS.mapGnssPosition == 0) return;
+  // One position source per session (bleInUse_), so a BLE session ignores the
+  // receiver even when something else has it running -- otherwise a rider who
+  // chose the phone would get a dot from whichever source spoke last.
+  if (bleInUse_) return;
   if (!gnss.running()) return;
 
   const GnssFix& fix = gnss.fix();
@@ -5941,12 +5970,18 @@ void MapActivity::pollGnssFix() {
   // showing whatever a previous BLE session had latched, which is to say
   // nothing about the receiver. posTrustForHdop() is that missing half.
   trust_.pos = MapFixTrust::posTrustForHdop(fix.hdop, fix.satsUsed, trustState_);
-  // `trust_.dir` is deliberately left alone. MapFixTrust says outright that
-  // there is no degrees-to-state mapping and that a receiver's course would
-  // have to come from whether it is moving, not from a figure -- and nobody has
-  // written that mapping. Leaving it Unstated draws the glyph this screen has
-  // always drawn, which is honest; inventing a rule here would put a second,
-  // unreviewed opinion next to the one that file exists to hold.
+  // `trust_.dir` goes back to Unstated rather than being computed. MapFixTrust
+  // says outright that there is no degrees-to-state mapping and that a
+  // receiver's course would have to come from whether it is moving, not from a
+  // figure -- and nobody has written that mapping. Unstated draws the glyph this
+  // screen has always drawn, which is honest; inventing a rule here would put a
+  // second, unreviewed opinion next to the one that file exists to hold.
+  //
+  // **Assigned, not left alone.** It used to be left, which was correct while
+  // nothing else ever wrote it. seedFromPersistedFix() now sets Unknown, so a
+  // session that opened on the card's fix would otherwise never draw a heading
+  // again once the receiver started working.
+  trust_.dir = MapFixTrust::Dir::Unstated;
 
   // **One gate, and it only catches a fix that contradicts itself.**
   //
@@ -6709,8 +6744,7 @@ void MapActivity::renderViewport(int32_t latE7, int32_t lonE7, uint8_t headingSt
   // strip, so a snapshot sized for the padlock would leave a sliver of stale box
   // pixels above it, and e-ink holds that indefinitely.
   const int chromeBand = UITheme::getInstance().chromeBandHeight();
-  captureRegion(chromeFront_,
-                Rect{0, renderer.getScreenHeight() - chromeBand, renderer.getScreenWidth(), chromeBand});
+  captureRegion(chromeFront_, Rect{0, renderer.getScreenHeight() - chromeBand, renderer.getScreenWidth(), chromeBand});
   captureRegion(chromeSide_, GUI.sideButtonHintsRect(renderer));
 
   // Composited last, over the map's own bottom-edge pixels rather than into
