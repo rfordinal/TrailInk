@@ -9,6 +9,7 @@
 
 #include "CrossPointSettings.h"
 #include "GnssAccess.h"
+#include "GnssFakeSky.h"
 #include "MapGnssBars.h"
 #include "MappedInputManager.h"
 #include "activities/ActivityManager.h"
@@ -367,6 +368,28 @@ void GnssAcquireActivity::renderScreen() {
   renderer.displayBuffer(HalDisplay::FAST_REFRESH);
 }
 
+// ## The five reads the sky is drawn from, in one place
+//
+// The bench's synthetic sky (GnssFakeSky.h) substitutes here and nowhere else,
+// so **the drawing code cannot tell the two apart** -- which is the only way a
+// screenshot taken with a fake sky says anything about the real one. A branch
+// inside drawSky() would have been a second renderer to keep in step.
+uint8_t GnssAcquireActivity::skyCount() const { return FAKE_SKY.enabled() ? FAKE_SKY.count() : gnss.satelliteCount(); }
+
+const GnssSatellite& GnssAcquireActivity::skySatellite(uint8_t index) const {
+  return FAKE_SKY.enabled() ? FAKE_SKY.satellite(index) : gnss.satellite(index);
+}
+
+uint8_t GnssAcquireActivity::skyInView() const {
+  return FAKE_SKY.enabled() ? FAKE_SKY.satsInView() : gnss.satsInView();
+}
+
+uint8_t GnssAcquireActivity::skyHeard() const {
+  return FAKE_SKY.enabled() ? FAKE_SKY.satsWithSignal() : gnss.satsWithSignal();
+}
+
+uint8_t GnssAcquireActivity::skyBestSnr() const { return FAKE_SKY.enabled() ? FAKE_SKY.bestSnr() : gnss.bestSnr(); }
+
 uint32_t GnssAcquireActivity::waitLimitMs() const {
   const uint8_t index = SETTINGS.mapGnssWaitLimit < kWaitLimitCount ? SETTINGS.mapGnssWaitLimit : 0;
   return static_cast<uint32_t>(kWaitLimitMinutes[index]) * 60u * 1000u;
@@ -455,9 +478,9 @@ void GnssAcquireActivity::drawSky() {
   // The satellites. Diamonds rather than circles because the renderer has no
   // circle primitive, and a diamond reads as a mark on an instrument rather
   // than as a map dot -- which matters on a device whose other screen is a map.
-  const uint8_t count = gnss.satelliteCount();
+  const uint8_t count = skyCount();
   for (uint8_t i = 0; i < count; ++i) {
-    const GnssSatellite& sat = gnss.satellite(i);
+    const GnssSatellite& sat = skySatellite(i);
     // A satellite the receiver has an almanac for but has not located carries
     // no elevation or azimuth, and (0,0) is due north on the horizon -- a real
     // position, and the worst one there is. Those are counted in the readout
@@ -519,8 +542,8 @@ void GnssAcquireActivity::drawReadout() {
 
   renderer.fillRect(0, y, pageWidth, readoutHeight(), false);
 
-  const uint8_t heard = gnss.satsWithSignal();
-  const uint8_t best = gnss.bestSnr();
+  const uint8_t heard = skyHeard();
+  const uint8_t best = skyBestSnr();
 
   // A satellite the receiver hears but has not located carries no elevation or
   // azimuth, so the plot cannot draw it -- (0,0) is due north on the horizon,
@@ -528,9 +551,9 @@ void GnssAcquireActivity::drawReadout() {
   // "2 heard" over a completely empty sky, which reads as a broken plot. So the
   // readout says it in words instead.
   uint8_t unplaced = 0;
-  const uint8_t satellites = gnss.satelliteCount();
+  const uint8_t satellites = skyCount();
   for (uint8_t i = 0; i < satellites; ++i) {
-    const GnssSatellite& sat = gnss.satellite(i);
+    const GnssSatellite& sat = skySatellite(i);
     if (sat.snr > 0 && !sat.hasPosition) ++unplaced;
   }
 
@@ -617,10 +640,10 @@ void GnssAcquireActivity::drawActions() {
 
 GnssAcquireActivity::Drawn GnssAcquireActivity::currentDrawn() const {
   Drawn now;
-  now.inView = gnss.satsInView();
-  now.heard = gnss.satsWithSignal();
-  now.bestSnr = gnss.bestSnr();
-  now.satellites = gnss.satelliteCount();
+  now.inView = skyInView();
+  now.heard = skyHeard();
+  now.bestSnr = skyBestSnr();
+  now.satellites = skyCount();
   now.waitedSteps = static_cast<uint16_t>((millis() - enteredMs_) / kClockStepMs);
   now.receiverUp = gnss.running();
   return now;

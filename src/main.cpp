@@ -45,6 +45,7 @@
 #include "CrossPointState.h"
 #include "DebugInput.h"
 #include "GnssAccess.h"
+#include "GnssFakeSky.h"
 #include "GnssLog.h"
 #include "KOReaderCredentialStore.h"
 #include "MappedInputManager.h"
@@ -1620,6 +1621,9 @@ void loop() {
         //   CMD:GNSS PROBE     ->  GNSS_PROBE:...  (run first, on a cold boot)
         //   CMD:GNSS RELEASE   ->  GNSS_RELEASE:... (writes the rail pin, step 2a)
         //   CMD:GNSS LOG       ->  GNSS_LOG:...    (sizes of the fix log, never its rows)
+        //   CMD:GNSS SKY 12    ->  GNSS_OK:sky=12 heard=9 best=45  (a synthetic
+        //                          sky for the wait screen -- GnssFakeSky.h)
+        //   CMD:GNSS SKY OFF   ->  GNSS_OK:sky=off
         //
         // Reading the reply: `ttff` is NOT an acquisition time on a receiver
         // that was already running -- Gnss::timeToFirstFixMs() spells out why
@@ -1639,7 +1643,28 @@ void loop() {
         argument.trim();
         argument.toUpperCase();
 
-        if (argument == "ON") {
+        if (argument.startsWith("SKY")) {
+          // A synthetic sky for the wait screen, so the plot can be judged
+          // without waiting for weather (GnssFakeSky.h). Feeds the sky and the
+          // readout's counts only -- never a position, so the map is unaffected
+          // and a screenshot taken with this on says nothing about it.
+          String amount = argument.substring(3);
+          amount.trim();
+          if (amount.length() == 0 || amount == "OFF" || amount == "0") {
+            FAKE_SKY.disable();
+            logSerial.printf("GNSS_OK:sky=off\n");
+          } else {
+            const long requested = amount.toInt();
+            if (requested <= 0) {
+              logSerial.printf("GNSS_ERR:sky wants a count or OFF\n");
+            } else {
+              FAKE_SKY.enable(static_cast<uint8_t>(requested > 255 ? 255 : requested));
+              logSerial.printf("GNSS_OK:sky=%u heard=%u best=%u\n", static_cast<unsigned>(FAKE_SKY.count()),
+                               static_cast<unsigned>(FAKE_SKY.satsWithSignal()),
+                               static_cast<unsigned>(FAKE_SKY.bestSnr()));
+            }
+          }
+        } else if (argument == "ON") {
           if (gnssStart()) {
             logSerial.printf("GNSS_OK:on\n");
           } else {

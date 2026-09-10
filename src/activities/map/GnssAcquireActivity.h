@@ -2,6 +2,7 @@
 
 #ifdef ENABLE_GNSS_CMD
 
+#include <Gnss.h>
 #include <I18n.h>
 
 #include <cstdint>
@@ -102,6 +103,14 @@ class GnssAcquireActivity final : public Activity {
   // horizon, and GfxRenderer's blit LOG_ERRs rather than clips. So this one
   // clips: see its comment in the .cpp.
   void drawRidgeClipped(int x, int y, int clipTop, int clipBottom);
+  // The sky the screen draws: the receiver's, or the bench's synthetic one when
+  // it is switched on (GnssFakeSky.h). Every read goes through these five, so
+  // the drawing cannot tell which sky it has.
+  uint8_t skyCount() const;
+  const GnssSatellite& skySatellite(uint8_t index) const;
+  uint8_t skyInView() const;
+  uint8_t skyHeard() const;
+  uint8_t skyBestSnr() const;
   // 0 when the rider chose no limit (CrossPointSettings::mapGnssWaitLimit).
   uint32_t waitLimitMs() const;
   int clockTop() const;
