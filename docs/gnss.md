@@ -885,10 +885,34 @@ CMD:GNSS ON        ->  GNSS_OK:on          powers the rail, opens the UART
 CMD:GNSS OFF       ->  GNSS_OK:off         closes the UART, drops the rail
 CMD:GNSS RAW ON    ->  GNSS_OK:raw=1       every sentence to the log
 CMD:GNSS RAW OFF   ->  GNSS_OK:raw=0
+CMD:GNSS RAW BYTES ON  -> GNSS_OK:rawbytes=1   every byte, hex-dumped
+CMD:GNSS RAW BYTES OFF -> GNSS_OK:rawbytes=0
+CMD:GNSS SEND <hex>    -> GNSS_OK:sent=<n> bytes, or GNSS_ERR:...
 CMD:GNSS PROBE     ->  GNSS_PROBE:...      reads the expander, writes no rail
 CMD:GNSS RELEASE   ->  GNSS_RELEASE:...    stops the expander driving the rail pin,
                                            then puts it back (step 2a)
 ```
+
+**T-210, the devel passthrough T-209's bench needs.** `SEND` writes a
+pre-computed frame verbatim -- hex with or without spaces, no framing and no
+checksum added, since T-209's frames already carry theirs. `RAW ON` only ever
+sees NMEA sentences that passed a `$...*hh` checksum, so a binary CASIC reply
+(an ACK-ACK is `BA CE ...`, no `$` and no NMEA checksum) never reaches it and
+the bench would be blind to every ACK/NAK. `RAW BYTES ON` sees every byte
+before any NMEA framing is applied, so it catches those too -- at the cost of
+seeing ordinary NMEA traffic as well, hex-dumped in 32-byte
+`GNSS_RAWBYTES:` lines. `RAW BYTES OFF` flushes whatever is still buffered.
+Both `Gnss::sendRaw()` and `Gnss::GnssRawByteSink` are new library surface
+(`lib/Gnss/include/Gnss.h`); everything else in this section is unchanged.
+
+**Verified on hardware, 2026-09-11**, build `0.2.1-t5s3pro`, over
+`/dev/ttyACM0`, one continuous serial capture (no reset mid-run). `CMD:GNSS
+SEND BACE04000602FF01000003020602` (the vendor's worked example, no spaces)
+round-tripped: `GNSS_RAWBYTES:BA CE 04 00 05 01 06 02 00 00 0A 02 05 01` --
+`BA CE 04 00 05 01 06 02 ...`, the ACK-ACK V1.1 predicts, showed up in the
+`RAW BYTES ON` log where `RAW ON` would have shown nothing. This is also
+T-209 step 1 ("prove the path"): the path is proven, so T-209's remaining
+steps (2-7) can run.
 
 **`RELEASE` is the one that writes**, which is why it is not folded into `PROBE`.
 It drops the receiver's power for five seconds by design, and a caller who

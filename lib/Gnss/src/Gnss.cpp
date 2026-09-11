@@ -287,6 +287,11 @@ bool Gnss::injectAidIni(double latitude, double longitude, bool haveTime, uint32
   return config_.serial->write(frame, sizeof(frame)) == sizeof(frame);
 }
 
+bool Gnss::sendRaw(const uint8_t* data, size_t length) {
+  if (!running_ || config_.serial == nullptr || data == nullptr || length == 0) return false;
+  return config_.serial->write(data, length) == length;
+}
+
 bool Gnss::sendNmeaSentence(const char* body) {
   if (!running_ || config_.serial == nullptr || body == nullptr) return false;
   const size_t bodyLen = std::strlen(body);
@@ -337,6 +342,10 @@ bool Gnss::poll() {
     if (byteRead < 0) break;
     ++bytesRead_;
     const char c = static_cast<char>(byteRead);
+
+    if (rawByteSink_ != nullptr) {
+      rawByteSink_(static_cast<uint8_t>(byteRead));
+    }
 
     if (c == '$') {
       // A '$' mid-sentence means the previous one was cut short. Restarting is
