@@ -228,6 +228,7 @@ is a re-acquisition and not a first ever fix:
 | 5 s | 55.1 s |
 | 60 s | 47.1 s |
 | 180 s | 95.2 s |
+| a real cold start (`$PCAS10,2`, receiver emptied) | **no fix in 25 minutes** |
 
 **Nothing here is a 2-second hot start, and the 5 s and 60 s rows are the same
 number.** The receiver provably still holds its ephemeris across both (it is
@@ -236,6 +237,16 @@ drops), so what those 50 seconds buy is not ephemeris. It is re-acquiring the
 signal itself: the runs had `used` between 6 and 10 of 18 to 24 in view and
 `hdop` between 1.5 and 7.6, which is a marginal solution, and a marginal
 solution is slow to reappear whatever the receiver remembers.
+
+**The cold row is the one that should scare a duty-cycle design.** The receiver
+was emptied deliberately rather than by a long rail drop, which is the same end
+state and takes one sentence instead of five minutes, and then it sat at the
+same window for 1500 s without ever reaching `q=1`. It was unaided: the firmware
+sends `AID-INI` only from `gnssStart()`, so a wipe with the rail already up
+gets no fresh aiding, and the one frame sent at the start of that run carried
+position but no time (no RTC on this board, no phone in the session). **So the
+526 s of 2026-09-02 is not the ceiling indoors -- through glass a cold start may
+simply never finish.**
 
 **So the honest reading is that this bench measured the window, not the
 module.** Outdoors the same three drops should come back faster, and by how
