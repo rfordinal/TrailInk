@@ -127,11 +127,17 @@ not", and T-244 in the parent repo is the latch itself.
 **Nothing in the ride's log can settle it**, because `power.csv` has no column
 for the rail and none for current. Pricing it is T-250.
 
-## Low power: the L76K has no slower gear, and its two low gears are pins
+## Low power: no slower gear in the Quectel PDFs, and its two low gears are pins
 
 Asked 2026-09-08: the rider on a hike wants a fix once a minute, not once a
-second. Can the receiver be told to work less? **No.** Everything below is read
-off the two vendor PDFs, not measured.
+second. Can the receiver be told to work less? **Not by anything Quectel
+documents.** Everything in this section is read off the two vendor PDFs, not
+measured.
+
+Corrected 2026-09-11: this section used to answer a flat **No**, on the
+strength of those two PDFs alone. The CASIC family protocol spec has one
+candidate command they do not mention, and it is `[open]` rather than absent --
+see "The CASIC spec carries three things the Quectel PDFs do not" below.
 
 **Tracking costs the same as searching.** Quectel L76K Hardware Design V1.0,
 Table 2: acquisition 29 mA, tracking 29 mA, standby 20 uA, backup 8 uA. Having
@@ -143,6 +149,7 @@ the satellites already saves nothing.
 | CASIC `CFG-RATE` | same three values (Table 13) | none |
 | `$PCAS04` constellations | GPS, BDS, GLONASS combinations (2.3.4) | none, Table 2 gives 29 mA for GPS+BDS and for GPS+GLONASS alike |
 | `$PCAS03` sentence rates | which NMEA sentences are emitted (2.3.3) | UART and CPU only, not the RF |
+| CASIC `CFG-RST` `resetMode` 8 | "Controlled GPS stop", a command rather than a pin (V3.6, 2.11.3) | `[open]`, the one candidate for an RF stop -- never sent to a module |
 
 **The two real modes are entered by pins, not by commands** (HW Design 3.3):
 
@@ -210,7 +217,7 @@ UBX-22015849 R04, Tables 16 and 18, 3.0 V, default GPS+Galileo+BDS B1I,
 | Acquisition | 29 mA | ~14.9 mA |
 | Tracking, continuous | 29 mA | ~12.9 mA |
 | Tracking, power save mode | not available | ~7.6 mA |
-| Software standby | not available | ~46 uA |
+| Software standby | `[open]`, see below | ~46 uA |
 | Hardware backup | 8 uA, needs `V_BCKP` | 28 uA, needs `V_BCKP` |
 
 **The row that matters is software standby.** u-blox M10 sleeps and wakes on a
@@ -220,9 +227,105 @@ and no LoRa side effect. It also has documented AssistNow aiding, where CASIC
 ephemeris injection is a dead end -- 4 ACK against 30 NAK, tried and shelved by
 OpenTrailPaper (parent repo `docs/prior-art-opentrailpaper.md`).
 
+**The L76K cell in that row was `not available` until 2026-09-11 and should not
+have been.** It was read off Quectel's PDFs, which describe the pin-entered
+modes and stop. `CFG-RST` `resetMode` 8 is a command, so if it works the L76K
+has a software gear after all and the comparison narrows. Nobody has sent it.
+What stays true either way is the M10Q's *cyclic* tracking: a configured fix
+period is a thing CASIC has no equivalent of at any confidence level.
+
 **This unit is an L76K**, its boot log says so. Our driver is fixed at 9600 and
 plain NMEA (`lib/Gnss/include/Gnss.h:68`), so an M10Q board would not come up
 at all today. Module detection is promise 4 to LilyGo, T-549.
+
+## The CASIC spec carries three things the Quectel PDFs do not
+
+Source: **CASIC Multimode Satellite Navigation Receiver Protocol Specification
+V3.6**, revision dated 2017-04-24, machine translated. We read it in
+OpenTrailPaper's repo at `investigations/ref/casic-protocol-spec.txt`. Read
+2026-09-11 while answering their AGNSS question.
+
+**Weigh it accordingly.** It is a 2017 *family* document and its own example
+strings say URANUS2, where this module reports URANUS5 V5.3.0.0. Nothing below
+has been sent to a receiver. Every item here is a lead, and the Quectel PDFs
+stay the source for anything they actually cover.
+
+### CFG-RST (0x06 0x02): a selective clear, and a possible RF stop
+
+Four byte payload: `navBbrMask` U2 at 0, `resetMode` U1 at 2, `startMode` U1
+at 3. The mask clears battery-backed RAM one bit at a time -- B0 ephemeris,
+B1 almanac, B2 health, B3 ionospheric, B4 receiver position, B5 clock drift,
+B6 crystal, B7 UTC, B8 RTC, B9 configuration. `resetMode`: 0 immediate
+hardware reset, 1 controlled software reset, 2 software reset GPS only,
+4 hardware reset after shutdown, **8 controlled GPS stop, 9 controlled GPS
+activation**. `startMode`: 0 hot, 1 warm, 2 cold, 3 factory, 8 serial output
+and RF off, 9 on.
+
+Being class CFG it is one of the few messages the spec says gets an ACK or a
+NAK (2.5), so an attempt is verifiable rather than silent.
+
+Two things we want from it:
+
+- **`navBbrMask` B1 clears the almanac**, which is the cold start
+  `power-management.md`'s G1 asks for and no command in this firmware sends.
+- **`resetMode` 8 stops the receiver by command**, which is the only candidate
+  for a low-power gear on a board that routes neither `WAKEUP` nor `V_BCKP`.
+
+Neither is free of doubt. The spec documents what a set bit *clears* and never
+says what is preserved, and it never states how `navBbrMask` interacts with
+`startMode` -- so "clear the ephemeris and keep the rest" is a reading, not a
+quote. Whether a stopped receiver keeps its battery-backed RAM, and therefore
+whether restart is a hot start, the spec does not say at all.
+
+### The `$PCAS10` route to the same thing is a trap
+
+`rs` in `$PCAS10,rs` maps to `startMode`, not `resetMode`, and no NMEA sentence
+carries a mask, so `$PCAS10,1` is not the ephemeris-only clear. Worse, 1.6.8
+contradicts itself: its parameter table gives 8 and 9 as serial and RF off and
+on, while its own examples three lines above label both `$PCAS10,8*14` and
+`$PCAS10,9*15` "Factory start". Since 3 is separately documented as factory
+boot, one of the two readings is wrong and the document does not say which. One
+of them wipes the configuration. **Do not send `$PCAS10,8` to a device we care
+about** until the binary `CFG-RST` path has answered the question instead.
+
+### NAV-STATUS (0x01 0x00): per-satellite ephemeris validity, no sky needed
+
+80 byte payload, cycle/query. Offset 8 is `gpsMsgFlag`, `U1 x 32`, one byte per
+GPS satellite: **high nibble almanac validity, low nibble ephemeris validity**,
+values 0 missing, 1 unhealthy, 2 expired, 3 effective. Offset 40 and offset 64
+carry the same encoding for 24 GLONASS and 14 BDS satellites. Offset 78 is
+`gpsUtcionFlag`, UTC in the high nibble and ionospheric in the low.
+
+This is the instrument the ephemeris-retention question has been missing. "Does
+the module keep ephemeris when the rail drops" needs no sky view and no TTFF
+run: read `gpsMsgFlag` before and after, and count the satellites at 3. It is
+also strictly better than `$PCAS06,L`, which returns a count.
+
+### ACK and NAK carry no reason, and the AID class has no ephemeris message
+
+- **2.5 scopes the ACK channel to CFG.** "When the receiver receives a CFG type
+  message" it replies ACK-ACK or ACK-NACK, and "Other messages received by the
+  receiver do not need to reply." The one-in-flight rule -- do not send a second
+  CFG before the first is answered -- is a CFG rule too. Read it as permissive:
+  the spec does not forbid a reply to some other class, it just gives one no
+  meaning.
+- **ACK-NACK (0x05 0x00) has no reason field.** Payload is `clsID` U1 at 0,
+  `msgID` U1 at 1, `res` U2 at 2, reserved. A refusal says which message it
+  refused and nothing about why.
+- **AID (0x0B) advertises A-GPS ephemeris and defines none.** The class table
+  calls it "Auxiliary messages: ephemeris, almanac and other A-GPS data". 2.15
+  then defines exactly two: AID-INI (0x0B 0x01, 56 bytes) and AID-HUI
+  (0x0B 0x03, 60 bytes), both typed "Query/input". There is no AID ephemeris
+  message anywhere in the document.
+
+Which sharpens why OpenTrailPaper's injection went nowhere. `MSG-GPSEPH` is
+0x08 0x07 and class 0x08 is "Satellite message information **output by the
+receiver**"; every message in it is typed "cycle". So injection is not a
+documented input on any message in V3.6, and the 4 ACK / 30 NAK they measured
+is a reply the spec assigns no meaning to. It does not follow that the module
+has no undocumented ingest path -- the vendor's own AGNSS blob is a stream of
+these very 0x08 messages -- only that the protocol document cannot be used to
+debug it.
 
 ## The power rail is shared with the LoRa radio, and that has a sharp edge
 
@@ -1840,7 +1943,11 @@ with `q` 0, which agrees.
   not exotic. `$PCAS10,2` is a plain NMEA cold start and `$PCAS10,3` also
   restores factory settings (Protocol Spec V1.1, 2.3.5), so what is missing is
   our sending it, not the module's support. Until we do, G1 is not executable
-  and only warm figures are obtainable. T-581.
+  and only warm figures are obtainable. T-581. **Sharpened 2026-09-11**: the
+  cleaner instrument is binary `CFG-RST` with `navBbrMask` B1, which clears the
+  almanac alone and is acknowledged, where `$PCAS10,2` clears the backup store
+  wholesale and answers nothing. See "The CASIC spec carries three things the
+  Quectel PDFs do not". The bench pass is T-209.
 - **Cold-start TTFF**, outdoors, from a genuinely cold receiver -- longer than a
   49.7 s outage, or a receiver command that clears the almanac.
 - **Is the SPI contention real at all?** Does GPIO46 go low during a refresh,
@@ -1859,7 +1966,10 @@ with `q` 0, which agrees.
   power question, and given the shared rail a LoRa question too.
 - **Does the module keep its RTC domain when the rail drops?** The whole
   duty-cycling case turns on it: hot start makes a hike mode cost ~2 mA, cold
-  start makes it pointless. T-284, and see "Low power" above.
+  start makes it pointless. T-284, and see "Low power" above. **The measurement
+  no longer needs a sky view**: NAV-STATUS `gpsMsgFlag` reads per-satellite
+  ephemeris validity, so it is a before-and-after read rather than a TTFF run.
+  T-209.
 - **What LilyGo says about the module's control pins.** Whether `WAKEUP`,
   `RESET_N` and `V_BCKP` are routed on the plug-in board, and whether the
   published schematic is simply missing the GNSS sheet. Four questions written
