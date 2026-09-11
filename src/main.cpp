@@ -1663,7 +1663,7 @@ void loop() {
         //                          pre-computed frame verbatim, hex with or
         //                          without spaces; RAW BYTES ON first to see
         //                          the reply)
-        //   CMD:GNSS EPH       ->  asks how many ephemerides are held (RAW ON first)
+        //   CMD:GNSS EPH       ->  dead on the L76K, LT= is always 0 (use NAV-STATUS)
         //   CMD:GNSS PROBE     ->  GNSS_PROBE:...  (run first, on a cold boot)
         //   CMD:GNSS RELEASE   ->  GNSS_RELEASE:... (writes the rail pin, step 2a)
         //   CMD:GNSS LOG       ->  GNSS_LOG:...    (sizes of the fix log, never its rows)
@@ -1961,7 +1961,8 @@ void loop() {
           // (investigations/agnss.md). The module decodes its own ephemeris
           // perfectly given signal, so retention is the lever, not injection.
           if (gnss.sendNmeaSentence("PCAS06,L")) {
-            logSerial.printf("GNSS_OK:eph-query sent, read the reply's LT= with RAW ON\n");
+            logSerial.printf("GNSS_OK:eph-query sent -- LT= reads 0 on the L76K whatever it holds, "
+                             "measured 2026-09-11; enable NAV-STATUS instead\n");
           } else {
             logSerial.printf("GNSS_ERR:eph query not sent, receiver not running\n");
           }

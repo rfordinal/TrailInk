@@ -165,8 +165,11 @@ the satellites already saves nothing.
   returns to continuous mode.
 - **Backup, 8 uA.** Cut `VCC` while `V_BCKP` keeps the RTC domain alive. The
   RTC domain holds the SRAM with time and ephemeris, so the restart is a hot
-  start. **With no backup supply the module cold starts every time**
-  (HW Design 3.2.2).
+  start. The datasheet adds that **with no backup supply the module cold starts
+  every time** (HW Design 3.2.2) -- which is true of a long enough outage and
+  not of a short one: measured 2026-09-11, this board keeps ephemeris and
+  almanac across a rail drop of 180 s and loses them by 300 s, presumably on
+  residual charge. See "Ephemeris survives a rail drop of 180 s and not 300 s".
 
 ### Neither pin reaches the ESP32 on this board
 
@@ -193,7 +196,7 @@ incomplete. Either way `WAKEUP`, `RESET_N` and `V_BCKP` are not on it.
 That leaves exactly one lever: **switch the shared rail**, which also kills the
 SX1262.
 
-### Whether duty cycling pays depends on one unmeasured thing
+### Whether duty cycling pays: measured 2026-09-11
 
 Cost of a power cycle is the TTFF. Datasheet: hot start 2 s, cold start 30 s
 (Table 2). **Measured on this board: 526 s** (car, one ride, 2026-09-02, see
@@ -314,7 +317,7 @@ carry the same encoding for 24 GLONASS and 14 BDS satellites. Offset 78 is
 
 This is the instrument the ephemeris-retention question has been missing, and
 **it is confirmed working on this module, 2026-09-11** -- enabled with
-`CFG-MSG`, not polled, and every offset above read back as described (see "What
+`CFG-MSG`, not polled. Four of the offsets above were read back and checked (see "What
 the bench actually answered"). "Does the module keep ephemeris when the rail
 drops" needs no sky view and no TTFF run: read `gpsMsgFlag` before and after,
 and count the satellites at 3.
@@ -392,12 +395,16 @@ ack   BA CE 04 00 05 01 06 02 00 00 0A 02 05 01
 ```
 
 That payload is `NavBbrMask = 0x01FF`, `ResetMode = 0`, `StartMode = 0` -- bits
-0 to 8 cleared **on a hot start**. Which answers the doubt this file recorded
-earlier the same day: the mask acts independently of `StartMode`, because here
-it clears the ephemeris while `StartMode` says hot. So `NavBbrMask = 0x0001`
-with `ResetMode = 0` and `StartMode = 0` is an ephemeris-only clear, it is
-acknowledged, and **it is the cold-start instrument `power-management.md`'s G1
-has been asking for**, not a reading of a family document.
+0 to 8 on a hot start.
+
+~~So `NavBbrMask = 0x0001` is an ephemeris-only clear and the cold-start
+instrument `power-management.md`'s G1 has been asking for.~~ **Withdrawn the
+same day, on the bench.** The mask is acknowledged and inert: it changes nothing
+`NAV-STATUS` reports, at `ResetMode` 0, 1 or 2. What does empty the receiver is
+`StartMode` 2, which this reading never touched. G1 has its frame, and it is not
+this one -- see "`NavBbrMask` clears nothing, at any `ResetMode`. `StartMode`
+does". The vendor's own comment on the frame above is also wrong about what it
+clears, which is its own section below.
 
 ### Undocumented is not refused, and this module proves it twice
 
@@ -437,6 +444,13 @@ and `CMD:GNSS RAW BYTES ON` (T-210) are what made it readable. The frame
 generator was checked against V1.1's own printed example before anything was
 sent, and it reproduces it byte for byte.
 
+**The captures are the evidence and they are kept**, gitignored, in the parent
+repo at `docs/gnss-captures/2026-09-11-t209/`. They hold the rider's real
+position, so they are never tracked and never quoted raw --
+`docs/gnss-captures/README.md` has the rule. They were written to a `/tmp`
+session scratchpad first and came within a reboot of being lost, which is why
+the rule now exists.
+
 | what was sent | frame | what the module did |
 |---|---|---|
 | the vendor's worked example (the control) | `BACE04000602FF01000003020602` | `ACK-ACK`, `BACE04000501060200000A020501` |
@@ -454,11 +468,24 @@ The task expected an ACK or a NAK and got neither: the receiver never replied
 and never changed what it was doing. That is not the spec's model of a CFG
 message, which says a CFG either gets `ACK-ACK` or `ACK-NACK` (2.5).
 
-**Two controls in the same captures say the silence is the module's and not
-ours.** The vendor's own worked example, sent one minute earlier down the same
-path, answered with exactly the ACK V1.1 prints. And `resetMode` **9**, equally
-undocumented for this part, answered `ACK-ACK` -- so the module does not drop
-every `resetMode` it does not know. It drops this one.
+**Two controls say the silence is the module's and not ours**, and it is worth
+being exact about where they sit, because an audit of this section found the
+first wording overstated them. `resetMode` 8 was sent twice, in two captures.
+One of those captures carried the vendor's worked example **9 seconds earlier**
+down the same path, and it answered with exactly the ACK V1.1 prints. The other
+carried no control at all. `resetMode` **9**, equally undocumented for this
+part, answered `ACK-ACK` -- in a **third** capture. So the module does not drop
+every `resetMode` it does not know, and the path was working either side of the
+silence.
+
+**What this cannot separate**: a frame ignored, from a frame whose ACK was lost
+twice. The firmware reported `sent=14 bytes` both times, which is the UART
+driver and not the wire, and this session did record real RX corruption
+elsewhere (`ferr` 0 to 31). Ten other CASIC frames in the same session all drew
+replies, so two independent losses is a stretch -- but the honest statement is
+that both readings end at the same cell, no software stop is reachable, and the
+one run that would separate them has not been done: vendor example, `resetMode`
+8, vendor example again, in a single capture.
 
 **So the `Software standby` cell is a measured refusal.** There is no software
 gear on the L76K reachable from this board: not by the pin (not routed), not by
@@ -497,8 +524,24 @@ offset 64  U1 x 14  BDS, same encoding
 offset 78  U1  gpsUtcionFlag
 ```
 
-A live read with three satellites decoded: GPS 6, 20 and 29 at ephemeris 3, and
-GPS 0, 5, 6, 14, 20, 21, 22, 23, 28 at almanac 3.
+A live read decoded: **PRN 7, 21 and 30** at ephemeris 3, and PRN 1, 6, 7, 15,
+21, 22, 23, 24 and 29 at almanac 3. (The array index is zero-based and the PRN
+is not, so an index of 6 is PRN 7. An earlier version of this paragraph printed
+the indices as satellite names and claimed a "GPS 0", which does not exist.)
+
+**Which also proves the nibble order rather than assuming it.** The family spec
+says high nibble almanac, low nibble ephemeris, and this file took that on
+trust. The captures settle it: the three satellites flagged with an ephemeris
+are exactly the three carrying signal in `GSV` in the same seconds, at 26 to
+31 dB-Hz, while several flagged only with an almanac were never tracked at all.
+A receiver cannot hold a freshly decoded ephemeris for a satellite it has never
+heard, so the nibbles cannot be the other way round. GLONASS agrees
+independently.
+
+**What was not checked**: the BDS block at offset 64 read all-zero in every
+capture, which is consistency and not confirmation; the GLONASS almanac half was
+computed and never printed; and offset 78 was never decoded at all. The
+documented layout also accounts for 79 of the 80 payload bytes.
 
 ### `CMD:GNSS EPH` does not count ephemerides, and this file said it did
 
@@ -595,23 +638,36 @@ UART.
 | 180 s | **kept**, the same two satellites | **kept**, the same eight |
 | 300 s | **gone**, empty | **gone**, empty |
 
-The almanac is what makes those rows conclusive. An almanac takes 12.5 minutes
-of clean signal to download and the module had been back for about 20 s, so it
-was retained rather than re-acquired.
+**Nothing at all arrives in 21 seconds**, which is how long the module had been
+back when each after-read was taken. That is what makes the rows conclusive, for
+the almanac as much as for the ephemeris. An earlier version argued it from the
+12.5 minutes a full almanac takes to download -- the wrong number for this,
+because that is the whole constellation, and this session's own `nav2` capture
+shows three almanac flags back within about 2.5 minutes of the 300 s wipe. The
+21-second argument needs no such figure.
 
-**So this module has a backup domain that outlives its rail by between 3 and 5
-minutes, on a board that routes no `V_BCKP`.** Residual charge on the module's
-own supply is the obvious reading and this bench cannot prove it; what it does
-prove is that the window exists, that it is minutes rather than hours, and that
-it ends somewhere in the 120 s between these two measurements.
+**So this module holds its data across a rail drop of minutes, on a board that
+routes no `V_BCKP`.** Residual charge on the module's own supply is the obvious
+reading and this bench cannot prove it.
 
-**What it changes.** A map entry that cycles the rail costs a hot start, not the
-cold start several docs here assumed -- so T-287's three timings become a
-confirmation rather than the only evidence. A rest stop longer
-than about 3 minutes with the rail off costs the full cold start, which is the
-526 s measured on 2026-09-02. And **G1's cold start is executable after all**,
-by rail rather than by command: off for 5 minutes, on, and the receiver starts
-from nothing.
+**Read the boundary as one trial per point, not as a constant.** Each row is
+`n=1`, one board, one day, one temperature, one charge state. And if the
+mechanism really is residual charge then the window depends on the discharge
+load, which includes the SX1262 sitting on the same rail -- so a different radio
+state moves it. What the three rows establish is that the window exists and is
+minutes rather than hours. "Between 3 and 5 minutes" is where this board's
+boundary fell once, not a property to design against. Repeats, and a point at
+240 s, are worth having before anything leans on the number.
+
+**What it changes.** A map entry that cycles the rail for a short time comes
+back to a receiver that still holds its ephemeris, where several docs here
+assumed it comes back to nothing. **That is not the same as a measured hot
+start**: no fix was acquired anywhere in this session -- every capture reads
+`q=0` -- so nothing here times a start of any kind, and a hot start also needs
+retained *time*, which was not checked. T-287 still owns the timings and they
+are still the evidence. A stop long enough to pass the window costs the full
+cold start, and the only cold-start figure this project has is the 526 s
+measured on 2026-09-02.
 
 ## The power rail is shared with the LoRa radio, and that has a sharp edge
 
@@ -1107,7 +1163,7 @@ round-tripped: `GNSS_RAWBYTES:BA CE 04 00 05 01 06 02 00 00 0A 02 05 01` --
 `BA CE 04 00 05 01 06 02 ...`, the ACK-ACK V1.1 predicts, showed up in the
 `RAW BYTES ON` log where `RAW ON` would have shown nothing. This is also
 T-209 step 1 ("prove the path"): the path is proven, so T-209's remaining
-steps (2-7) can run.
+steps 2-7 ran the same day.
 
 **`RELEASE` is the one that writes**, which is why it is not folded into `PROBE`.
 It drops the receiver's power for five seconds by design, and a caller who
@@ -2245,19 +2301,14 @@ with `q` 0, which agrees.
 - **Idle current of the GNSS + LoRa pair**, against the BQ27220 or a meter in
   series at the development board's battery connector. Name the instrument.
   T-579.
-- **A cold start cannot be produced today.** `power-management.md`'s G1 row
-  (added on `develop` 2026-08-31, from a branch this session did not create) asks
-  for `CMD:GNSS ON` from
-  a receiver with a cleared almanac, and **no command in this firmware clears
-  one**. Corrected 2026-09-08: the command is not a CASIC binary message and is
-  not exotic. `$PCAS10,2` is a plain NMEA cold start and `$PCAS10,3` also
-  restores factory settings (Protocol Spec V1.1, 2.3.5), so what is missing is
-  our sending it, not the module's support. Until we do, G1 is not executable
-  and only warm figures are obtainable. T-581. **Sharpened 2026-09-11**: the
-  cleaner instrument is binary `CFG-RST` with `navBbrMask` B1, which clears the
-  almanac alone and is acknowledged, where `$PCAS10,2` clears the backup store
-  wholesale and answers nothing. See "The CASIC spec carries three things the
-  Quectel PDFs do not". The bench pass is T-209.
+- ~~**A cold start cannot be produced today.**~~ -- **settled 2026-09-11, two
+  ways.** `CMD:GNSS SEND BACE040006020000010204000704` is `CFG-RST` with
+  `StartMode` 2, and one frame empties ephemeris and almanac both. A rail drop
+  of 300 s does the same and costs five minutes. So `power-management.md`'s G1
+  is executable and the command is the cheap route. **What does not work is the
+  mask**: `navBbrMask` is acknowledged and inert at every `ResetMode`, and this
+  file recommended it for a few hours on 2026-09-11 before the bench refuted it.
+  T-581 still owns the rest of that row.
 - **Cold-start TTFF**, outdoors, from a genuinely cold receiver -- longer than a
   49.7 s outage, or a receiver command that clears the almanac.
 - **Is the SPI contention real at all?** Does GPIO46 go low during a refresh,
@@ -2274,12 +2325,13 @@ with `q` 0, which agrees.
   upstream PR.
 - Whether the receiver can stay powered during a ride or must be duty-cycled. A
   power question, and given the shared rail a LoRa question too.
-- **Does the module keep its RTC domain when the rail drops?** The whole
-  duty-cycling case turns on it: hot start makes a hike mode cost ~2 mA, cold
-  start makes it pointless. T-284, and see "Low power" above. **The measurement
-  no longer needs a sky view**: NAV-STATUS `gpsMsgFlag` reads per-satellite
-  ephemeris validity, so it is a before-and-after read rather than a TTFF run.
-  T-209.
+- ~~**Does the module keep its RTC domain when the rail drops?**~~ -- **measured
+  2026-09-11**: ephemeris and almanac both survive 60 s and 180 s and are gone
+  by 300 s, read with `NAV-STATUS` rather than by a TTFF run. One trial per
+  point, so treat the boundary as this board on this day and not as a constant.
+  What is still open is what a start after a short drop actually costs in
+  seconds, because no fix was acquired anywhere in that session -- that is
+  T-287, and it is the number the hike-mode case turns on.
 - **What LilyGo says about the module's control pins.** Whether `WAKEUP`,
   `RESET_N` and `V_BCKP` are routed on the plug-in board, and whether the
   published schematic is simply missing the GNSS sheet. Four questions written
