@@ -429,7 +429,7 @@ clones" (`src/gps/GPS.cpp`). A pin, on a board that routes one. Ours does not.
 ## What the bench actually answered, 2026-09-11 (T-209)
 
 Every row below was sent to a real L76K and the reply read on the wire. T5 S3
-Pro, build `0.2.1-t5s3pro`, `env:t5s3pro`, `/dev/ttyACM0`, six separate
+Pro, build `0.2.1-t5s3pro`, `env:t5s3pro`, `/dev/ttyACM0`, eleven separate
 captures, board at a window indoors, receiver never opened. `CMD:GNSS SEND`
 and `CMD:GNSS RAW BYTES ON` (T-210) are what made it readable. The frame
 generator was checked against V1.1's own printed example before anything was
