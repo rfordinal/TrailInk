@@ -211,10 +211,38 @@ One fix a minute, arithmetic on the datasheet:
 | cold start, 30 s | ~50 % | ~15 mA |
 | our measured 526 s | never finishes | worse than leaving it on |
 
-So the question that decides the feature is: **does the module keep its RTC
-domain when `LORA_GPS_EN` goes low?** Unmeasured. T-284 in the parent repo
-specifies it: drop the rail for 60 s, raise it, time the first `q=1`. No device
-is opened for this, the rail is switched in firmware.
+The question that decides the feature used to be phrased as **does the module
+keep its RTC domain when `LORA_GPS_EN` goes low?** It does, for minutes (below).
+**That turned out to be the wrong question**, because keeping the data and
+coming back quickly are two different things, and only the second one pays.
+
+**Timed on the bench, 2026-09-11**, indoors at a window, build
+`0.2.1-t5s3pro`. The clock starts when `CMD:GNSS ON` is written, which is when
+the rail goes up, and stops at the first status reply carrying `q=1`. The
+firmware's own `ttff` cannot answer this and says so in
+`Gnss::timeToFirstFixMs()`. Each run established a fix first, so every number
+is a re-acquisition and not a first ever fix:
+
+| rail off for | first `q=1` after |
+|---|---|
+| 5 s | 55.1 s |
+| 60 s | 47.1 s |
+| 180 s | 95.2 s |
+
+**Nothing here is a 2-second hot start, and the 5 s and 60 s rows are the same
+number.** The receiver provably still holds its ephemeris across both (it is
+the same board, the same hour, and `NAV-STATUS` was read across the same
+drops), so what those 50 seconds buy is not ephemeris. It is re-acquiring the
+signal itself: the runs had `used` between 6 and 10 of 18 to 24 in view and
+`hdop` between 1.5 and 7.6, which is a marginal solution, and a marginal
+solution is slow to reappear whatever the receiver remembers.
+
+**So the honest reading is that this bench measured the window, not the
+module.** Outdoors the same three drops should come back faster, and by how
+much is unmeasured. What the numbers do settle is that **a duty cycle cannot be
+designed off the datasheet's 2 s**: at a window it costs about a minute per
+wake, at 29 mA, and T-267's arithmetic in the parent repo turns on exactly that
+figure.
 
 ### The MIA-M10Q variant answers this in software
 
@@ -552,6 +580,13 @@ module fills in. The claim that it is came from reading the command, not from
 running it, and it is withdrawn here: `src/main.cpp`'s `EPH` comment and the
 rail-cycle experiment it proposes both rest on a number that stays zero.
 
+**Re-checked with a fix, later the same day, because the first reading had
+none.** Every capture behind the paragraph above ran at `q=0`, so "whatever it
+is holding" was a generalisation across one condition -- the same shape of error
+that made the first `NavBbrMask` conclusion too wide. Asked again at `q=1`,
+`used=10` of 23 in view, with `NAV-STATUS` reporting 12 GPS ephemerides in the
+same minute: `LT=0`. The claim survives the check.
+
 **`NAV-STATUS` replaces it.** It answers the same question, needs no sky and no
 fix, and it distinguishes almanac from ephemeris per satellite where `LT=`
 offered one integer that never moved.
@@ -619,11 +654,45 @@ one -- instant, no rail, no wait.
 
 **What the mask was believed to do is still unexplained.** V1.1 documents it bit
 by bit and the module acknowledges every frame carrying it. What it does not do
-is change what `NAV-STATUS` reports, at any reset mode. Unmeasured, and worth one
-frame each when a receiver is full again: `StartMode` 1 (warm) is the
-interesting one, because a start that drops ephemeris and keeps the almanac is
-the gear a duty-cycled design actually wants, and `$PCAS10,2` is the NMEA
-spelling of the same cold start.
+is change what `NAV-STATUS` reports, at any reset mode.
+
+### A reader of `NAV-STATUS` must check the CASIC checksum, or it will lie
+
+The bench script reassembled the byte stream out of `GNSS_RAWBYTES:` lines and
+found frames by scanning for `BA CE`. With an empty sky that works. **With a
+full one it does not**: the console saturates, hex lines drop, the stream
+misaligns, and a misaligned frame still parses. On 2026-09-11 one such frame
+decoded to a run time of 46 days on a board that had been up five hours, and to
+ephemeris nibbles of 7, 12 and 14 where the encoding defines 0 to 3.
+
+**The corruption does not announce itself.** Re-reading the same captures with a
+checksum test, several rejected frames decoded to values entirely inside the
+valid range and one satellite away from the truth. Only the 32-bit sum
+separates them.
+
+Every number in this section was re-derived from checksum-verified frames after
+that was added, and none of them changed. The rejection rate was 0 to 8 frames
+per capture, worst where the sky was fullest.
+
+### The module has two states and nothing between them
+
+The two frames left over from that run were sent later the same day, on a
+receiver holding 12 GPS ephemerides, 32 almanacs and 6 GLONASS ephemerides:
+
+| what was sent | frame | reply | after |
+|---|---|---|---|
+| `StartMode` 1, a warm start | `BACE040006020000010104000703` | `ACK-ACK` | **nothing cleared**, 12 / 32 / 6 unchanged, run time 155279 ms to 10828 ms |
+| `$PCAS10,2`, the NMEA cold start | `$PCAS10,2*1E` | NMEA has none | **everything cleared**, 12 / 32 / 6 to 0 / 0 / 0 |
+
+**So there is no middle gear.** A warm start was the interesting candidate --
+drop the ephemeris, keep the almanac, which is what a duty-cycled design would
+want -- and this module does not offer it. `StartMode` 0 and 1 keep everything
+whatever the mask says, `StartMode` 2 empties the lot, and nothing addresses
+one class of data without the other.
+
+**`$PCAS10,2` is worth having anyway**, because it does the same job as the
+binary cold start in one sentence that `Gnss::sendNmeaSentence()` already knows
+how to checksum. G1 can use either.
 
 ### Ephemeris survives a rail drop of 180 s and not 300 s
 
