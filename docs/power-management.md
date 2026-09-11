@@ -200,7 +200,7 @@ odstraňuje, nie vlastnosť, ktorou sa produkt vysvetľuje.").
 
 | # | Measurement | Answers | Method |
 |---|---|---|---|
-| G1 | GNSS cold start, current x duration | the worst case a duty-cycled design pays on every wake, if G5 says warm start is not available | rail off 5 min, then `CMD:GNSS ON`, meter in series (T-579). **The method changed 2026-09-11**: no command clears this module, a 300 s rail drop does |
+| G1 | GNSS cold start, current x duration | the worst case a duty-cycled design pays on every wake, if G5 says warm start is not available | `CMD:GNSS SEND BACE040006020000010204000704` (`CFG-RST`, `StartMode` 2), meter in series (T-579). **Measured 2026-09-11**: that one frame empties ephemeris and almanac both. A rail drop of 300 s does the same and costs 5 minutes |
 | G2 | GNSS warm/hot start, current x duration, ephemeris fresh | what a low-duty background fix actually costs -- the number the whole scenario turns on | same rig, receiver left powered between legs |
 | G3 | GNSS continuous tracking, steady state | the standalone-only floor (no phone) | `CMD:GNSS ON`, left running, no BLE |
 | G4 | BLE idle/advertising baseline on S3 | S3's own number -- the C3 rows above do not apply | advertising, no phone, meter in series |
@@ -224,6 +224,10 @@ a number):
 - **Where between 180 s and 300 s the window closes.** Two measurements bracket
   it and nothing narrows it; each extra point costs one rail drop and one
   `NAV-STATUS` read. It matters because it is the scheduler's maximum sleep.
+- **Whether `StartMode` 1 gives a warm start that keeps the almanac.**
+  `StartMode` 2 is measured and empties everything; 1 is untried. A start that
+  drops the ephemeris and keeps the almanac would be the gear this table's G2
+  row is about, and it costs one frame to find out.
 - **Ephemeris validity window** -- how long before a warm start degrades
   toward a cold one. Sets the maximum interval a "fix every N minutes"
   scheduler can use before it stops being warm.
