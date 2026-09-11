@@ -135,9 +135,16 @@ documents.** Everything in this section is read off the two vendor PDFs, not
 measured.
 
 Corrected 2026-09-11: this section used to answer a flat **No**, on the
-strength of those two PDFs alone. The CASIC family protocol spec has one
-candidate command they do not mention, and it is `[open]` rather than absent --
-see "The CASIC spec carries three things the Quectel PDFs do not" below.
+strength of the two *hardware* PDFs alone. The CASIC family protocol spec has
+candidate commands they do not mention -- see "The CASIC spec carries three
+things the Quectel PDFs do not" below.
+
+**Corrected again the same day, and mostly back:** Quectel publishes a third
+document, the **L76K GNSS Protocol Specification V1.1**, and it is the vendor
+speaking about this exact module rather than about the chip family. It says no
+to every candidate. See "What Quectel's own protocol document actually
+supports" -- the flat **No** is close to right after all, and what survives is
+that *undocumented* is not the same as *refused*.
 
 **Tracking costs the same as searching.** Quectel L76K Hardware Design V1.0,
 Table 2: acquisition 29 mA, tracking 29 mA, standby 20 uA, backup 8 uA. Having
@@ -149,7 +156,8 @@ the satellites already saves nothing.
 | CASIC `CFG-RATE` | same three values (Table 13) | none |
 | `$PCAS04` constellations | GPS, BDS, GLONASS combinations (2.3.4) | none, Table 2 gives 29 mA for GPS+BDS and for GPS+GLONASS alike |
 | `$PCAS03` sentence rates | which NMEA sentences are emitted (2.3.3) | UART and CPU only, not the RF |
-| CASIC `CFG-RST` `resetMode` 8 | "Controlled GPS stop", a command rather than a pin (V3.6, 2.11.3) | `[open]`, the one candidate for an RF stop -- never sent to a module |
+| CASIC `CFG-RST` `resetMode` 8 | "Controlled GPS stop" in the CASIC *family* spec (V3.6, 2.11.3). **Quectel's L76K document does not list it**: its `ResetMode` is 0, 1, 2, 4 | `[open]`, and weaker than it looked -- the only candidate left for an RF stop, never sent to a module. T-209 |
+| `$PCAS12,stdbysec` | timed standby with auto-wake, up to 65535 s -- **but the CASIC spec says "5L low power module supports the command"**, and Quectel's L76K document has no `PCAS12` at all | `[open]`, probably a different part. Cheap to probe, T-209 |
 
 **The two real modes are entered by pins, not by commands** (HW Design 3.3):
 
@@ -227,12 +235,16 @@ and no LoRa side effect. It also has documented AssistNow aiding, where CASIC
 ephemeris injection is a dead end -- 4 ACK against 30 NAK, tried and shelved by
 OpenTrailPaper (parent repo `docs/prior-art-opentrailpaper.md`).
 
-**The L76K cell in that row was `not available` until 2026-09-11 and should not
-have been.** It was read off Quectel's PDFs, which describe the pin-entered
-modes and stop. `CFG-RST` `resetMode` 8 is a command, so if it works the L76K
-has a software gear after all and the comparison narrows. Nobody has sent it.
-What stays true either way is the M10Q's *cyclic* tracking: a configured fix
-period is a thing CASIC has no equivalent of at any confidence level.
+**That cell read `not available`, then `[open]`, both on 2026-09-11.** The first
+was written off Quectel's two *hardware* PDFs and was a claim the evidence did
+not carry. The second went too far the other way on a CASIC *family* document.
+Quectel's own **L76K GNSS Protocol Specification V1.1** then answered it: no
+`PCAS12`, no `ResetMode` 8, no occurrence of the word standby anywhere. The cell
+stays `[open]` only because V1.1 is a documented subset and this module accepts
+two commands it omits -- see "Undocumented is not refused". Expect a refusal;
+T-209 is one frame and settles it. What stays true regardless is the M10Q's
+*cyclic* tracking: a configured fix period is a thing CASIC has no equivalent of
+at any confidence level.
 
 **This unit is an L76K**, its boot log says so. Our driver is fixed at 9600 and
 plain NMEA (`lib/Gnss/include/Gnss.h:68`), so an M10Q board would not come up
@@ -326,6 +338,85 @@ is a reply the spec assigns no meaning to. It does not follow that the module
 has no undocumented ingest path -- the vendor's own AGNSS blob is a stream of
 these very 0x08 messages -- only that the protocol document cannot be used to
 debug it.
+
+## What Quectel's own protocol document actually supports
+
+Read 2026-09-11: **Quectel L76K GNSS Protocol Specification V1.1**, the vendor
+document for this module rather than for the CASIC chip family. It is the
+authority the earlier sections were missing, and it narrows almost everything.
+(`waveshare.com` serves it; `curl` needs a browser user agent or Waveshare's WAF
+returns a CAPTCHA page with a `.pdf` name.)
+
+**The entire command surface it documents:**
+
+| | What V1.1 lists |
+|---|---|
+| NMEA commands | `PCAS01`, `PCAS02`, `PCAS03`, `PCAS04`, `PCAS10`. **Five.** |
+| `$PCAS10,<Flag>` | 0 hot, 1 warm, 2 cold, 3 cold plus factory reset. **No 8, no 9.** |
+| CASIC messages | `ACK-NACK`, `ACK-ACK`, `CFG-PRT`, `CFG-MSG`, `CFG-RST`, `CFG-RATE`. **Six.** |
+| `CFG-RST` `ResetMode` | 0 immediate hardware reset, 1 software reset, 2 software reset GPS only, 4 hardware reset after power off. **No 8.** |
+| `CFG-RST` `StartMode` | 0 hot, 1 warm, 2 cold, 3 factory. **No 8, no 9.** |
+| standby, sleep, low power | **zero occurrences in the document.** |
+
+So the three things this file got excited about on 2026-09-11 come back down:
+
+- **`$PCAS10,8` does not exist for this module.** The self-contradiction in the
+  family spec's 1.6.8 is real and is not our problem: Quectel documents four
+  flag values and none of them is 8. The warning stands for anyone on a bare
+  AT6558; it is moot here.
+- **`resetMode` 8 is not documented for this module either.** It stays the only
+  candidate for a software RF stop, and it is now a long shot rather than a
+  lead.
+- **`$PCAS12` is not this part.** Two independent transcriptions of the CASIC
+  spec carry `$PCAS12,stdbysec*CS` -- timed standby, auto-wake, up to 65535 s --
+  and both say the **5L low power module** supports it. Our V3.6 extract does
+  not contain it at all: it runs 1.6.8 `CAS10` straight to 1.6.9 `CAS20`.
+
+**And one thing gets stronger instead.** `CFG-RST`'s `NavBbrMask` is documented
+by Quectel for this module, bit for bit, with Bit 0 ephemeris and Bit 1 almanac,
+and V1.1 prints a worked frame and the ACK that answers it:
+
+```
+send  BA CE 04 00 06 02 FF 01 00 00 03 02 06 02
+ack   BA CE 04 00 05 01 06 02 00 00 0A 02 05 01
+```
+
+That payload is `NavBbrMask = 0x01FF`, `ResetMode = 0`, `StartMode = 0` -- bits
+0 to 8 cleared **on a hot start**. Which answers the doubt this file recorded
+earlier the same day: the mask acts independently of `StartMode`, because here
+it clears the ephemeris while `StartMode` says hot. So `NavBbrMask = 0x0001`
+with `ResetMode = 0` and `StartMode = 0` is an ephemeris-only clear, it is
+acknowledged, and **it is the cold-start instrument `power-management.md`'s G1
+has been asking for**, not a reading of a family document.
+
+### Undocumented is not refused, and this module proves it twice
+
+Nothing above says the silicon refuses what Quectel leaves out. Two commands
+this project and others already rely on are **absent from those six messages and
+five sentences**:
+
+- **`$PCAS06`**, which `CMD:GNSS EPH` sends to ask how many ephemerides are
+  held. Meshtastic probes L76K with `$PCAS06,0` and reads the `$GPTXT` version
+  line back.
+- **`AID-INI`** (0x0B 0x01), which `Gnss::injectAidIni()` sends on every map
+  entry. The whole AID class is missing from V1.1.
+
+Both work. So V1.1 is a documented subset, not an inventory of the firmware, and
+`resetMode` 8, `$PCAS12` and `NAV-STATUS` are each worth exactly one frame on a
+bench before being written off. That is T-209, and T-210 is the passthrough it
+needs.
+
+### The vendor was asked this directly, and answered
+
+Quectel forum, 2025-08-08, a question about low-power periodic location
+acquisition on the L76K. Their engineer: "You can lower the standby pin to enter
+the standby mode, disconnect the VCC power supply for at least 1 second and keep
+V_BCKP powered normally." Pin, or cut `VCC` with `V_BCKP` alive. No command was
+offered.
+
+Meshtastic agrees in code rather than in prose: it supports the L76K, and its
+standby is `PIN_GPS_STANDBY`, guarded by a comment naming "L76B, L76K and
+clones" (`src/gps/GPS.cpp`). A pin, on a board that routes one. Ours does not.
 
 ## The power rail is shared with the LoRa radio, and that has a sharp edge
 
