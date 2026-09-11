@@ -578,6 +578,43 @@ static const char* gnssResetReasonName() {
 static void gnssRawSink(const char* sentence, size_t length) {
   logSerial.printf("GNSS_RAW:$%.*s\n", static_cast<int>(length), sentence);
 }
+
+// CMD:GNSS RAW BYTES passthrough. T-210: a CASIC binary reply (e.g. an
+// ACK-ACK, `BA CE ...`) has no '$' and no NMEA checksum, so gnssRawSink()
+// above never sees it -- every decisive answer in T-209's bench is exactly
+// this shape. Buffered rather than printed per byte: at ~800 B/s that would be
+// 800 log lines a second even with nothing but ordinary NMEA flowing, since
+// this sink sees every byte, not only reply bytes. Flushed on either a 32-byte
+// line or a 50 ms gap since the last byte, which is generous against a 9600
+// baud line's own byte time (~1 ms) and short against the pause between two
+// unrelated sentences.
+static uint8_t gGnssRawByteBuf[32];
+static size_t gGnssRawByteLen = 0;
+static unsigned long gGnssRawByteLastMs = 0;
+
+static void gnssFlushRawBytes() {
+  if (gGnssRawByteLen == 0) return;
+  char hex[sizeof(gGnssRawByteBuf) * 3 + 1];
+  size_t pos = 0;
+  for (size_t i = 0; i < gGnssRawByteLen; ++i) {
+    pos +=
+        static_cast<size_t>(snprintf(hex + pos, sizeof(hex) - pos, "%02X ", static_cast<unsigned>(gGnssRawByteBuf[i])));
+  }
+  logSerial.printf("GNSS_RAWBYTES:%s\n", hex);
+  gGnssRawByteLen = 0;
+}
+
+static void gnssRawByteSink(uint8_t b) {
+  const unsigned long now = millis();
+  if (gGnssRawByteLen > 0 && (now - gGnssRawByteLastMs) > 50) {
+    gnssFlushRawBytes();
+  }
+  gGnssRawByteBuf[gGnssRawByteLen++] = b;
+  gGnssRawByteLastMs = now;
+  if (gGnssRawByteLen >= sizeof(gGnssRawByteBuf)) {
+    gnssFlushRawBytes();
+  }
+}
 #endif
 FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts());
 static unsigned long allowSleepAt = 0;
@@ -1617,6 +1654,15 @@ void loop() {
         //   CMD:GNSS OFF       ->  GNSS_OK:off
         //   CMD:GNSS RAW ON    ->  GNSS_OK:raw=1   (every sentence to the log)
         //   CMD:GNSS RAW OFF   ->  GNSS_OK:raw=0
+        //   CMD:GNSS RAW BYTES ON  ->  GNSS_OK:rawbytes=1  (every byte, hex-dumped
+        //                          in GNSS_RAWBYTES: lines -- sees a binary CASIC
+        //                          reply that RAW ON cannot, because it has no '$'
+        //                          and no NMEA checksum)
+        //   CMD:GNSS RAW BYTES OFF ->  GNSS_OK:rawbytes=0
+        //   CMD:GNSS SEND <hex>    ->  GNSS_OK:sent=<n> bytes  (T-210: write a
+        //                          pre-computed frame verbatim, hex with or
+        //                          without spaces; RAW BYTES ON first to see
+        //                          the reply)
         //   CMD:GNSS EPH       ->  asks how many ephemerides are held (RAW ON first)
         //   CMD:GNSS PROBE     ->  GNSS_PROBE:...  (run first, on a cold boot)
         //   CMD:GNSS RELEASE   ->  GNSS_RELEASE:... (writes the rail pin, step 2a)
@@ -1835,6 +1881,61 @@ void loop() {
         } else if (argument == "RAW OFF") {
           gnss.setRawSink(nullptr);
           logSerial.printf("GNSS_OK:raw=0\n");
+        } else if (argument == "RAW BYTES ON") {
+          gnss.setRawByteSink(gnssRawByteSink);
+          logSerial.printf("GNSS_OK:rawbytes=1\n");
+        } else if (argument == "RAW BYTES OFF") {
+          gnss.setRawByteSink(nullptr);
+          gnssFlushRawBytes();  // the tail of the last reply may still be buffered
+          logSerial.printf("GNSS_OK:rawbytes=0\n");
+        } else if (argument.startsWith("SEND")) {
+          // T-210: write a pre-computed frame verbatim -- T-209's bench sends
+          // ready-made CASIC bytes, so this needs no framing and no checksum,
+          // only a hex decode. Hex with or without spaces, e.g.
+          // "SEND BACE0400060206FF01000003020602" and
+          // "SEND BA CE 04 00 06 02 06 FF 01 00 00 03 02 06 02" both work;
+          // RAW BYTES ON first, or the reply goes nowhere (same rule as EPH's
+          // PCAS06 query above).
+          String hexArg = argument.substring(4);
+          hexArg.trim();
+          String hexClean;
+          hexClean.reserve(hexArg.length());
+          for (unsigned int i = 0; i < hexArg.length(); ++i) {
+            const char ch = hexArg[i];
+            if (ch != ' ') hexClean += ch;
+          }
+          static constexpr size_t kMaxSendBytes = 128;
+          const auto hexNibble = [](char ch) -> int {
+            if (ch >= '0' && ch <= '9') return ch - '0';
+            if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+            return -1;
+          };
+          if (hexClean.length() == 0 || (hexClean.length() % 2) != 0) {
+            logSerial.printf("GNSS_ERR:SEND wants an even number of hex digits\n");
+          } else if (hexClean.length() / 2 > kMaxSendBytes) {
+            logSerial.printf("GNSS_ERR:SEND payload too long, max %u bytes\n", static_cast<unsigned>(kMaxSendBytes));
+          } else {
+            const size_t byteCount = hexClean.length() / 2;
+            uint8_t bytes[kMaxSendBytes];
+            bool badHex = false;
+            for (size_t i = 0; i < byteCount; ++i) {
+              const int hi = hexNibble(hexClean[i * 2]);
+              const int lo = hexNibble(hexClean[i * 2 + 1]);
+              if (hi < 0 || lo < 0) {
+                badHex = true;
+                break;
+              }
+              bytes[i] = static_cast<uint8_t>((hi << 4) | lo);
+            }
+            if (badHex) {
+              logSerial.printf("GNSS_ERR:SEND has non-hex characters\n");
+            } else if (gnss.sendRaw(bytes, byteCount)) {
+              logSerial.printf("GNSS_OK:sent=%u bytes, RAW BYTES ON to see the reply\n",
+                               static_cast<unsigned>(byteCount));
+            } else {
+              logSerial.printf("GNSS_ERR:send failed, receiver not running\n");
+            }
+          }
         } else if (argument == "EPH") {
           // Ask a CASIC receiver how many valid ephemerides it is holding. The
           // answer comes back as an ordinary sentence carrying `LT=<n>`, so it
@@ -1862,7 +1963,9 @@ void loop() {
             logSerial.printf("GNSS_ERR:eph query not sent, receiver not running\n");
           }
         } else if (argument.length() > 0) {
-          logSerial.printf("GNSS_ERR:expected ON, OFF, PROBE, RELEASE, EPH, RAW ON or RAW OFF\n");
+          logSerial.printf(
+              "GNSS_ERR:expected ON, OFF, PROBE, RELEASE, EPH, SEND <hex>, RAW ON, RAW OFF, RAW BYTES ON or RAW "
+              "BYTES OFF\n");
         } else if (!gnss.running()) {
           logSerial.printf("GNSS_OFF\n");
         } else {

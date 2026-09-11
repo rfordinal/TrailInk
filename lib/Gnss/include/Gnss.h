@@ -82,6 +82,13 @@ struct GnssSatellite {
 // C string and ignore `length`. Stated because a caller already relies on it.
 using GnssRawSink = void (*)(const char* sentence, size_t length);
 
+// Raw byte sink: every byte poll() reads off the UART, before any NMEA framing
+// is applied -- unlike GnssRawSink above, which only sees sentences that passed
+// the '$...*hh' checksum. A CASIC binary reply (e.g. an ACK-ACK, `BA CE ...`)
+// has no '$' and no NMEA checksum, so it never reaches GnssRawSink; it lands
+// here, byte by byte, as it arrives. Called from poll(), on the caller's task.
+using GnssRawByteSink = void (*)(uint8_t byte);
+
 struct GnssConfig {
   // Not owned. Must outlive the Gnss instance.
   HardwareSerial* serial = nullptr;
@@ -171,6 +178,12 @@ class Gnss {
   // not know, so a `$PCAS...` answer reaches the raw sink (setRawSink) and
   // nowhere else -- turn that on before asking, or the answer goes nowhere.
   bool sendNmeaSentence(const char* body);
+
+  // Send `length` bytes to the receiver exactly as given -- no framing, no
+  // checksum added. For a pre-built binary frame (CASIC or otherwise) whose
+  // checksum the caller already computed. Returns false if not running or the
+  // write was short.
+  bool sendRaw(const uint8_t* data, size_t length);
 
   // Consume every byte the UART has buffered and parse what completes. Returns
   // true if this call changed anything in fix() -- position, quality, speed,
@@ -317,6 +330,9 @@ class Gnss {
 
   // Pass nullptr to stop.
   void setRawSink(GnssRawSink sink) { rawSink_ = sink; }
+  // Pass nullptr to stop. See GnssRawByteSink above for why this exists
+  // alongside setRawSink().
+  void setRawByteSink(GnssRawByteSink sink) { rawByteSink_ = sink; }
 
  private:
   // NMEA caps a sentence at 82 characters including the delimiters; the extra
@@ -394,4 +410,5 @@ class Gnss {
   uint32_t bytesRead_ = 0;
 
   GnssRawSink rawSink_ = nullptr;
+  GnssRawByteSink rawByteSink_ = nullptr;
 };
