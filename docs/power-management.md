@@ -200,7 +200,7 @@ odstraňuje, nie vlastnosť, ktorou sa produkt vysvetľuje.").
 
 | # | Measurement | Answers | Method |
 |---|---|---|---|
-| G1 | GNSS cold start, current x duration | the worst case a duty-cycled design pays on every wake, if G5 says warm start is not available | `CMD:GNSS ON` from a receiver with cleared almanac, meter in series (T-579) |
+| G1 | GNSS cold start, current x duration | the worst case a duty-cycled design pays on every wake, if G5 says warm start is not available | rail off 5 min, then `CMD:GNSS ON`, meter in series (T-579). **The method changed 2026-09-11**: no command clears this module, a 300 s rail drop does |
 | G2 | GNSS warm/hot start, current x duration, ephemeris fresh | what a low-duty background fix actually costs -- the number the whole scenario turns on | same rig, receiver left powered between legs |
 | G3 | GNSS continuous tracking, steady state | the standalone-only floor (no phone) | `CMD:GNSS ON`, left running, no BLE |
 | G4 | BLE idle/advertising baseline on S3 | S3's own number -- the C3 rows above do not apply | advertising, no phone, meter in series |
@@ -212,11 +212,18 @@ odstraňuje, nie vlastnosť, ktorou sa produkt vysvetľuje.").
 a number):
 
 - **Does the GNSS chip keep ephemeris across a full power-off (a VBAT/backup
-  domain), or does every rail cycle force a cold start?** This decides whether
-  a low-duty periodic-fix design gets G2's price or G1's on every wake -- the
-  entire point of duty-cycling collapses if it is always G1. `docs/gnss.md`
-  line 346 already flags the survives-a-power-cycle question as open, and
-  T-579 is the same idle-current task this reuses.
+  domain), or does every rail cycle force a cold start?** **Answered on
+  hardware, 2026-09-11 (T-209): it keeps it, for a few minutes.** The L76K on
+  the T5 S3 Pro came back holding the same ephemeris and the same almanac after
+  a rail drop of 60 s and of 180 s, and came back empty after 300 s. So a
+  duty-cycled design that wakes more often than about every 3 minutes pays G2
+  and not G1, and one that sleeps longer pays G1. The instrument is
+  `NAV-STATUS`, not `CMD:GNSS EPH` -- `docs/gnss.md`, "Ephemeris survives a
+  rail drop of 180 s and not 300 s". T-579 is still the idle-current task this
+  reuses.
+- **Where between 180 s and 300 s the window closes.** Two measurements bracket
+  it and nothing narrows it; each extra point costs one rail drop and one
+  `NAV-STATUS` read. It matters because it is the scheduler's maximum sleep.
 - **Ephemeris validity window** -- how long before a warm start degrades
   toward a cold one. Sets the maximum interval a "fix every N minutes"
   scheduler can use before it stops being warm.

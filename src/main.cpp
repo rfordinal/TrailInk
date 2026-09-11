@@ -1941,15 +1941,18 @@ void loop() {
           // answer comes back as an ordinary sentence carrying `LT=<n>`, so it
           // reaches the raw sink and nothing else -- CMD:GNSS RAW ON first.
           //
-          // **This is the instrument for the one question that has been open
-          // since 2026-09-02: does a rail cycle cost the receiver its
-          // ephemeris?** Ask, `CMD:GNSS OFF`, wait, `CMD:GNSS ON`, ask again. A
-          // count that survives means the module has a backup domain and every
-          // doc calling a map entry a cold start is wrong; a count that drops to
-          // zero means the map screen throws away the one thing the receiver
-          // cannot quickly get back. **It needs no sky and no fix**, which is
-          // why it is worth having: the same question outdoors costs ten minutes
-          // per attempt and answers ambiguously.
+          // **It does not work on the L76K, measured 2026-09-11 (T-209): `LT=`
+          // is 0 in every reply, including seconds when NAV-STATUS reported
+          // three effective ephemerides.** So this command answers nothing on
+          // this board and is kept only because a future receiver may fill the
+          // field in.
+          //
+          // **The working instrument is NAV-STATUS (0x01 0x00)**, enabled with
+          // CFG-MSG and read per satellite: it is what answered the question
+          // this comment used to claim for LT=, namely whether a rail cycle
+          // costs the receiver its ephemeris. It does not below about 3 min and
+          // does above about 5. docs/gnss.md, "What the bench actually
+          // answered".
           //
           // Reading it rather than injecting it is the whole point. Ephemeris
           // *injection* on this module is a known unsolved problem -- CASIC's
