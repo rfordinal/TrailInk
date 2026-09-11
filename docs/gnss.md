@@ -282,7 +282,9 @@ paragraphs above:
 
 - **`navBbrMask` was going to be the cold start** `power-management.md`'s G1
   asks for. Measured: the frame is acknowledged and restarts the receiver, and
-  the ephemeris and almanac are still there afterwards. Both masks tried.
+  the ephemeris and almanac are still there afterwards -- two masks, and all
+  three reset modes. **`StartMode` 2 is the one that does empty it**, so G1 has
+  its frame; it is just not the mask.
 - **`resetMode` 8 was the only candidate for a low-power gear.** Measured: the
   module never answers it and never changes behaviour, while `resetMode` 9 and
   the vendor's own frame both answer on the same path.
@@ -429,7 +431,7 @@ clones" (`src/gps/GPS.cpp`). A pin, on a board that routes one. Ours does not.
 ## What the bench actually answered, 2026-09-11 (T-209)
 
 Every row below was sent to a real L76K and the reply read on the wire. T5 S3
-Pro, build `0.2.1-t5s3pro`, `env:t5s3pro`, `/dev/ttyACM0`, eleven separate
+Pro, build `0.2.1-t5s3pro`, `env:t5s3pro`, `/dev/ttyACM0`, fourteen separate
 captures, board at a window indoors, receiver never opened. `CMD:GNSS SEND`
 and `CMD:GNSS RAW BYTES ON` (T-210) are what made it readable. The frame
 generator was checked against V1.1's own printed example before anything was
@@ -443,6 +445,8 @@ sent, and it reproduces it byte for byte.
 | `$PCAS12,10` | `$PCAS12,10*2F` | nothing. Output rate flat across 25 s |
 | `NAV-STATUS` polled with an empty payload | `BACE0000010000000100` | `ACK-NACK` for `cls=0x01 id=0x00` |
 | `CFG-MSG` turning `NAV-STATUS` on | `BACE040006010100010005000701` | `ACK-ACK`, then an 80-byte `NAV-STATUS` every second |
+| `NavBbrMask` `0x0001`, at `ResetMode` 0, 1 and 2 | see the table below | `ACK-ACK`, receiver restarts, nothing cleared |
+| `StartMode` 2, a cold start | `BACE040006020000010204000704` | `ACK-ACK`, and ephemeris and almanac both go to zero |
 
 ### `resetMode` 8 is not refused. It is ignored, and that is a third answer
 
@@ -509,9 +513,28 @@ rail-cycle experiment it proposes both rest on a number that stays zero.
 fix, and it distinguishes almanac from ephemeris per satellite where `LT=`
 offered one integer that never moved.
 
-### The ephemeris clear is acknowledged, restarts the receiver, and clears nothing
+### V1.1 contradicts itself about what the worked example clears
 
-This was the one step expected to work, and it is the one that failed. Three
+Page 34 prints the `CFG-RST` payload table with **Bit 9 = Configuration
+information**, and three lines below prints this:
+
+```
+//Clear configuration information:
+BA CE 04 00 06 02 FF 01 00 00 03 02 06 02
+```
+
+`FF 01` little-endian is `0x01FF`, which is bits 0 to 8 and **not** bit 9. So
+the comment names the one thing the mask does not clear. Read from the vendor
+PDF itself (`Quectel_L76K_GNSS_Protocol_Specification_V1.1`, page 34), not from
+a transcription.
+
+It changes nothing on the bench -- the mask clears nothing here whatever it is
+set to -- but it matters for anyone reading the document as an authority: this
+is the frame every other document, ours included, quotes as the worked example.
+
+### `NavBbrMask` clears nothing, at any `ResetMode`. `StartMode` does
+
+This was the one step expected to work, and the mask half of it failed. Three
 trials, two masks, `NAV-STATUS` read immediately before and after each:
 
 | mask | ACK | module restarted | ephemeris after | almanac after |
@@ -527,15 +550,37 @@ proves that -- and comes back holding exactly the satellites it held before,
 ephemeris and almanac alike, within 9 seconds. An ephemeris takes 18 to 30 s of
 clean signal to download, so nothing was re-acquired in that gap.
 
-So `NavBbrMask` does not clear what `NAV-STATUS` reports on this module.
-**The claim that `NavBbrMask = 0x0001` is the cold-start instrument
-`power-management.md`'s G1 needs is withdrawn**, and it was this file's own
-reading of V1.1 a few hours earlier. V1.1 documents what a set bit clears and
-never says the clear survives the restart in the same command, which is the gap
-the reading walked into.
+**The first run varied only the mask**, and every frame in it carried
+`ResetMode` 0 and `StartMode` 0. V1.1 page 34 calls `ResetMode` 0 an
+"Immediate hardware reset (Achieved via Watchdog)", which is a plausible reason
+for a clear never to happen, so a second run on the same day tried the other two
+software modes and the other knob:
 
-**One route to a cold start is left, and the bench found it by accident**: drop
-the rail for longer than the retention window below.
+| frame | `NavBbrMask` | `ResetMode` | `StartMode` | reply | ephemeris after | almanac after |
+|---|---|---|---|---|---|---|
+| `BACE040006020100010005000702` | `0x0001` | 1, software reset | 0 hot | `ACK-ACK` | unchanged, 9 GPS | unchanged, 32 |
+| `BACE040006020100020005000802` | `0x0001` | 2, software reset GPS only | 0 hot | `ACK-ACK` | unchanged, 9 GPS | unchanged, 32 |
+| `BACE040006020000010204000704` | `0x0000` | 1, software reset | **2 cold** | `ACK-ACK` | **0** | **0** |
+
+So the mask is inert on this module in all three reset modes it documents, and
+**`StartMode` is the knob that works**: one frame, and the receiver comes back
+with no ephemeris, no almanac and nothing in either GLONASS or BDS. The read was
+taken twice, 13 s apart and with `CFG-MSG` re-sent in between, because a restart
+that dropped the subscription would read as an empty receiver either way.
+
+**So a cold start by command does exist, and G1 can have it.** The earlier text
+here said the only route was a rail drop of more than 3 minutes. That was true
+of the frames tried at the time and false of the receiver: nobody had moved
+`StartMode` off 0. Both routes are now measured, and the command is the cheap
+one -- instant, no rail, no wait.
+
+**What the mask was believed to do is still unexplained.** V1.1 documents it bit
+by bit and the module acknowledges every frame carrying it. What it does not do
+is change what `NAV-STATUS` reports, at any reset mode. Unmeasured, and worth one
+frame each when a receiver is full again: `StartMode` 1 (warm) is the
+interesting one, because a start that drops ephemeris and keeps the almanac is
+the gear a duty-cycled design actually wants, and `$PCAS10,2` is the NMEA
+spelling of the same cold start.
 
 ### Ephemeris survives a rail drop of 180 s and not 300 s
 
