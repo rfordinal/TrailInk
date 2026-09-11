@@ -905,8 +905,14 @@ seeing ordinary NMEA traffic as well, hex-dumped in 32-byte
 Both `Gnss::sendRaw()` and `Gnss::GnssRawByteSink` are new library surface
 (`lib/Gnss/include/Gnss.h`); everything else in this section is unchanged.
 
-**Implemented, not yet run on hardware** -- host build (`env:t5s3pro`) is
-clean, 0 warnings. T-209 in `docs/TODO.md` is the bench pass that exercises it.
+**Verified on hardware, 2026-09-11**, build `0.2.1-t5s3pro`, over
+`/dev/ttyACM0`, one continuous serial capture (no reset mid-run). `CMD:GNSS
+SEND BACE04000602FF01000003020602` (the vendor's worked example, no spaces)
+round-tripped: `GNSS_RAWBYTES:BA CE 04 00 05 01 06 02 00 00 0A 02 05 01` --
+`BA CE 04 00 05 01 06 02 ...`, the ACK-ACK V1.1 predicts, showed up in the
+`RAW BYTES ON` log where `RAW ON` would have shown nothing. This is also
+T-209 step 1 ("prove the path"): the path is proven, so T-209's remaining
+steps (2-7) can run.
 
 **`RELEASE` is the one that writes**, which is why it is not folded into `PROBE`.
 It drops the receiver's power for five seconds by design, and a caller who
