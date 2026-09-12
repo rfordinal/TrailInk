@@ -10,6 +10,9 @@ CMD:BATT  ->  BATT:mv=4102 pct=100 curr_ma=-38 chg=1 gauge=0x55 charger=0x6b
 A field that could not be read prints `?`. `chg` is `CHRG_STAT`, the charger's
 two bits: 0 not charging, 1 pre-charge, 2 fast charge, 3 done.
 
+`CMD:BATT DM <addr>` reads the gauge's data memory instead -- see "The data
+memory, and why it reads nothing useful on this board" below.
+
 **`curr_ma` is signed the way TI signs it**: positive is current *into* the cell,
 negative is current *out* of it. A charging board therefore reports the opposite
 sign to what "draw" suggests, and a reading taken on USB is mostly about the
@@ -104,3 +107,50 @@ Two things still to run, and both need the cell to be doing something:
 a line arrives with a leading newline (`gnss.md`, "The BLE path still works with
 the setting off"). `tools/mapcmd.py` does not send one yet, parent T-113. Send
 `\nCMD:BATT\n` if the first attempt is silent.
+
+## The data memory, and why it reads nothing useful on this board
+
+`CMD:BATT DM <addr>` reads one 32-byte data-memory block through
+ManufacturerAccessControl:
+
+```
+CMD:BATT DM 0x91DE  ->  BATT_DM:addr=0x91DE len=24 sum=bad echo=bad sec=3 opstat=0x00A6 u8=0 u16=0x0001 data=00 01 05 ...
+```
+
+**Why it was needed.** Two gauge defaults decide whether a small current means
+anything at all. `Deadband` (`0x91DE`, U1, TI default 5 mA) makes `Current()`
+report a **hard zero** below it -- a board drawing 4 mA reads exactly 0, which
+looks like a measurement and is not. `Operation Config A` (`0x9206`, H2, TI
+default `0x0484`) has the SLEEP bit, and in SLEEP the gauge measures every 20 s
+instead of every second. Both are quoted from SLUUBD4A's data-memory table.
+Whether LilyGo changed either was unreadable, so every small number the gauge
+reported was unfalsifiable.
+
+**Measured 2026-09-12: this gauge is SEALED, so it is still unreadable.**
+`OperationStatus()` (0x3A) reads `0x00A6`, whose `SEC[1:0]` bits (2:1) are `11` =
+sealed. Three different addresses -- `0x91DE`, `0x9206`, `0x929F` -- all return
+the same 20 bytes, with the address echo wrong and the checksum wrong. TI's own
+default is UNSEALED, so something sealed this part: the factory firmware, or TI's
+line.
+
+Unsealing is a write to the gauge (`Control()` with `0x8000` twice), so it is a
+change to a device's persistent state and **is not done without asking**. Until
+then the honest reading of a `curr_ma=0` on this board is "0 or anything below
+the deadband, and the deadband is unknown but probably TI's 5 mA".
+
+**What the reply checks, and why every field of it is there.** A sealed or
+unresponsive gauge answers a data-memory read with *something* -- the bytes above
+look exactly like a real block. So the reply carries three independent ways to
+catch that: `echo` is whether the address read back matches the one requested,
+`sum` is `MACDataSum()` against the bytes themselves (255 minus the 8-bit sum of
+the address plus `MACDataLen()` - 4 data bytes), and `sec` names the security
+state outright. A reply with `sum=ok echo=ok sec=2` is believable; anything else
+is not a measurement.
+
+**One implementation trap, paid for on the bench.** The first version read
+0x3E, 0x3F, 0x40..0x5F, 0x60 and 0x61 as separate addressed reads and got the
+same stale block for every address. The block transfer has to be read as **one
+incremental read starting at 0x3E** (SLUUBD4A 2.2's own worked example does
+exactly that); an addressed read of each byte re-arms it and never delivers it.
+0x3E..0x61 is contiguous: two address bytes, 32 data bytes, `MACDataSum()`,
+`MACDataLen()`.

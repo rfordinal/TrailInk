@@ -2076,6 +2076,14 @@ on 2026-09-03**, when the SDK was forked -- the same expiry that moved T-247.
 The approach is still the right one; only the reason given for it is out of
 date.
 
+**And charging can be switched off from the console** since 2026-09-12, which is
+what makes a VBUS reading board draw rather than board-plus-charger:
+`CMD:CHARGE OFF` (`charge-control.md`), measured at 370 mA charging against
+102 mA with charging disabled on the T5 S3 Pro. **With that, a feature can be
+priced in minutes**: `power-bench.md` has the A-B-A method and the first
+results -- BLE advertising **+11.7 mA**, the frontlight **+29.7 mA at 40 %** and
+**+72.4 mA at 100 %**, all at VBUS, all on one binary.
+
 **And there is a second instrument now**, since 2026-09-03: a Joy-IT JT-UM120
 USB meter, read with `tools/usbmeter_read.py --live` (parent `CLAUDE.md`, "The
 USB meter hangs if you write to it"). It is not a substitute here -- it reads

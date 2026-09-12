@@ -35,6 +35,14 @@
 #include <esp_system.h>
 #endif
 
+#ifdef ENABLE_CHARGE_CMD
+#include <Wire.h>  // the charger and the gauge sit on the same I2C bus
+#endif
+
+#ifdef ENABLE_BLE_CMD
+#include <BlePositionServer.h>
+#endif
+
 #ifdef ENABLE_SDBUS_CMD
 #include <esp_rom_crc.h>
 #endif
@@ -616,6 +624,144 @@ static void gnssRawByteSink(uint8_t b) {
   }
 }
 #endif
+#if defined(ENABLE_BATT_CMD) || defined(ENABLE_CHARGE_CMD)
+// I2C for the two power chips on the gauge bus: the BQ27220 fuel gauge (0x55)
+// and the BQ25896 charger (0x6B) on the T5 S3 Pro. Shared by CMD:BATT and
+// CMD:CHARGE rather than written twice, because CMD:CHARGE's whole safety story
+// is that every write is a read-modify-write and the two commands must not be
+// able to drift into two different definitions of that.
+//
+// **Why this is not BatteryMonitor.** The SDK reads three of these registers
+// and throws the rest away, and its repo is upstream's -- see CMD:BATT below
+// for the full reason. Same bus, same pins, same clock, so re-begin()
+// reconfigures the bus to what it already is (Wire.cpp: an already-initialised
+// bus returns early).
+namespace powerbus {
+
+TwoWire& wire() {
+  const auto& g = BoardConfig::ACTIVE.batteryGauge;
+#if SOC_I2C_NUM > 1
+  if (g.i2cBus == 1) return Wire1;
+#endif
+  (void)g;
+  return Wire;
+}
+
+void begin() {
+  const auto& g = BoardConfig::ACTIVE.batteryGauge;
+  wire().begin(g.i2cSda, g.i2cScl, g.i2cHz);
+}
+
+bool read8(uint8_t addr, uint8_t reg, uint8_t& out) {
+  TwoWire& w = wire();
+  w.beginTransmission(addr);
+  w.write(reg);
+  if (w.endTransmission(false) != 0) return false;
+  if (w.requestFrom(addr, static_cast<uint8_t>(1), static_cast<uint8_t>(true)) < 1) return false;
+  out = w.read();
+  return true;
+}
+
+bool read16(uint8_t addr, uint8_t reg, uint16_t& out) {
+  TwoWire& w = wire();
+  w.beginTransmission(addr);
+  w.write(reg);
+  if (w.endTransmission(false) != 0) return false;
+  if (w.requestFrom(addr, static_cast<uint8_t>(2), static_cast<uint8_t>(true)) < 2) return false;
+  const uint8_t lo = w.read();
+  const uint8_t hi = w.read();
+  out = static_cast<uint16_t>(lo) | static_cast<uint16_t>(hi << 8);
+  return true;
+}
+
+bool write8(uint8_t addr, uint8_t reg, uint8_t value) {
+  TwoWire& w = wire();
+  w.beginTransmission(addr);
+  w.write(reg);
+  w.write(value);
+  return w.endTransmission(true) == 0;
+}
+
+}  // namespace powerbus
+#endif  // ENABLE_BATT_CMD || ENABLE_CHARGE_CMD
+
+#ifdef ENABLE_CHARGE_CMD
+// BQ25896 register writes for the bench, and the rules they obey.
+//
+// **Every write here is a read-modify-write of named bits, and there is no
+// generic write command at all.** That is deliberate: the parent repo's
+// docs/t5s3-power-path.md carries a "Never write these" table, and a `CMD:CHARGE
+// REG 0x14 0x80` would put every one of them one typo away. REG14 bit 7
+// (REG_RST) resets every register including BATFET_DIS; REG03 bit 5
+// (OTG_CONFIG) drives 5 V back onto VBUS; REG00 bit 7 (EN_HIZ) drops the board
+// onto the cell and makes a meter read nothing. None of them is reachable
+// through this command, because no path here writes a byte a host chose.
+//
+// Registers and bit meanings are quoted from SLUSC76C (BQ25896, rev. C, May
+// 2018), tables 9, 13, 15 and 20-24, via the parent repo's power-path doc.
+namespace bq25896 {
+
+constexpr uint8_t kRegAdcCtrl = 0x02;    // CONV_START bit 7, CONV_RATE bit 6
+constexpr uint8_t kRegChargeCtrl = 0x03; // CHG_CONFIG bit 4 (bit 5 is OTG -- never touched)
+constexpr uint8_t kRegWatchdog = 0x07;   // WATCHDOG[1:0] in bits 5:4
+constexpr uint8_t kRegBatfet = 0x09;     // BATFET_DIS bit 5
+constexpr uint8_t kRegStatus = 0x0B;     // VBUS_STAT 7:5, CHRG_STAT 4:3, PG_STAT 2
+constexpr uint8_t kRegFault = 0x0C;      // WATCHDOG_FAULT bit 7
+constexpr uint8_t kRegBatV = 0x0E;       // BATV[6:0], 20 mV/LSB, offset 2.304 V
+constexpr uint8_t kRegSysV = 0x0F;       // SYSV[6:0], 20 mV/LSB, offset 2.304 V
+constexpr uint8_t kRegVbusV = 0x11;      // VBUSV[6:0], 100 mV/LSB, offset 2.6 V
+constexpr uint8_t kRegIchg = 0x12;       // ICHGR[6:0], 50 mA/LSB, charge current only
+constexpr uint8_t kRegPart = 0x14;       // PN[5:3] = 000 for bq25896; bit 7 is REG_RST, never written
+
+uint8_t address() { return BoardConfig::ACTIVE.batteryGauge.chargerAddr; }
+
+// Set the bits in `mask` to `value` (masked), leaving every other bit as read.
+// Returns false if either half of the transaction failed, so a caller never
+// reports a write that did not land.
+bool updateBits(uint8_t reg, uint8_t mask, uint8_t value) {
+  uint8_t current = 0;
+  if (!powerbus::read8(address(), reg, current)) return false;
+  const uint8_t next = static_cast<uint8_t>((current & ~mask) | (value & mask));
+  if (!powerbus::write8(address(), reg, next)) return false;
+  // Read back rather than trust the ACK: the watchdog bits and CHG_CONFIG are
+  // exactly the bits the chip is allowed to change under us, and a bench number
+  // taken against a state nobody confirmed is the failure this task exists to
+  // stop repeating.
+  uint8_t verify = 0;
+  if (!powerbus::read8(address(), reg, verify)) return false;
+  return (verify & mask) == (value & mask);
+}
+
+// The watchdog's own encoding, both ways. 00 disable, 01 40 s (reset default),
+// 10 80 s, 11 160 s (Table 13, p.39).
+uint16_t watchdogSeconds(uint8_t reg07) {
+  switch ((reg07 >> 4) & 0x03) {
+    case 0: return 0;
+    case 1: return 40;
+    case 2: return 80;
+    default: return 160;
+  }
+}
+
+bool watchdogBitsFromSeconds(long seconds, uint8_t& bits) {
+  switch (seconds) {
+    case 0: bits = 0; return true;
+    case 40: bits = 1; return true;
+    case 80: bits = 2; return true;
+    case 160: bits = 3; return true;
+    default: return false;
+  }
+}
+
+// True when an input source is attached. VBUS_STAT (REG0B bits 7:5) is 000 only
+// when there is no input. This gates the BATFET experiment: BATFET_DIS with no
+// VBUS *is* ship mode -- SYS drops, the ESP32 stops, and only the S4 button or
+// an adapter brings the board back (SLUSC76C p.26). A bench command that can
+// park the board in that state is a command that will, eventually.
+bool vbusPresent(uint8_t reg0b) { return ((reg0b >> 5) & 0x07) != 0; }
+
+}  // namespace bq25896
+#endif  // ENABLE_CHARGE_CMD
 FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts());
 static unsigned long allowSleepAt = 0;
 
@@ -2008,7 +2154,7 @@ void loop() {
         }
 #endif
 #ifdef ENABLE_BATT_CMD
-      } else if (cmd == "BATT") {
+      } else if (cmd == "BATT" || cmd.startsWith("BATT ")) {
         // The gauge's own numbers, on demand, for a power run whose other half
         // is a meter on VBUS.
         //
@@ -2023,9 +2169,13 @@ void loop() {
         // The SDK already reads all three (freeink-sdk BatteryMonitor.cpp:211
         // reads 0x0C) and throws the current away: its public Status carries
         // percentage, millivolts and a charging bool, no current. Adding a field
-        // there means editing freeink-sdk, which is upstream's repo and whose
-        // submodule pointer stays on upstream main -- so this reads the same
-        // registers from our side and the SDK stays untouched.
+        // there means a change to freeink-sdk, which is a mirror of upstream
+        // carrying almost nothing of ours and whose pointer moves in a pass of
+        // its own (docs/freeink-sdk-fork.md) -- a bench command should not wait
+        // on that, so this reads the same registers from our side. (Until
+        // 2026-09-03 this comment said the SDK was upstream's repo outright,
+        // which stopped being true when it was forked; the approach did not
+        // change, only the reason given for it.)
         //
         //   CMD:BATT  ->  BATT:mv=4102 pct=100 curr_ma=-38 chg=1 gauge=0x55 charger=0x6b
         //
@@ -2042,47 +2192,136 @@ void loop() {
         // no position, no route, no identity -- so the reason is not secrecy: a
         // command with no UI behind it and one measurement session's worth of
         // use does not belong in a build a stranger flashes.
+        //
+        // **CMD:BATT DM <hex>** reads one 32-byte data-memory block instead
+        // (T-251's third question). Two of the gauge's defaults decide whether
+        // a small current means anything at all: `Deadband` (0x91DE, default
+        // 5 mA) makes Current() report a hard 0 below it, and Operation Config A
+        // (0x9206, default 0x0484, bit 2) lets the gauge drop to a 20 s sample
+        // period below the Sleep Current threshold. Whether LilyGo left either
+        // at TI's default was unreadable until this existed, so every "the board
+        // draws almost nothing" reading was unfalsifiable.
+        //
+        //   CMD:BATT DM 0x91DE  ->  BATT_DM:addr=0x91DE len=36 sum=ok u8=5 u16=0x2905 data=05 29 ...
+        //
+        // `sum=ok` is the point of the reply. A sealed or unresponsive gauge
+        // answers a data-memory read with zeros that look exactly like a real
+        // "Deadband is 0", so the block is only believable when the address
+        // echoes back and MACDataSum() matches what the data adds up to. Read
+        // path per SLUUBD4A 2.29-2.31 and 3.1; no CFGUPDATE, because nothing
+        // here writes.
         const auto& g = BoardConfig::ACTIVE.batteryGauge;
+        String battArg = cmd.length() > 4 ? cmd.substring(5) : String("");
+        battArg.trim();
+        battArg.toUpperCase();  // the subcommand; a hex address parses either case
         if (g.gaugeAddr == 0) {
           logSerial.printf("BATT_ERR:no gauge on this board\n");
-        } else {
-#if SOC_I2C_NUM > 1
-          TwoWire& w = (g.i2cBus == 1) ? Wire1 : Wire;
-#else
-          TwoWire& w = Wire;
-#endif
-          // Same pins and clock the SDK uses, so re-begin reconfigures the bus
-          // to what it already is rather than fighting it.
-          w.begin(g.i2cSda, g.i2cScl, g.i2cHz);
+        } else if (battArg.length() > 0 && !battArg.startsWith("DM")) {
+          logSerial.printf("BATT_ERR:unknown:DM\n");
+        } else if (battArg.startsWith("DM")) {
+          String addrArg = battArg.substring(2);
+          addrArg.trim();
+          const long addr = strtol(addrArg.c_str(), nullptr, 0);
+          if (addrArg.length() == 0 || addr <= 0 || addr > 0xFFFF) {
+            logSerial.printf("BATT_ERR:dm addr\n");
+          } else {
+            powerbus::begin();
+            TwoWire& w = powerbus::wire();
+            // ManufacturerAccessControl is 0x3E/0x3F and takes the data-memory
+            // address little-endian: for 0x929F the TRM's own worked example
+            // writes 0x9F to 0x3E and 0x92 to 0x3F (SLUUBD4A, "Accessing the
+            // Data Memory", step 5-6). One transaction, because the pair is
+            // what arms the block transfer.
+            w.beginTransmission(g.gaugeAddr);
+            w.write(0x3E);
+            w.write(static_cast<uint8_t>(addr & 0xFF));
+            w.write(static_cast<uint8_t>((addr >> 8) & 0xFF));
+            const bool armed = w.endTransmission(true) == 0;
+            delay(15);  // the block transfer is not instant; the TRM polls, this waits past it
 
-          // TI command registers, values copied from the SDK's own table
-          // (freeink-sdk BatteryMonitor.cpp, BQ27220_* / BQ25896_REG_STATUS) so
-          // the two cannot drift apart silently.
-          auto read16 = [&w](uint8_t addr, uint8_t reg, uint16_t& out) -> bool {
-            w.beginTransmission(addr);
-            w.write(reg);
-            if (w.endTransmission(false) != 0) return false;
-            if (w.requestFrom(addr, static_cast<uint8_t>(2), static_cast<uint8_t>(true)) < 2) return false;
-            const uint8_t lo = w.read();
-            const uint8_t hi = w.read();
-            out = static_cast<uint16_t>(lo | (hi << 8));
-            return true;
-          };
-          auto read8 = [&w](uint8_t addr, uint8_t reg, uint8_t& out) -> bool {
-            w.beginTransmission(addr);
-            w.write(reg);
-            if (w.endTransmission(false) != 0) return false;
-            if (w.requestFrom(addr, static_cast<uint8_t>(1), static_cast<uint8_t>(true)) < 1) return false;
-            out = w.read();
-            return true;
-          };
+            // **One incremental read from 0x3E, not 36 single-register reads.**
+            // The first version here read each address on its own and got the
+            // same 20 bytes back for three different data-memory addresses,
+            // echo and checksum both wrong: a block transfer that is re-armed
+            // by every fresh addressed read never delivers the block. The TRM
+            // says to read it in one go -- "read the response using an
+            // incremental read. To the device address 0xAB, starting at command
+            // 0x3E" (SLUUBD4A 2.2). 0x3E..0x61 is contiguous: two address
+            // bytes, 32 data bytes, then MACDataSum() and MACDataLen().
+            uint8_t echo[2] = {0, 0};
+            uint8_t block[32] = {0};
+            uint8_t sum = 0, len = 0;
+            uint8_t mac[36] = {0};
+            bool ok = armed;
+            if (ok) {
+              w.beginTransmission(g.gaugeAddr);
+              w.write(0x3E);
+              ok = w.endTransmission(false) == 0;
+            }
+            if (ok) {
+              ok = w.requestFrom(g.gaugeAddr, static_cast<uint8_t>(sizeof(mac)), static_cast<uint8_t>(true)) ==
+                   static_cast<int>(sizeof(mac));
+            }
+            if (ok) {
+              for (size_t i = 0; i < sizeof(mac); ++i) mac[i] = w.read();
+              echo[0] = mac[0];
+              echo[1] = mac[1];
+              memcpy(block, mac + 2, sizeof(block));
+              sum = mac[34];
+              len = mac[35];
+            }
+            // The gauge's security state, in the same reply. A SEALED gauge
+            // answers a data-memory read with something rather than an error,
+            // so without this a refused read and a real value are the same
+            // bytes. SEC[1:0] is OperationStatus() bits 2:1 (SLUUBD4A 2.27):
+            // 11 sealed, 10 unsealed, 01 full access.
+            uint16_t opStatus = 0;
+            const bool opOk = powerbus::read16(g.gaugeAddr, 0x3A, opStatus);
+            if (!ok) {
+              logSerial.printf("BATT_ERR:dm i2c\n");
+            } else {
+              // MACDataLen counts the two address bytes, the data, and the
+              // length and checksum bytes themselves -- the TRM's 32-byte
+              // example writes 0x24 (36). So the data is len - 4 bytes, and the
+              // checksum is 255 minus the 8-bit sum of address plus that data.
+              const int dataLen = static_cast<int>(len) - 4;
+              const bool lenSane = dataLen > 0 && dataLen <= static_cast<int>(sizeof(block));
+              uint8_t calc = static_cast<uint8_t>(echo[0] + echo[1]);
+              for (int i = 0; lenSane && i < dataLen; ++i) calc = static_cast<uint8_t>(calc + block[i]);
+              calc = static_cast<uint8_t>(255 - calc);
+              const bool echoOk = echo[0] == static_cast<uint8_t>(addr & 0xFF) &&
+                                  echo[1] == static_cast<uint8_t>((addr >> 8) & 0xFF);
+              const bool sumOk = lenSane && calc == sum && echoOk;
+
+              char hex[sizeof(block) * 3 + 1];
+              size_t pos = 0;
+              const int printLen = lenSane ? dataLen : static_cast<int>(sizeof(block));
+              for (int i = 0; i < printLen; ++i) {
+                pos += static_cast<size_t>(
+                    snprintf(hex + pos, sizeof(hex) - pos, "%02X ", static_cast<unsigned>(block[i])));
+              }
+              // Both readings of the first bytes, because the data type is the
+              // parameter's, not the block's: Deadband is U1 and Operation
+              // Config A is H2, and a reply that picked one would be wrong for
+              // the other. Big-endian for the 16-bit form: the TRM's own
+              // Design Capacity example reads the MSB at 0x40.
+              char secText[8] = "?";
+              if (opOk) snprintf(secText, sizeof(secText), "%u", static_cast<unsigned>((opStatus >> 1) & 0x03));
+              logSerial.printf("BATT_DM:addr=0x%04lX len=%u sum=%s echo=%s sec=%s opstat=0x%04X u8=%u u16=0x%04X data=%s\n",
+                               addr, static_cast<unsigned>(len), sumOk ? "ok" : "bad", echoOk ? "ok" : "bad", secText,
+                               static_cast<unsigned>(opStatus), static_cast<unsigned>(block[0]),
+                               static_cast<unsigned>((block[0] << 8) | block[1]), hex);
+            }
+          }
+        } else {
+          powerbus::begin();
 
           uint16_t mv = 0, pct = 0, rawCurrent = 0;
           uint8_t chargerStatus = 0;
-          const bool mvOk = read16(g.gaugeAddr, 0x08, mv);
-          const bool pctOk = read16(g.gaugeAddr, 0x2C, pct);
-          const bool currOk = read16(g.gaugeAddr, 0x0C, rawCurrent);
-          const bool chgOk = g.chargerAddr != 0 && read8(g.chargerAddr, 0x0B, chargerStatus);
+          const bool mvOk = powerbus::read16(g.gaugeAddr, 0x08, mv);
+          const bool pctOk = powerbus::read16(g.gaugeAddr, 0x2C, pct);
+          const bool currOk = powerbus::read16(g.gaugeAddr, 0x0C, rawCurrent);
+          const bool chgOk = g.chargerAddr != 0 && powerbus::read8(g.chargerAddr, 0x0B, chargerStatus);
 
           char mvText[12] = "?";
           char pctText[12] = "?";
@@ -2096,6 +2335,355 @@ void loop() {
                            currText, chgText, static_cast<unsigned>(g.gaugeAddr), static_cast<unsigned>(g.chargerAddr));
         }
 #endif
+#ifdef ENABLE_CHARGE_CMD
+      } else if (cmd == "CHARGE" || cmd.startsWith("CHARGE ")) {
+        // Switch the BQ25896's charging off from the host, and read back what
+        // the datasheet leaves open. T-251.
+        //
+        // **Why a bench needs this.** A USB inline meter on VBUS reads the board
+        // *plus* whatever the charger is doing, so no VBUS number is board draw
+        // while a cell charges behind it. SLUSC76C p.18 says charging off opens
+        // the BATFET on its own ("If battery charging is disabled, BATFET turns
+        // off"), which takes the cell out of the path with no device opened and
+        // no bare board -- the only measurement route this project's hardware
+        // policy allows. Every per-refresh and per-state number T-275 and T-594
+        // owe starts here.
+        //
+        // **The 40 s trap, and why the order below is not cosmetic.** The chip
+        // is in default mode until the first write; that write puts it in host
+        // mode and starts the I2C watchdog. On expiry it restores defaults --
+        // and CHG_CONFIG is not on the exception list, so charging switches
+        // itself back on 40 seconds into a measurement while the run says it is
+        // off (SLUSC76C p.31). So OFF disables the watchdog *first* and only
+        // then clears CHG_CONFIG. ON puts charging back and leaves the watchdog
+        // alone -- see the ON branch for why re-arming it is not a restore.
+        //
+        //   CMD:CHARGE            ->  CHARGE:chg=1 wd_s=40 batfet_dis=0 vbus_stat=1 chrg_stat=2 pg=1 wd_fault=0 curr_ma=214
+        //   CMD:CHARGE OFF        ->  CHARGE_OK:off wd_s=0 ... (then the status line)
+        //   CMD:CHARGE ON         ->  CHARGE_OK:on wd_s=40 ...
+        //   CMD:CHARGE WD 0|40|80|160
+        //   CMD:CHARGE BATFET <dwell_ms>
+        //   CMD:CHARGE ADC        ->  CHARGE_ADC:vbat_mv=3912 sys_mv=4032 vbus_mv=5000 ichg_ma=0
+        //   CMD:CHARGE REG        ->  CHARGE_REG:00=3a 01=... 14=x
+        //
+        // **There is no register-write subcommand and there will not be one.**
+        // See the bq25896 namespace above: four named bits are reachable, the
+        // "never write these" ones are not reachable at all.
+        //
+        // Devel-only, t5s3pro only, and this one is not merely a UI-less
+        // command: it can leave a rider's device not charging. Both command
+        // channels are unauthenticated (parent docs/TODO.md, T-222), so in a
+        // release build this would hand anyone in BLE range a way to flatten the
+        // device silently.
+        String rest = cmd.length() > 6 ? cmd.substring(7) : String("");
+        rest.trim();
+        rest.toUpperCase();
+
+        const uint8_t chargerAddr = bq25896::address();
+        if (chargerAddr == 0) {
+          logSerial.printf("CHARGE_ERR:no charger on this board\n");
+        } else {
+          powerbus::begin();
+
+          // One status line, read fresh every time it is printed. Everything in
+          // it comes off the chip, never off what a command just wrote.
+          auto printStatus = [&]() {
+            uint8_t reg03 = 0, reg07 = 0, reg09 = 0, reg0b = 0, reg0c = 0;
+            const bool ok03 = powerbus::read8(chargerAddr, bq25896::kRegChargeCtrl, reg03);
+            const bool ok07 = powerbus::read8(chargerAddr, bq25896::kRegWatchdog, reg07);
+            const bool ok09 = powerbus::read8(chargerAddr, bq25896::kRegBatfet, reg09);
+            const bool ok0b = powerbus::read8(chargerAddr, bq25896::kRegStatus, reg0b);
+            const bool ok0c = powerbus::read8(chargerAddr, bq25896::kRegFault, reg0c);
+            if (!ok03 || !ok07 || !ok09 || !ok0b || !ok0c) {
+              logSerial.printf("CHARGE_ERR:i2c\n");
+              return;
+            }
+            // The gauge's own current, in the same line and at the same instant
+            // as the charger state: with charging off it is the check that the
+            // BATFET really opened (it should fall to ~0), and it is the number
+            // a meter reading is compared against. Signed, positive into the
+            // cell. Its own floor is a lie below 5 mA -- see CMD:BATT DM.
+            uint16_t rawCurrent = 0;
+            const bool currOk = BoardConfig::ACTIVE.batteryGauge.gaugeAddr != 0 &&
+                                powerbus::read16(BoardConfig::ACTIVE.batteryGauge.gaugeAddr, 0x0C, rawCurrent);
+            char currText[12] = "?";
+            if (currOk) snprintf(currText, sizeof(currText), "%d", static_cast<int>(static_cast<int16_t>(rawCurrent)));
+            logSerial.printf("CHARGE:chg=%u wd_s=%u batfet_dis=%u vbus_stat=%u chrg_stat=%u pg=%u wd_fault=%u curr_ma=%s\n",
+                             static_cast<unsigned>((reg03 >> 4) & 0x01),
+                             static_cast<unsigned>(bq25896::watchdogSeconds(reg07)),
+                             static_cast<unsigned>((reg09 >> 5) & 0x01), static_cast<unsigned>((reg0b >> 5) & 0x07),
+                             static_cast<unsigned>((reg0b >> 3) & 0x03), static_cast<unsigned>((reg0b >> 2) & 0x01),
+                             static_cast<unsigned>((reg0c >> 7) & 0x01), currText);
+          };
+
+          if (rest.isEmpty()) {
+            printStatus();
+          } else if (rest == "OFF") {
+            // Watchdog first. The other order works for 40 seconds and then
+            // silently stops being true.
+            if (!bq25896::updateBits(bq25896::kRegWatchdog, 0x30, 0x00)) {
+              logSerial.printf("CHARGE_ERR:watchdog write\n");
+            } else if (!bq25896::updateBits(bq25896::kRegChargeCtrl, 0x10, 0x00)) {
+              logSerial.printf("CHARGE_ERR:chg_config write\n");
+            } else {
+              logSerial.printf("CHARGE_OK:off\n");
+              printStatus();
+            }
+          } else if (rest == "ON") {
+            // Charging back on, and **the watchdog is deliberately left where
+            // it is.** The first version put it back to the chip's 40 s reset
+            // default, on the theory that the board should leave the bench in
+            // stock behaviour. On this board that is backwards: the watchdog was
+            // already disabled when the first bench run read it (2026-09-12,
+            // REG07 = 0x8D), because LilyGo's factory firmware disables it and
+            // the charger keeps its registers across an ESP32 reflash. So the
+            // chip's default is not this board's as-found state, and "restoring"
+            // it would arm a timer whose expiry resets every non-excepted
+            // register -- SYS_MIN among them, which the vendor set to 3.3 V and
+            // the default would put back to 3.5 V. CMD:CHARGE WD 40 is there for
+            // whoever actually wants the timer.
+            if (!bq25896::updateBits(bq25896::kRegChargeCtrl, 0x10, 0x10)) {
+              logSerial.printf("CHARGE_ERR:chg_config write\n");
+            } else {
+              logSerial.printf("CHARGE_OK:on\n");
+              printStatus();
+            }
+          } else if (rest.startsWith("WD")) {
+            String arg = rest.substring(2);
+            arg.trim();
+            uint8_t bits = 0;
+            if (!bq25896::watchdogBitsFromSeconds(arg.toInt(), bits)) {
+              logSerial.printf("CHARGE_ERR:wd:0,40,80,160\n");
+            } else if (!bq25896::updateBits(bq25896::kRegWatchdog, 0x30, static_cast<uint8_t>(bits << 4))) {
+              logSerial.printf("CHARGE_ERR:watchdog write\n");
+            } else {
+              logSerial.printf("CHARGE_OK:wd\n");
+              printStatus();
+            }
+          } else if (rest.startsWith("BATFET")) {
+            // The open question this task exists to answer: **is BATFET_DIS
+            // honoured at all while VBUS is present?** The datasheet never says.
+            // It specs VSYS for the BATFET-disabled case (p.8), which only means
+            // anything with the converter running from VBUS -- but "plug in
+            // adapter" is listed as an *exit* event from ship mode, and whether
+            // an already-present adapter counts is unstated. The two TI E2E
+            // threads on exactly this are behind a bot wall.
+            //
+            // **A pulse, never a latch.** The bit is set, read back, held for a
+            // dwell, then cleared in the same command. Two reasons it cannot be
+            // left set: BATFET_DIS survives a watchdog expiry (it is on p.31's
+            // exception list, unlike CHG_CONFIG), and if the USB cable comes out
+            // while it is set the board is in ship mode -- SYS at zero, I2C
+            // dead, and only the S4 button or an adapter returns it. A bench
+            // command that can park the board there is a command that will.
+            //
+            //   CMD:CHARGE BATFET 2000
+            //     -> CHARGE_BATFET:set=1 alive=1 curr_before=214 curr_during=0 curr_after=213 cleared=1 dwell_ms=2000
+            //
+            // `set` is the bit read back after the write: 0 means the chip
+            // refused it with VBUS present, which is itself the answer. `alive`
+            // is trivially 1 in any reply that arrives -- a board that stopped
+            // cannot print -- and it is in the line so a run's log carries the
+            // evidence rather than its absence.
+            String arg = rest.substring(6);
+            arg.trim();
+            const long dwellMs = arg.length() == 0 ? 2000 : arg.toInt();
+            uint8_t reg0b = 0;
+            if (dwellMs < 0 || dwellMs > 10000) {
+              logSerial.printf("CHARGE_ERR:dwell:0-10000\n");
+            } else if (!powerbus::read8(chargerAddr, bq25896::kRegStatus, reg0b)) {
+              logSerial.printf("CHARGE_ERR:i2c\n");
+            } else if (!bq25896::vbusPresent(reg0b)) {
+              // Refused, not warned. With no input source this write is ship
+              // mode and the board does not come back without a thumb.
+              logSerial.printf("CHARGE_ERR:no vbus, batfet refused\n");
+            } else {
+              const uint8_t gaugeAddr = BoardConfig::ACTIVE.batteryGauge.gaugeAddr;
+              auto gaugeCurrent = [&](char* out, size_t outSize) {
+                uint16_t raw = 0;
+                if (gaugeAddr != 0 && powerbus::read16(gaugeAddr, 0x0C, raw)) {
+                  snprintf(out, outSize, "%d", static_cast<int>(static_cast<int16_t>(raw)));
+                } else {
+                  snprintf(out, outSize, "?");
+                }
+              };
+              char before[12], during[12], after[12];
+              gaugeCurrent(before, sizeof(before));
+
+              const bool wrote = bq25896::updateBits(bq25896::kRegBatfet, 0x20, 0x20);
+              uint8_t reg09 = 0;
+              const bool readBack = powerbus::read8(chargerAddr, bq25896::kRegBatfet, reg09);
+              const unsigned setBit = (readBack && ((reg09 >> 5) & 0x01)) ? 1u : 0u;
+
+              // The gauge updates Current() once a second, so a dwell under
+              // ~1.5 s reads a value from before the bit landed. Sampled at the
+              // end of the dwell for that reason, not at the start.
+              delay(static_cast<uint32_t>(dwellMs));
+              gaugeCurrent(during, sizeof(during));
+
+              const bool cleared = bq25896::updateBits(bq25896::kRegBatfet, 0x20, 0x00);
+              delay(50);
+              gaugeCurrent(after, sizeof(after));
+              if (!cleared) {
+                // Loud, because this is the one failure that leaves the board in
+                // a state a cable pull turns into ship mode.
+                LOG_ERR("CHARGE", "BATFET_DIS could not be cleared -- do not unplug USB");
+              }
+              logSerial.printf(
+                  "CHARGE_BATFET:set=%u alive=1 curr_before=%s curr_during=%s curr_after=%s cleared=%u dwell_ms=%ld\n",
+                  setBit, before, during, after, cleared ? 1u : 0u, dwellMs);
+              if (!wrote && setBit == 0) {
+                // updateBits() verifies its own readback, so a failed write and
+                // a refused bit look the same from here. Say so rather than
+                // letting a run record "refused" for an I2C error.
+                logSerial.printf("CHARGE_NOTE:write not verified, i2c error and a refusal are indistinguishable\n");
+              }
+              printStatus();
+            }
+          } else if (rest == "ADC") {
+            // The voltage side of the power balance, off the charger's own ADC:
+            // SYSV to 20 mV and VBUSV to 100 mV mean V_sys never has to be
+            // assumed when converting a VBUS reading to board draw.
+            //
+            // One-shot, not the 1 s continuous mode, and switched off again by
+            // the chip itself: "When battery monitor is active, the REGN power
+            // is enabled and can increase device quiescent current" (SLUSC76C
+            // p.24). Leaving it running changes the thing being measured.
+            //
+            // REG12 (ICHGR) is charge current into the cell, 50 mA per step, and
+            // it reads 0 in DISABLE CHARGE mode (Table 4, p.25) -- so it is *not*
+            // a board-current register and nothing here should be read as one.
+            // There is no VBUS-current and no SYS-current register on this chip.
+            //
+            // **This board is already converting when the command arrives.**
+            // REG02 read 0x51 on the first bench run, 2026-09-12: CONV_RATE
+            // (bit 6) is 1, so the chip is in 1 s continuous mode and
+            // CONV_START is read-only ("This bit is read-only when CONV_RATE =
+            // 1", Table 8). The first version here wrote CONV_START anyway,
+            // verified the readback and reported CHARGE_ERR:adc start on a chip
+            // that was working perfectly. Nobody set that bit from our firmware
+            // -- the charger keeps its registers across an ESP32 reflash, and
+            // LilyGo's factory build configures it (SYS_MIN and the watchdog are
+            // off their reset values too). So: start a one-shot only when the
+            // chip is not already running one.
+            uint8_t reg02 = 0;
+            bool started = powerbus::read8(chargerAddr, bq25896::kRegAdcCtrl, reg02);
+            const bool continuous = started && (reg02 & 0x40) != 0;
+            if (started && !continuous) started = bq25896::updateBits(bq25896::kRegAdcCtrl, 0x80, 0x80);
+            if (!started) {
+              logSerial.printf("CHARGE_ERR:adc start\n");
+            } else {
+              // CONV_START stays high for the conversion; tCONV is 8 ms min and
+              // 1000 ms max (p.12), so the poll gets a little past the max. In
+              // continuous mode there is nothing to wait for: a sample is at
+              // most a second old already.
+              const unsigned long deadline = millis() + 1200;
+              bool done = continuous;
+              while (!done && millis() < deadline) {
+                delay(10);
+                if (!powerbus::read8(chargerAddr, bq25896::kRegAdcCtrl, reg02)) break;
+                if ((reg02 & 0x80) == 0) {
+                  done = true;
+                  break;
+                }
+              }
+              uint8_t batv = 0, sysv = 0, vbusv = 0, ichg = 0;
+              const bool ok = powerbus::read8(chargerAddr, bq25896::kRegBatV, batv) &&
+                              powerbus::read8(chargerAddr, bq25896::kRegSysV, sysv) &&
+                              powerbus::read8(chargerAddr, bq25896::kRegVbusV, vbusv) &&
+                              powerbus::read8(chargerAddr, bq25896::kRegIchg, ichg);
+              if (!ok) {
+                logSerial.printf("CHARGE_ERR:adc read\n");
+              } else {
+                // Offsets and LSBs from tables 20-24, pp. 45-47. VBUSV reads 0
+                // when no input is attached, which is a real 0 rather than a
+                // failed read -- the status line's vbus_stat says which.
+                logSerial.printf("CHARGE_ADC:vbat_mv=%u sys_mv=%u vbus_mv=%u ichg_ma=%u done=%u cont=%u\n",
+                                 static_cast<unsigned>(2304 + (batv & 0x7F) * 20),
+                                 static_cast<unsigned>(2304 + (sysv & 0x7F) * 20),
+                                 static_cast<unsigned>((vbusv & 0x7F) == 0 ? 0 : 2600 + (vbusv & 0x7F) * 100),
+                                 static_cast<unsigned>((ichg & 0x7F) * 50), done ? 1u : 0u, continuous ? 1u : 0u);
+              }
+            }
+          } else if (rest == "REG") {
+            // The whole map, read-only, one line. A bench run that reports a
+            // number should be able to show the register state it was taken in,
+            // and a hand-typed subcommand cannot be trusted to have landed.
+            char line[3 * 21 + 1];
+            size_t pos = 0;
+            bool ok = true;
+            for (uint8_t reg = 0x00; reg <= bq25896::kRegPart; ++reg) {
+              uint8_t value = 0;
+              if (!powerbus::read8(chargerAddr, reg, value)) {
+                ok = false;
+                break;
+              }
+              pos += static_cast<size_t>(snprintf(line + pos, sizeof(line) - pos, "%02X ", static_cast<unsigned>(value)));
+            }
+            if (!ok) {
+              logSerial.printf("CHARGE_ERR:i2c\n");
+            } else {
+              logSerial.printf("CHARGE_REG:%s\n", line);
+            }
+          } else {
+            logSerial.printf("CHARGE_ERR:unknown:OFF,ON,WD,BATFET,ADC,REG\n");
+          }
+        }
+#endif  // ENABLE_CHARGE_CMD
+#ifdef ENABLE_BLE_CMD
+      } else if (cmd == "BLE" || cmd.startsWith("BLE ")) {
+        // Bring the BLE peripheral up and down from the console, so its power
+        // cost can be measured as a difference between two otherwise identical
+        // states.
+        //
+        // **Why it exists.** Until this, BLE came up only as a side effect of
+        // entering the map or the sync screen (MapActivity::onEnter() ->
+        // BlePositionServer::begin()). So the only measurable pair was "home
+        // screen" against "map with BLE", and the difference between those two
+        // is tiles, a renderer and a panel refresh as much as it is a radio.
+        // That is not a measurement of BLE. With CMD:CHARGE taking the charger
+        // out of the reading (docs/charge-control.md), a radio that toggles on
+        // its own is the last piece the bench needs.
+        //
+        //   CMD:BLE       ->  BLE:running=0
+        //   CMD:BLE ON    ->  BLE_OK:on running=1
+        //   CMD:BLE OFF   ->  BLE_OK:off running=0
+        //
+        // **Use it on the home screen, not on the map.** Nothing here asks who
+        // owns the radio, because nothing can: `begin()` is idempotent and
+        // `end()` is unconditional, so an OFF issued while the map is open
+        // takes the map's own channel down and the map will not notice until it
+        // is left and re-entered. The bench measures a screen that is not
+        // driving the radio anyway -- that is the whole point of toggling it by
+        // hand.
+        //
+        // Devel-only, same reason as CMD:CHARGE rather than the weaker one: ON
+        // starts an unauthenticated command channel (T-222 in the parent repo's
+        // docs/TODO.md) on a device whose screen gives no sign of it.
+        String rest = cmd.length() > 3 ? cmd.substring(4) : String("");
+        rest.trim();
+        rest.toUpperCase();
+        auto& ble = freeink::BlePositionServer::getInstance();
+        if (rest.isEmpty()) {
+          logSerial.printf("BLE:running=%u\n", ble.isRunning() ? 1u : 0u);
+        } else if (rest == "ON") {
+          // powerManager.setPowerSaving(false) already ran for every CMD: above,
+          // and it is load-bearing here: NimBLEDevice::init() hangs solid if it
+          // is entered while the CPU is still in power-saving mode after idle
+          // (docs/power-management.md). Same reason CMD:GOTO_MAP does it.
+          const bool ok = ble.begin();
+          if (!ok) {
+            logSerial.printf("BLE_ERR:begin\n");
+          } else {
+            logSerial.printf("BLE_OK:on running=%u\n", ble.isRunning() ? 1u : 0u);
+          }
+        } else if (rest == "OFF") {
+          ble.end();
+          logSerial.printf("BLE_OK:off running=%u\n", ble.isRunning() ? 1u : 0u);
+        } else {
+          logSerial.printf("BLE_ERR:unknown:ON,OFF\n");
+        }
+#endif  // ENABLE_BLE_CMD
 #ifdef ENABLE_SDBUS_CMD
       } else if (cmd == "SDBUS" || cmd.startsWith("SDBUS ")) {
         // Bench instrument for BUG-037: toggle the three things
