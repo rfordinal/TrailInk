@@ -16,6 +16,7 @@
 #include "home/RecentBooksActivity.h"
 #include "map/MapActivity.h"
 #include "map/MapRouteStore.h"
+#include "map/RouteEmptyActivity.h"
 #include "map/RouteSelectActivity.h"
 #include "map/TileSyncActivity.h"
 #include "network/CrossPointWebServerActivity.h"
@@ -210,7 +211,7 @@ void ActivityManager::goToMap(const char* routePath, bool resumedFromSleep) {
 
 void ActivityManager::goToRouteSelect() {
   if (!MapRouteStore::anyRoutes()) {
-    goToMap();
+    replaceActivity(std::make_unique<RouteEmptyActivity>(renderer, mappedInput));
     return;
   }
   replaceActivity(std::make_unique<RouteSelectActivity>(renderer, mappedInput));
