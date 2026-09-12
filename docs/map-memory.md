@@ -303,7 +303,7 @@ both builds' *boot*, not from a steady state: on `develop` the boot log brackets
 the two big allocations (`BLEPOS heap: ... delta 57392`, `MAP heap: ... before
 source alloc ... delta 12304`) and the merged build's boot was not captured the
 same way. One capture per build, from reset, comparing those brackets, names it.
-Tracked as T-2001 in the parent repo's `docs/TODO.md`.
+Tracked as T-2002 in the parent repo's `docs/TODO.md`.
 
 **Why it matters on this board and not the others.** The same promotion on an
 X4 Pro left 171,948 B free and on a T5 S3 Pro 187,556 B: both have PSRAM. The
