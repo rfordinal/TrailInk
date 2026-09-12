@@ -39,6 +39,10 @@
 #include <Wire.h>  // the charger and the gauge sit on the same I2C bus
 #endif
 
+#ifdef ENABLE_BLE_CMD
+#include <BlePositionServer.h>
+#endif
+
 #ifdef ENABLE_SDBUS_CMD
 #include <esp_rom_crc.h>
 #endif
@@ -2626,6 +2630,60 @@ void loop() {
           }
         }
 #endif  // ENABLE_CHARGE_CMD
+#ifdef ENABLE_BLE_CMD
+      } else if (cmd == "BLE" || cmd.startsWith("BLE ")) {
+        // Bring the BLE peripheral up and down from the console, so its power
+        // cost can be measured as a difference between two otherwise identical
+        // states.
+        //
+        // **Why it exists.** Until this, BLE came up only as a side effect of
+        // entering the map or the sync screen (MapActivity::onEnter() ->
+        // BlePositionServer::begin()). So the only measurable pair was "home
+        // screen" against "map with BLE", and the difference between those two
+        // is tiles, a renderer and a panel refresh as much as it is a radio.
+        // That is not a measurement of BLE. With CMD:CHARGE taking the charger
+        // out of the reading (docs/charge-control.md), a radio that toggles on
+        // its own is the last piece the bench needs.
+        //
+        //   CMD:BLE       ->  BLE:running=0
+        //   CMD:BLE ON    ->  BLE_OK:on running=1
+        //   CMD:BLE OFF   ->  BLE_OK:off running=0
+        //
+        // **Use it on the home screen, not on the map.** Nothing here asks who
+        // owns the radio, because nothing can: `begin()` is idempotent and
+        // `end()` is unconditional, so an OFF issued while the map is open
+        // takes the map's own channel down and the map will not notice until it
+        // is left and re-entered. The bench measures a screen that is not
+        // driving the radio anyway -- that is the whole point of toggling it by
+        // hand.
+        //
+        // Devel-only, same reason as CMD:CHARGE rather than the weaker one: ON
+        // starts an unauthenticated command channel (T-222 in the parent repo's
+        // docs/TODO.md) on a device whose screen gives no sign of it.
+        String rest = cmd.length() > 3 ? cmd.substring(4) : String("");
+        rest.trim();
+        rest.toUpperCase();
+        auto& ble = freeink::BlePositionServer::getInstance();
+        if (rest.isEmpty()) {
+          logSerial.printf("BLE:running=%u\n", ble.isRunning() ? 1u : 0u);
+        } else if (rest == "ON") {
+          // powerManager.setPowerSaving(false) already ran for every CMD: above,
+          // and it is load-bearing here: NimBLEDevice::init() hangs solid if it
+          // is entered while the CPU is still in power-saving mode after idle
+          // (docs/power-management.md). Same reason CMD:GOTO_MAP does it.
+          const bool ok = ble.begin();
+          if (!ok) {
+            logSerial.printf("BLE_ERR:begin\n");
+          } else {
+            logSerial.printf("BLE_OK:on running=%u\n", ble.isRunning() ? 1u : 0u);
+          }
+        } else if (rest == "OFF") {
+          ble.end();
+          logSerial.printf("BLE_OK:off running=%u\n", ble.isRunning() ? 1u : 0u);
+        } else {
+          logSerial.printf("BLE_ERR:unknown:ON,OFF\n");
+        }
+#endif  // ENABLE_BLE_CMD
 #ifdef ENABLE_SDBUS_CMD
       } else if (cmd == "SDBUS" || cmd.startsWith("SDBUS ")) {
         // Bench instrument for BUG-037: toggle the three things

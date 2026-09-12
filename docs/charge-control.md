@@ -194,3 +194,5 @@ the parent repo's `docs/TODO.md`.
   why a VBUS milliamp is not a board milliamp.
 - [`battery-current-probe.md`](battery-current-probe.md) -- `CMD:BATT`, the gauge
   side, including `CMD:BATT DM` and the sealed-gauge finding.
+- [`power-bench.md`](power-bench.md) -- what this command is for: the A-B-A
+  method, `CMD:BLE`, and what the frontlight and the radio actually cost.
