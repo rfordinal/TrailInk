@@ -167,31 +167,6 @@ one stops it existing. Tracked in the parent repo's `docs/TODO.md` as T-240 (and
 The gate measurement above was taken with the include path lent to the release
 envs through a throwaway `platformio.local.ini`, nothing committed.
 
-## CrossPoint `develop` does not build here, with or without a patch
-
-`pio run -e default` on `upstream/develop` (`7db14a01`) fails after 14 minutes,
-before reaching a single source file:
-
-```text
-idf_tools.py installation failed (rc=1). Tail:
-    raise RuntimeError(f'at level {level}, expected 1 entry, got {contents}')
-RuntimeError: at level 0, expected 1 entry, got ['riscv32-esp-elf', 'picolibc',
-  'bin', 'package.json', 'include', 'share', 'lib', 'libexec']
-TypeError: expected str, bytes or os.PathLike object, not NoneType:
-  File "scripts/patch_pioarduino_cache.py", line 51
-```
-
-It is a toolchain-install problem in this environment against their pinned
-pioarduino 55.03.311, not a broken tree, and it happens with or without any
-patch applied. Measured 2026-09-06.
-
-**Consequence for upstream work:** a fix offered to CrossPoint cannot be
-compile-checked locally. Say so in the PR and lean on their CI rather than
-implying the branch was built. `crosspoint-reader/crosspoint-reader#3410` is
-written that way.
-
-Our own environments are unaffected -- they pin a different pioarduino.
-
 **Fixed 2026-09-08.** `HalPowerManager.cpp` now guards the include with
 `__has_include(<esp_bt.h>)` and skips the controller question when the header is
 absent -- where the BT component is not built no controller can exist, so the floor
@@ -217,6 +192,31 @@ not T-237 as the paragraph above used to say, and its compile half is now done; 
 remains of it is CI, tracked as T-280. And the lesson is the one the whole section
 demonstrates twice: **an env nobody builds is an env that is broken**, so a merge
 builds every env, not the one being worked in.
+
+## CrossPoint `develop` does not build here, with or without a patch
+
+`pio run -e default` on `upstream/develop` (`7db14a01`) fails after 14 minutes,
+before reaching a single source file:
+
+```text
+idf_tools.py installation failed (rc=1). Tail:
+    raise RuntimeError(f'at level {level}, expected 1 entry, got {contents}')
+RuntimeError: at level 0, expected 1 entry, got ['riscv32-esp-elf', 'picolibc',
+  'bin', 'package.json', 'include', 'share', 'lib', 'libexec']
+TypeError: expected str, bytes or os.PathLike object, not NoneType:
+  File "scripts/patch_pioarduino_cache.py", line 51
+```
+
+It is a toolchain-install problem in this environment against their pinned
+pioarduino 55.03.311, not a broken tree, and it happens with or without any
+patch applied. Measured 2026-09-06.
+
+**Consequence for upstream work:** a fix offered to CrossPoint cannot be
+compile-checked locally. Say so in the PR and lean on their CI rather than
+implying the branch was built. `crosspoint-reader/crosspoint-reader#3410` is
+written that way.
+
+Our own environments are unaffected -- they pin a different pioarduino.
 
 ## `platformio.ini` states a range, not a version
 

@@ -4,11 +4,11 @@ ExplorInk inherited CrossPoint's whole e-reader Settings screen. Most of it
 configures books. This file says which rows went, which stayed, why, and what a
 later pass still owes.
 
-Status on this branch (`release/lilygo-t5-s3-pro`): **flashed and read on a
-LilyGo T5 S3 Pro, 2026-09-07.** All four tabs were grabbed off the panel with
-`CMD:SCREENSHOT` at the board's own 540x960. The `develop` side is built only:
-`pio run -e default` (X4) and `-e simulator` link clean, and the simulator's
-480x800 captures are host renders on the X4 profile.
+Status: **flashed and read on a LilyGo T5 S3 Pro, 2026-09-07.** All four tabs
+were grabbed off the panel with `CMD:SCREENSHOT` at the board's own 540x960.
+On the X4 and the X4 Pro this is built only: `pio run -e default` (X4),
+`-e x4pro` and `-e simulator` all link clean, and the simulator's 480x800
+captures are host renders on the X4 profile.
 
 ## The staged removal, and why nothing is deleted yet
 
@@ -149,7 +149,8 @@ Fading Fix (dropped on any touch board) and Check for updates (OTA is gated on
 **Still open: `settings.json` was not read back.** The hidden rows keep being
 serialised in theory, and the visible settings did survive the flash with the
 rider's own values rather than defaults — but `CMD:SETTING` is a four-key
-allow-list (`main.cpp:1335-1352`) and none of the hidden keys is in it, so
+allow-list (`main.cpp:1467-1474`, plus two GNSS-gated keys on a build with a
+receiver) and none of the hidden keys is in it, so
 nothing was actually read off the device. Pulling the card or reaching it over
 WebDAV would settle it.
 

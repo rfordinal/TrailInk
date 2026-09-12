@@ -444,15 +444,15 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   // it. Two fields rather than one brightness: turning the light off must not
   // forget the level it was at, and a level of 0 would.
   //
-  // Not in SettingsList: only the LilyGo T5 S3 Pro has a frontlight in any env
-  // built today, and a Settings row would offer every rider a control for
-  // hardware they do not have. It is written by the user button's hold
-  // (main.cpp) and by CMD:LIGHT.
+  // frontlightBrightness has a Settings row, behind FREEINK_CAP_FRONTLIGHT
+  // (SettingsList.h) -- a capability and not a board name, so it compiles in for
+  // the X4 Pro as well as the T5 S3 Pro without anything here naming either.
+  // frontlightOn has no row on purpose: off is a state the key holds produce,
+  // and storing it as a value would lose the level the rider picked.
   //
-  // mapGnssPosition was the other field with this reasoning and it now has a
-  // row, gated on a build flag -- so absence here is a choice about a control
-  // the rider does not need, not a rule. This one is already reachable by
-  // holding the user button, which is why it did not follow.
+  // Both fields are serialised by hand in CrossPointSettings.cpp rather than by
+  // the generic loop, which is why the row carries no JSON key: two writers for
+  // one field would fight.
   uint8_t frontlightOn = 0;
   uint8_t frontlightBrightness = 50;
   // Power button return from footnotes (1 = enabled, 0 = disabled)

@@ -143,6 +143,26 @@ void toggleFrontlight(const char* source) {
   LOG_INF("BTN", "%s: frontlight %u%%", source, static_cast<unsigned>(frontlight.brightness()));
 }
 
+// Not inside the T5 S3 Pro's button block below, and that is the point: any
+// board with a capacitive home key and a digitizer carries this gesture
+// (TouchPolicy::homeKeyDoubleTapLocksTouch()), the X4 Pro included.
+void toggleTouchLock() {
+  // One flag, flipped. Nothing has to be remembered across it: the mode the
+  // rider chose lives in SETTINGS.touchMode and the lock never touches it, so
+  // unlocking simply stops overriding it (TouchPolicy::mode()). The earlier
+  // version stored DISABLED *into* touchMode and kept the previous value in RAM,
+  // which lost it across a reboot and put a value in that field that the
+  // Settings row does not list.
+  SETTINGS.touchLocked = SETTINGS.touchLocked != 0 ? 0 : 1;
+  // One SD write per deliberate tap, the same reasoning toggleFrontlight() above
+  // carries: a handful of writes a ride, not one per interaction.
+  SETTINGS.saveToFile();
+  // The hint boxes appear or vanish with the mode and the layout reserves room
+  // for them or does not, so the screen is repainted rather than nudged.
+  activityManager.requestUpdate();
+  LOG_INF("BTN", "Home key: touch %s", SETTINGS.touchLocked != 0 ? "locked" : "unlocked");
+}
+
 // How long BOOT must be held before it means sleep. On the T5 S3 Pro a shorter
 // press means Back (boardButtonHook() below), so the two gestures share one
 // number and it has to be long enough to tap deliberately with gloves on:
@@ -195,14 +215,19 @@ uint16_t powerHoldDurationMs() {
 // four above. It is not a GPIO at all: the GT911 reports it in its own status
 // byte, bit 0x10, and InputManager::serviceTouch() reads that bit on every board
 // **regardless of TouchConfig::hasHomeKey** -- that flag is consulted nowhere in
-// InputManager and gates nothing today, so do not go looking for it as the
-// switch that turns this key on. Confirmed working on this panel 2026-09-05
-// (holding it turns the frontlight on). Its jobs are handled in loop(), not
-// here:
+// InputManager, so do not go looking for it as the switch that turns this key
+// on. It is not unused, though: `TouchPolicy::homeKeyDoubleTapLocksTouch()`
+// reads it through `BoardConfig::hasHomeKey()` to decide whether the key carries
+// three gestures or one. Confirmed working on this panel 2026-09-05 (holding it
+// turns the frontlight on). Its jobs are handled in loop(), not here:
 //
 //   home key tap        -> Confirm (Select), after the double-tap window
 //   home key double tap -> lock / unlock the touch panel (toggleTouchLock)
 //   home key hold       -> frontlight on / off (toggleFrontlight)
+//
+// **None of those three is specific to this board any more.** They are keyed on
+// having a home key and a digitizer, so the X4 Pro gets all three; the table
+// above is about the four physical switches, which really are this board's.
 //
 // Why the light hangs off a physical hold and not a touch control: gloves defeat
 // the capacitive panel, and the light is exactly what a rider reaches for with
@@ -211,9 +236,15 @@ uint16_t powerHoldDurationMs() {
 // short press was doing nothing here -- shortPwrBtn defaults to IGNORE. Sleep
 // and Back are now the same press told apart by how long it is held, which is
 // what powerHoldDurationMs() above sets. Why the lock hangs off a double tap:
-// nothing else on this board can stop the glass reacting to a bag, a palm or rain, and the single tap was worth
-// keeping as Select. The cost is that Select through this key waits out the
-// double-tap window -- a single tap cannot be known to be single until then.
+// nothing else on a touch board can stop the glass reacting to a bag, a palm or
+// rain, and the single tap was worth keeping as Select. The cost is that Select
+// through this key waits out the double-tap window -- a single tap cannot be
+// known to be single until then.
+//
+// And while the lock is on, that single tap does not select at all
+// (`MappedInputManager::pumpHomeKey()`), so the double tap is the only way out
+// of it. On the X4 Pro that is not a detail: Back and Confirm both come from
+// touch there, so a lock with no working unlock gesture would be a dead device.
 namespace {
 constexpr unsigned long USER_BUTTON_HOLD_MS = 600;
 // A held button keeps stepping the light at this rate. Slow enough to let go on
@@ -222,23 +253,6 @@ constexpr unsigned long USER_BUTTON_HOLD_MS = 600;
 // hold sets a flag (frontlightHoldActive) and loop() saves the level once, once
 // the button is up.
 constexpr unsigned long USER_BUTTON_REPEAT_MS = 500;
-
-void toggleTouchLock() {
-  // One flag, flipped. Nothing has to be remembered across it: the mode the
-  // rider chose lives in SETTINGS.touchMode and the lock never touches it, so
-  // unlocking simply stops overriding it (TouchPolicy::mode()). The earlier
-  // version stored DISABLED *into* touchMode and kept the previous value in RAM,
-  // which lost it across a reboot and put a value in that field that the
-  // Settings row does not list.
-  SETTINGS.touchLocked = SETTINGS.touchLocked != 0 ? 0 : 1;
-  // One SD write per deliberate tap, the same reasoning the frontlight hold
-  // below carries: a handful of writes a ride, not one per interaction.
-  SETTINGS.saveToFile();
-  // The hint boxes appear or vanish with the mode and the layout reserves room
-  // for them or does not, so the screen is repainted rather than nudged.
-  activityManager.requestUpdate();
-  LOG_INF("BTN", "Home key: touch %s", SETTINGS.touchLocked != 0 ? "locked" : "unlocked");
-}
 
 // A synthetic press has to survive InputManager's debounce, which commits a
 // state change only once two update() calls at least DEBOUNCE_DELAY (5 ms)
@@ -1370,15 +1384,16 @@ void loop() {
   if (mappedInputManager.wasHomeKeyLongPress()) {
     toggleFrontlight("Home key hold");
   }
-#if FREEINK_DEVICE_LILYGO
   // The third gesture on the same key: a double tap locks or unlocks the panel.
   // Resolved in MappedInputManager, which holds the first tap for the double-tap
   // window and decides between Confirm and this -- a tap that had already
   // selected could not be taken back once the second tap arrived.
+  //
+  // No board condition here: wasHomeKeyDoubleTap() is false on a board that has
+  // no home key or no digitizer, because pumpHomeKey() never resolves one there.
   if (mappedInputManager.wasHomeKeyDoubleTap()) {
     toggleTouchLock();
   }
-#endif
   // The Settings row writes the level straight into SETTINGS, so the light has
   // to be told. Only while it is on: changing the level must not turn it on.
   static uint8_t appliedFrontlightBrightness = SETTINGS.frontlightBrightness;
