@@ -47,6 +47,15 @@ built. So **never cite it as evidence about a particular build** (a claim off it
 names the date and the environment), and **never repair it in place** -- delete
 the whole directory and let PlatformIO fetch it again.
 
+**A second observed symptom, 2026-09-06/07**: `env:default` failed with
+`lib/hal/HalStorage.h:3:10: fatal error: Print.h: No such file or
+directory` in a file (`BmpViewerActivity.cpp`) untouched by the change being
+built. An immediate retry with zero code changes succeeded. Plausible --
+matches this pattern, several other sessions were building the same shared
+framework directory at that exact time -- but not independently
+instrumented (no timestamp check at the failure moment). If it recurs: retry
+once before treating it as a real code problem.
+
 A library compiled **per environment** out of `.pio/libdeps/<env>/` does not
 need the core rebuild at all: it picks the config up from the generated
 `sdkconfig.defaults` when it compiles. NimBLE-Arduino is the one that matters
@@ -133,7 +142,7 @@ image SHA256 that follows from them (67 bytes at offsets 177-208, 1576669,
 1578089 and the trailing 32) -- the block was excluded there before, via
 `-UENABLE_SERIAL_LOG`, and is excluded now, via the absent flag.
 
-## `gh_release` does not compile at all right now
+## The release envs did not compile from 2026-08-17 to 2026-09-08
 
 And the other two release envs almost certainly do not either. **Measured** on
 `gh_release`. `gh_release_rc` and `slim` are **read**, not measured: they carry
@@ -153,7 +162,7 @@ which is `default` alone, for the reason in the section above. `gh_release`,
 `gh_release_rc` and `slim` all fail on that line. It arrived with the power
 work (`c0c8ef09`, `8f44dbc2`), and it is a separate defect from the
 `FREEINK_CAP_BLE_PERIPHERAL` gap: that one makes a release binary useless, this
-one stops it existing. Tracked as T-237 in the parent repo's `docs/TODO.md`.
+one stops it existing. Tracked in the parent repo's `docs/TODO.md` as T-240 (and fixed, see below).
 
 The gate measurement above was taken with the include path lent to the release
 envs through a throwaway `platformio.local.ini`, nothing committed.
@@ -182,6 +191,32 @@ implying the branch was built. `crosspoint-reader/crosspoint-reader#3410` is
 written that way.
 
 Our own environments are unaffected -- they pin a different pioarduino.
+
+**Fixed 2026-09-08.** `HalPowerManager.cpp` now guards the include with
+`__has_include(<esp_bt.h>)` and skips the controller question when the header is
+absent -- where the BT component is not built no controller can exist, so the floor
+answers itself and the guard cannot hide a wrong clock. **Measured after the fix, in
+a fresh worktree with no `platformio.local.ini`:**
+
+| Env | Chip | RAM | Flash |
+|---|---|---|---|
+| `gh_release` | ESP32-C3 | 16.1 %, 52,812 B | 57.5 %, 3,768,871 B |
+| `gh_release_rc` | ESP32-C3 | 16.1 %, 52,812 B | 57.5 %, 3,768,867 B |
+| `slim` | ESP32-C3 | 16.1 %, 52,788 B | 56.8 %, 3,720,817 B |
+| `sticky` | ESP32-S3 | 19.2 %, 62,844 B | 55.0 %, 3,606,343 B |
+
+So the "almost certainly" above was right: all three release envs failed, and so did
+**`sticky`**, the only S3 env -- which nobody had reported, because the 2026-09-02
+pass was hunting a release binary and never built it. The dating is read off the
+commit that added the include plus a check that `sticky` carried no BLE dependency
+then either (`extends = base` and one log flag, at `8f44dbc2` and today), so the env
+could not have compiled from that commit onward.
+
+**Two consequences worth keeping.** The task was in the parent repo as **T-240**,
+not T-237 as the paragraph above used to say, and its compile half is now done; what
+remains of it is CI, tracked as T-280. And the lesson is the one the whole section
+demonstrates twice: **an env nobody builds is an env that is broken**, so a merge
+builds every env, not the one being worked in.
 
 ## `platformio.ini` states a range, not a version
 
@@ -348,3 +383,49 @@ pio run -e <env>
 Under three minutes. Deleting the whole `.pio/build/<env>` also works and costs
 about four times that, which is what the first two recoveries paid before
 anybody ran objdump by hand.
+
+## Building a second environment in one worktree wipes the first one's build
+
+`pio run -e default` run after `pio run -e simulator` in the same worktree left
+`.pio/build/` holding only `default`. The simulator binary was gone, and the
+scripted screenshot run that followed failed with
+`No such file or directory` -- which reads like a build that never happened
+rather than a build that was deleted.
+
+PlatformIO keys the build directory on a project checksum that the environment
+is part of, so switching environment invalidates it. Nothing warns.
+
+Build one environment, use its artefact, and only then switch. When two
+environments are needed at once -- a device binary and a simulator run against
+the same commit, say -- give each its own worktree.
+
+Measured 2026-09-07, `settings-facade` on `develop`, `default` and `simulator`.
+
+## No CI has ever run on this repo
+
+**Measured 2026-09-09.** Five workflows are registered and `active` --
+`ci.yml`, `pr-formatting-check.yml`, `release.yml`, `release_candidate.yml`,
+`release-fonts.yml` -- and
+`gh api 'repos/rfordinal/explorink/actions/runs'` returns `total_count: 0`.
+Not one run, ever.
+
+`gh api repos/rfordinal/explorink/actions/permissions` answers
+`{"enabled": true, "allowed_actions": "all"}`, which is why this went
+unnoticed. That flag is not the gate. **This repo is a fork** of
+`crosspoint-reader/crosspoint-reader` (`gh api repos/rfordinal/explorink`,
+`"fork": true`), and GitHub disables Actions on a fork until somebody clicks
+enable in the Actions tab once. The API does not report that state.
+
+Three consequences:
+
+- **Nothing checks a build or the formatting.** The green-CI assurance the
+  `pr-formatting-check` workflow implies does not exist, which is one reason 35
+  files had drifted out of clang-format by 2026-09-09.
+- **`release.yml` does not fire on a tag** despite `on: push: tags: '*'`. Two
+  tags pushed 2026-09-08 produced no run. The two releases that exist were made
+  by hand.
+- **A local check is the only check.** `pio run -e <env>`, the host tests and
+  `./bin/clang-format-fix -g` are it.
+
+Enabling it is T-294 in the parent repo, and it is a decision rather than a
+chore: five workflows that have never executed will all fire at once.

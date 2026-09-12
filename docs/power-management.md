@@ -161,7 +161,7 @@ middle:
 | M10 | Experiment 3, `CONFIG_PM_ENABLE` light sleep | go/no-go for S2, plus the residency number that decides how much of the parked-loop work gets built | `env:powerlab` build with the four PM options (`power-test-runbook.md`) |
 | M11 | Connection interval 15 ms vs 50 ms | what the throughput fix costs when nothing is transferring (the device now asks for 12 units, and since 2026-09-03 asks for exactly 12 with no window) | one option per build |
 | M12 | Experiment 6, `CONFIG_BT_CTRL_LPCLK_SEL_RTC_SLOW` | the only remaining path to a sub-milliamp parked floor | needs M10's rig; slope near ADC noise, so overnight or a meter |
-| M13 | 10 MHz vs 80 MHz idle floor, radio down | how much the BLE-safe floor costs when the radio is not even up | two builds, or a lab-screen state that forces each |
+| M13 | 10 MHz vs 80 MHz idle floor, radio down | how much the BLE-safe floor costs when the radio is not even up. **X4 only** -- a PSRAM board has no clock below 80 to compare (see "A PSRAM board's floor is 80 MHz too") | two builds, or a lab-screen state that forces each |
 
 **Needs a meter** (none owned; `power-test-runbook.md`, "The instrument
 problem"):
@@ -1908,8 +1908,9 @@ construction and needs no PM machinery.
 `main.cpp:638` calls `powerManager.setPowerSaving(true)` after the device has
 been idle for a while (no button press, no touch, no tilt, nothing holding
 `activityManager.preventAutoSleep()` true). This lowers CPU frequency to save
-battery: `HalPowerManager::LOW_POWER_FREQ` is **10 MHz** on X4 (80 MHz only
-where `BOARD_HAS_PSRAM`), and the threshold is
+battery: `HalPowerManager::LOW_POWER_FREQ` is **10 MHz** on X4 (80 MHz on a
+PSRAM board, for a reason that is not the radio -- see "A PSRAM board's floor
+is 80 MHz too"), and the threshold is
 `HalPowerManager::IDLE_POWER_SAVING_MS`, **3 seconds**
 (`lib/hal/HalPowerManager.h:29-33`). Confirmed on real hardware via `LOG_DBG`
 output: `[PWR] Going to low-power mode`, ~3 s after the last input.
@@ -1919,6 +1920,94 @@ output: `[PWR] Going to low-power mode`, ~3 s after the last input.
 halTiltSensor.hadActivity() || activityManager.preventAutoSleep()` is true --
 i.e. on the very next iteration after any physical input, before that input's
 effect (a menu selection, an activity switch) is even acted on.
+
+## A PSRAM board's floor is 80 MHz too, and the radio has nothing to do with it
+
+**Read off the code, 2026-09-07.** Two independent rules set the idle floor, and
+on an S3 with PSRAM they both land on 80. Turning the radio off does not lower
+the clock there.
+
+| board | BT controller up | BT controller down |
+|---|---|---|
+| X4, X3 (C3, no PSRAM) | 80 (`BLE_SAFE_FREQ`) | **10** |
+| T5 S3 Pro, any `BOARD_HAS_PSRAM` board | 80 | **80** |
+
+The two rules:
+
+1. `HalPowerManager::lowPowerFloorMhz()` returns `BLE_SAFE_FREQ` = 80 while
+   `esp_bt_controller_get_status()` says enabled, otherwise `LOW_POWER_FREQ`
+   (`lib/hal/HalPowerManager.cpp:18-27`). That is the BLE rule, above.
+2. `LOW_POWER_FREQ` itself is **80 where `BOARD_HAS_PSRAM`, 10 where not**
+   (`lib/hal/HalPowerManager.h:29-33`). That is the PSRAM rule, and it does not
+   ask about the radio at all.
+
+The T5 S3 Pro build is a PSRAM build: `[env:t5s3pro]` sets `board =
+esp32-s3-devkitc1-n16r8` (on `release/lilygo-t5-s3-pro`), and that board
+definition carries `-DBOARD_HAS_PSRAM` with `memory_type` `qio_opi`
+(`~/.platformio/platforms/espressif32/boards/esp32-s3-devkitc1-n16r8.json`).
+PSRAM is not incidental on this board either: `LgfxEpdDriver` keeps its 8-bit
+grayscale canvas there, so PSRAM sits in the hot path of every render.
+
+**Consequence for the GNSS map.** In GNSS mode the map never brings the BT
+controller up -- `bleInUse_ = SETTINGS.mapGnssPosition == 0`
+(`src/activities/map/MapActivity.cpp`, `onEnter`, on
+`release/lilygo-t5-s3-pro`), and `BlePositionServer::begin()` sits behind it.
+Rule 1 stops applying and rule 2 takes over at the same number. A radio-down
+GNSS session on T5 S3 Pro idles at 80 MHz, exactly like a BLE session. The
+radio still costs what it costs; the clock is not part of that saving.
+
+So **M13 in the scoreboard above -- "10 MHz vs 80 MHz idle floor, radio down"
+-- is an X4 experiment and does not transfer.** On a PSRAM board there is no
+lower clock to compare against. The equivalent question there is light sleep
+versus 80 MHz.
+
+### Why PSRAM forbids the crystal
+
+Same shape as the BLE bug in "Why 10 MHz breaks BLE": the defence exists in
+ESP-IDF and compiles out of this firmware. Read off the pinned tree,
+`~/.platformio/packages/framework-espidf` (`version.txt`: 5.5.2.260206):
+
+1. On S3 the MSPI clock -- the bus that flash **and** PSRAM hang off -- is bound
+   to the CPU's clock source: `#define MSPI_TIMING_LL_FLASH_CPU_CLK_SRC_BINDED 1`
+   (`components/hal/esp32s3/include/hal/mspi_ll.h:52`).
+2. So dropping the CPU to the crystal has to retune MSPI timing in the same
+   breath. `esp_clk_utils_mspi_speed_mode_sync_before_cpu_freq_switching()`
+   does it -- `if (target_cpu_src_freq <= clk_ll_xtal_load_freq_mhz())
+   mspi_timing_change_speed_mode_cache_safe(true)`
+   (`components/esp_hw_support/clk_utils.c:30-49`), with the mirror-image call
+   after a switch back up.
+3. **Its only callers are in `esp_pm`**: `components/esp_pm/pm_impl.c:708` and
+   `:715`, plus `pm_c5_flash_freq_limit.c:66,74`. And `esp_pm_configure()`
+   returns `ESP_ERR_NOT_SUPPORTED` outright without `CONFIG_PM_ENABLE`
+   (`pm_impl.c:435-439`), which this firmware does not set -- same reason the
+   BLE controller's `ESP_PM_APB_FREQ_MAX` lock is absent.
+4. Arduino's `setCpuFrequencyMhz()`, which is what `setPowerSaving()` actually
+   calls, goes straight to `rtc_clk_cpu_freq_set_config_fast()`
+   (`framework-arduinoespressif32/cores/esp32/esp32-hal-cpu.c:283`). It has no
+   MSPI or PSRAM handling anywhere in the file -- only the APB callback list
+   and, on targets with dynamic APB, `rtc_clk_apb_freq_update()`.
+
+So at 10 MHz on a PSRAM S3 the CPU leaves the PLL and MSPI keeps timing tuned
+for a clock that is gone. Flash and PSRAM both sit on that bus, so the failure
+is not a slow board.
+
+**This is the second subsystem in this firmware whose safety depends on a lock
+inside `#ifdef CONFIG_PM_ENABLE`.** BLE was the first. Treat any future
+"just throttle harder" idea as needing this check first.
+
+### What is not known
+
+- **Not measured: what a sub-80 clock actually does on a PSRAM board.** The
+  reading above predicts a hang or memory corruption rather than a slow device.
+  Nobody has tried it. Do not try it on the reference device without an
+  archived fallback build (`../../docs/firmware-builds/`).
+- **Not measured: what the 80 MHz floor costs on T5 S3 Pro.** Every idle-floor
+  number in the scoreboard is X4.
+- **Not ours: where the 80 came from.** The `#if BOARD_HAS_PSRAM` arrived from
+  upstream CrossPoint in `f42fab1c` ("feat: Add touch coordinate mapping and
+  RTOS task yielding", #2481, 2026-07-20) with no comment and no upstream doc.
+  The mechanism above is our reading of the IDF, not upstream's stated reason,
+  and it agrees with the choice.
 
 ## NimBLEDevice::init() hangs solid in low-power mode
 
@@ -1981,6 +2070,23 @@ never arrives.
 
 With the 80 MHz floor this only applies where the floor does not: screens with
 the BLE controller down, Home among them.
+
+**Reproduced on an Xteink X3, 2026-09-09**, so this is not an X4 quirk. Same
+shape as the 2026-08-16 run: after the device sat idle on Home,
+`CMD:GOTO_MAP`, `CMD:BUTTON` and `CMD:SCREENSHOT` all went unanswered for six
+minutes while the 10 s `[MEM]` heartbeat kept printing and the reported free
+heap stayed identical to the byte. **That combination reads like a hung main
+loop and is not one** -- it is a live device that cannot hear you, and the
+session spent those six minutes deciding whether the firmware had crashed. A
+button press on the device, then the same commands, worked immediately.
+
+**Do not read a low-power log line as the board's floor.** The same X3 printed
+`Going to low-power mode (80 MHz)` on the map screen, which is `BLE_SAFE_FREQ`
+because the BT controller was up (`lowPowerFloorMhz()`,
+`lib/hal/HalPowerManager.cpp`), not a per-board tier. The X3 has no PSRAM, so
+with the radio down its floor is `LOW_POWER_FREQ` = 10 MHz -- and 10 MHz is the
+state that starves RX. A session that reads 80 MHz off the map screen and
+concludes the board never throttles below it has the mechanism backwards.
 
 
 ### The RX side after idle: observed, not explained

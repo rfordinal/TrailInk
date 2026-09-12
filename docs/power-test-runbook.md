@@ -10,6 +10,8 @@ findings or the design:
   [`power-plan.md`](power-plan.md).
 - Findings (what is measured, what broke, why):
   [`power-management.md`](power-management.md).
+- The LoRa/GNSS rail on T5 S3 Pro (the L series, and the gauge-current
+  instrument it needs first): [`lora-idle-power.md`](lora-idle-power.md).
 
 Every run here uses the frozen baseline and its four conditions
 (`power-plan.md`, "The frozen baseline"). Experiment order, agreed 2026-08-19:
@@ -215,7 +217,7 @@ In flow order. Skipping a line is how the 2026-08-16 hangs happened twice.
 
 **Only now, the device:**
 
-- [ ] `python3 tools/x4lock.py acquire --owner <session> --reason "<exp>" --ttl <s>`
+- [ ] `python3 tools/devlock.py acquire --device <board> --owner <session> --reason "<exp>" --ttl <s>`
       (parent repo). Never take it before the binary exists.
 - [ ] Identify the port: `udevadm info -q property -n /dev/ttyACM0 | grep
       ID_VENDOR_ID` -- `303a` is the X4, `04e8` the phone. On the wrong port

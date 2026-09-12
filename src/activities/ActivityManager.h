@@ -119,9 +119,11 @@ class ActivityManager {
   // goToMap() instead -- one is host tooling that must land on the map itself,
   // and the other is a resume, not a departure.
   void goToGnssAcquire(const char* routePath = nullptr);
-  // The trip picker -- what the home menu's Trips row opens. Straight to the
-  // map when the card carries no trips: a one-row list whose only row is Skip
-  // is a screen that exists to be dismissed (RouteSelectActivity.h).
+  // The trip picker -- what the home menu's Trips row opens. Goes to
+  // RouteEmptyActivity instead of the list when the card carries no trips: a
+  // one-row list whose only row is Skip is a screen that exists to be
+  // dismissed (RouteSelectActivity.h), and going straight to the map with
+  // nothing said reads as broken rather than empty (RouteEmptyActivity.h).
   void goToRouteSelect();
   // Asks the phone for the tiles the map had to hatch. Its own screen rather
   // than a map-menu item: it is preparation done at home, not something a rider
