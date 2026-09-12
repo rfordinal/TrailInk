@@ -267,6 +267,50 @@ the app.
 | `MapTileReader::streamBuffer_` 4,096 -> 2,048 | 2 KB | read | more SD reads per layer; gate on the reset time already logged |
 | Account for the 5,740 bytes `end()` does not hand back | up to 5.7 KB | open | sample the heap a second after `end()` |
 
+## Measured: promoting the device branches costs the C3 8.5 KB
+
+Taken 2026-09-12 on an **Xteink X3** (ESP32-C3), flashing two builds back to
+back and reading the same instrument in the same state: map screen up, a phone
+connected (`mtu=256`), `pos 48.4363 17.0206`, `zoom 4`, `tiles_ok=0`. The
+numbers come from `stats` (`INFO heap`, `INFO min_heap`), not from a log line,
+so both readings are the same code path.
+
+| | `develop` 85af8066 | `develop` + both release branches, ad5311de | delta |
+|---|---|---|---|
+| free heap | 33,644 B | 25,188 B | **-8,456 B** |
+| min free since boot | 21,988 B | 12,936 B | **-9,052 B** |
+| largest free block | 31,732 B | 22,516 B | -9,216 B |
+
+**It is not a leak.** Six zoom ladders and 90 s of idle moved the free heap by
+at most 72 bytes and never moved `min_heap` at all. It is not the tile cache
+either: both readings were taken over a viewport with no tiles at all.
+
+**It is not static.** `riscv32-esp-elf-size -A` on the two ELFs: `.dram0.data`
++40 B, `.dram0.bss` +56 B. The heap pool itself is the same size either way
+(245,220 B vs 245,124 B). So something allocates ~8.5 KB at run time on the
+merged build that `develop` does not.
+
+**It is not the GNSS ring.** That was the first guess, because `lib/Gnss`
+arrived with this promotion and `platformio.ini` sizes its ring at 8,192 bytes
+-- almost exactly the delta. But `GNSS_RX_BUFFER_BYTES` and the whole of
+`gnssStart()` sit behind `ENABLE_GNSS_CMD`, which `platformio.ini` defines in
+`[env:t5s3pro]` and nowhere else, so a C3 build compiles none of it. The
+matching number is a coincidence and a good reminder to check the guard rather
+than the arithmetic.
+
+**Open -- what does allocate it.** Settling this needs the `[MEM]` line from
+both builds' *boot*, not from a steady state: on `develop` the boot log brackets
+the two big allocations (`BLEPOS heap: ... delta 57392`, `MAP heap: ... before
+source alloc ... delta 12304`) and the merged build's boot was not captured the
+same way. One capture per build, from reset, comparing those brackets, names it.
+Tracked as T-2001 in the parent repo's `docs/TODO.md`.
+
+**Why it matters on this board and not the others.** The same promotion on an
+X4 Pro left 171,948 B free and on a T5 S3 Pro 187,556 B: both have PSRAM. The
+C3 does not, and 12.9 KB is now the floor it reaches during boot. Nothing
+crashed and nothing failed to render in this pass, but the margin that was
+there is not there any more.
+
 ## What is still unmeasured
 
 - **A real phone sending positions on the trimmed build** (above).

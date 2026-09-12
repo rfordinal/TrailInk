@@ -401,6 +401,44 @@ the same commit, say -- give each its own worktree.
 
 Measured 2026-09-07, `settings-facade` on `develop`, `default` and `simulator`.
 
+## Both device branches had `env:simulator` broken, and `develop` did not
+
+Found 2026-09-12, promoting `release/lilygo-t5-s3-pro` and
+`release/xteink-x4-pro` into `develop`. Seven of the eight environments built on
+the merged tree; `simulator` failed. Built on each branch on its own to place
+the blame:
+
+| Branch | `pio run -e simulator` |
+|---|---|
+| `develop` 85af8066 | SUCCESS |
+| `release/lilygo-t5-s3-pro` 6844ac06 | FAILED |
+| `release/xteink-x4-pro` 573e5c3f | FAILED |
+
+So it was not a merge conflict resolved badly. Both device branches had been
+carrying a broken native env for as long as nobody built it, and the promotion
+was about to move that break onto the one branch where the env still worked.
+This is the section above read backwards: an env nobody builds is an env that is
+broken, and a device branch is exactly where "nobody builds it" happens, because
+the board on the desk is not the host.
+
+Two independent causes, both in the simulator fork rather than in this repo:
+
+- `src/main.cpp:6` includes `<FrontlightManager.h>` unconditionally. The SDK
+  library cannot simply be added to `[env:simulator]`'s `lib_deps` -- its header
+  includes `<BoardConfig.h>` and reads `BoardConfig::ACTIVE.frontlight`, and the
+  fork ships a reduced `BoardConfig.h` on purpose so the native build pulls in no
+  ESP32 GPIO headers. The fork got a shim whose `present()` is false, which is
+  the same answer the real class gives on an X4 or an X3.
+- `WebDAVHandler.cpp:362` hands a `NetworkClient` to a `Print&` parameter, which
+  is correct against Arduino (`NetworkClient` is a `Stream`, a `Stream` is a
+  `Print`). The fork's `NetworkClient` derived from neither, so every device
+  build was fine and only the host build failed.
+
+**Consequence for the next promotion:** build `simulator` on the device branch
+*before* merging it up, not on the merged tree. The merged tree cannot tell you
+which side broke it, and on this pass that cost two extra worktrees and two
+builds to find out.
+
 ## No CI has ever run on this repo
 
 **Measured 2026-09-09.** Five workflows are registered and `active` --
