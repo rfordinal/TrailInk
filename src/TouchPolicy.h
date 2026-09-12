@@ -54,4 +54,27 @@ inline bool touchActive() { return panelPresent() && mode() != CrossPointSetting
 // with no keys under them the labels would name keys that are not there.
 inline bool hintsVisible() { return !panelPresent() || mode() == CrossPointSettings::TOUCH_BUTTONS_ONLY; }
 
+// Whether the capacitive home key carries a double tap, and what it means.
+//
+// On the LilyGo T5 S3 Pro a double tap is the touch lock -- nothing else on that
+// board can stop the glass reacting. The single tap stays Confirm there, which
+// costs it the double-tap window in latency (MappedInputManager::pumpHomeKey()).
+// Everywhere else the key has no double tap and its single tap is Confirm the
+// instant it lands.
+//
+// A board constant rather than a setting, because it decides what a physical key
+// means and the answer differs by hardware, not by preference.
+inline constexpr bool homeKeyDoubleTapLocksTouch() {
+#if FREEINK_DEVICE_LILYGO
+  return true;
+#else
+  return false;
+#endif
+}
+
+// Whether to draw the lock glyph instead of the hint boxes. The boxes vanishing
+// is the signal that touch is off, but on their own they cannot distinguish OFF
+// from ANYWHERE, which also draws none.
+inline bool lockIndicator() { return panelPresent() && mode() == CrossPointSettings::TOUCH_DISABLED; }
+
 }  // namespace TouchPolicy

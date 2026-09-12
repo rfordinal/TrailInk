@@ -443,6 +443,26 @@ The work to expose it is small and specified: `BatteryMonitor` needs a public
 column next to `board`. It is deliberately **not** written yet -- it can only be
 verified on an X3, and this repo does not merge untested firmware.
 
+**Half of it is reachable already, by another route** (2026-09-03, and this
+paragraph is the stale half of the one above). `CMD:BATT` on
+`release/lilygo-t5-s3-pro` reads `0x0C` straight off the bus from `src/main.cpp`
+and prints `curr_ma`, with no `BatteryMonitor` change at all, on `env:t5s3pro`.
+So **a bench state can be priced by hand today** and the runbook's steps do not
+have to wait for an X3 or for the SDK. What is still missing is the *logged*
+column: `CMD:BATT` answers somebody standing at the console, not a ride
+(`power-management.md`, "The BQ27220 already reads current, and throws it
+away"). Unplug USB before reading it -- the sign is positive into the cell, so
+a reading with VBUS attached describes the charge path.
+
+**Or leave USB plugged in and switch the charger off** (2026-09-12,
+`charge-control.md`): `CMD:CHARGE OFF` takes the charge current out of the path,
+and the gauge then reads 0 with the cable still attached -- measured 344 mA into
+the cell charging against 0 mA with charging disabled. That is what makes a
+bench state priceable without losing the console, and it is the state every
+USB-meter reading in this runbook should be taken in. One caveat that is now
+measured rather than assumed: do **not** also force `BATFET_DIS`, which adds
+about 8.6 mA to the VBUS reading on this board.
+
 ## The instrument problem, honestly
 
 `power.csv` resolves milliamps over hours from the `batt_mv` slope. It cannot

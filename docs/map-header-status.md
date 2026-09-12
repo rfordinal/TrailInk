@@ -24,16 +24,298 @@ has a wireless link worth showing.
 | Part | Source | Meaning |
 |---|---|---|
 | Battery | `GUI.drawHeader()` | same as every other screen |
-| Signal bars | `resolveBleBars(ble.rssi())` | link quality to the phone |
-| X over the bar slot | `connIntervalMs() == 0` | no central connected |
-| Bluetooth logo | always | what the bars are about |
-| Transfer icon | `autoSyncPending_ > 0` | tiles are being fetched over the phone's data |
-| Clock | `BlePositionServer::localTimeNow()` | local time, from the phone; blank until it has sent one |
+| Signal bars | `resolveBleBars(ble.rssi())` | link quality to the phone. BLE sessions only |
+| X over the bar slot | `connIntervalMs() == 0` | no central connected. BLE sessions only |
+| Bluetooth logo | whenever the session uses BLE | what the bars are about |
+| Transfer icon | `autoSyncPending_ > 0` | tiles are being fetched over the phone's data. BLE sessions only |
+| Clock | the phone, or the receiver's own UTC | local time. See "The clock has two sources" |
+| GNSS glyph | `gnssHeaderState()` | the on-device receiver: off, looking, or fixed. GNSS sessions only, on a build that has one |
+
+## One radio per session, so one set of icons (2026-09-03)
+
+**The map runs the phone link or the receiver, never both.** `mapGnssPosition`
+decides it once in `MapActivity::onEnter()`, which records the answer in
+`bleInUse_` and skips `BlePositionServer::begin()` entirely when the receiver is
+the source. Maintainer's call: a rider who turned the receiver on asked for a map
+that needs no phone, so the map does not run a radio for one.
+
+**The row follows that exactly.** BLE icons appear if and only if the session
+uses BLE; the GNSS glyph appears if and only if it uses the receiver. There is
+never one of each.
+
+Reason, and it is the same one twice: **an icon for a radio that was never
+started is worse than no icon.** A Bluetooth logo with an X through it says "your
+phone is not connected", which invites the rider to go fix the phone. On a GNSS
+session nothing is wrong and nothing can be fixed, because no link was ever
+attempted.
+
+Positions are a right-to-left chain of links (`drawHeaderStatusStrip()`), so a
+slot that is not drawn leaves no hole -- everything left of it moves right.
+`headerStatusRect()` deliberately does **not** follow the chain: it re-derives
+the widest layout unconditionally, so the opaque backing clears whatever slots a
+narrower row leaves empty. **The rect must stay a superset of what is drawn,
+never a match for it.**
+
+What a GNSS session gives up while the map is open: no autosync of missing tiles,
+no freshness check, no BLE command channel. That is not a side effect to be
+fixed later -- it is the trade, written down in `bleInUse_`'s own comment. The
+tile sync screen still uses BLE normally.
+
+**What it buys, measured on the T5 S3 Pro, 2026-09-03**: free heap before tile
+load was **175,308 B** on a GNSS session against **120,764 B** on a BLE one, on
+the same build, same map position, one map entry apart. `BlePositionServer`'s own
+log put the cost of `begin()` at 57,112 B on that run. So not starting the radio
+returns about 54 kB to a screen whose memory ceiling is documented as tight
+([`map-memory.md`](map-memory.md)).
+
+**Verified on hardware the same day, both directions.** `mapGnssPosition=1` then
+`CMD:GOTO_MAP` logged `ble: not started, position comes from the receiver` with
+no `BLEPOS begin` line at all; `mapGnssPosition=0` then a second entry logged
+`gnss: stopped` and a normal `begin()`. The header matched on both, and the row
+closed up rather than leaving the empty slots as holes.
+
+## The clock has two sources
+
+BLE session: `BlePositionServer::localTimeNow()`, which is the phone's own local
+time -- the phone sends a UTC anchor and its zone offset together.
+
+GNSS session: `gnss.fix().utc` plus `SETTINGS.clockUtcOffsetQ`. Every receiver
+carries UTC (from RMC or ZDA, `Gnss.h`), so the row keeps a clock with no phone.
+Not gated on a position fix: RMC brings the date well before four satellites do,
+and a clock is useful before a dot is.
+
+**A receiver cannot know the timezone**, and this is the one thing that reads
+worse than the BLE path. NMEA carries no zone, the device is offline by design,
+and `clockUtcOffsetQ` defaults to 48, which is UTC+0.
+
+**Measured on the T5 S3 Pro, 2026-09-03**: with the setting untouched the row
+read `19:53` at 21:55 CEST, which is UTC exactly. So a rider who has never
+opened Settings > Clock offset gets a clock two hours slow in summer here, and
+it is the setting that fixes it rather than anything in this code. Deriving a
+zone from longitude was rejected: it is wrong at every land border, and a
+confidently wrong clock is worse than a plainly offset one.
+
+### So the clock says "UTC" while it is UTC
+
+`20:46 UTC  <glyph>  100%`. Added 2026-09-03, on the maintainer's ask, and
+**only while `clockUtcOffsetQ` is still its default of 48**. Once the rider sets
+an offset the clock is their local time, exactly like the BLE path, and the
+suffix would be false -- showing it on every GNSS session was considered and
+rejected on that.
+
+**The track log has a row too, since 2026-09-04**: Settings > Map > **Record
+GNSS track** (`mapGnssLog`), same build gate. It was `CMD:SETTING`-only until
+then, so the only person who could record a walk was whoever had the device on a
+desk -- which is how a walk on 2026-09-04 produced no `gnss.csv` to examine. The
+default stays 0 and the label says "track" rather than "log", because switching
+it on writes where the rider went (`src/CrossPointSettings.h`, the field's
+comment).
+
+**It is a suffix on the clock's own string, not a label of its own.** One
+`drawText`, right-aligned like the bare clock always was. `headerStatusRect()`
+reserves its width unconditionally, on every state including the BLE sessions
+that never draw it, for the same reason the transfer icon's slot is reserved.
+
+Verified on hardware, positive case. **The negative case -- offset set, suffix
+gone -- is read off the code only**, because `clockUtcOffsetQ` is not in
+`CMD:SETTING`'s allow-list and the only way to change it is Settings > Clock
+offset on the device.
+
+#### It took three tries, and the first two were the same mistake
+
+Worth keeping, because the mistake is the kind that looks like a layout problem
+and is not. "UTC" is 32 px at `SMALL_FONT_ID`, measured on the panel.
+
+1. **Squatting in the transfer icon's empty slot.** The constants said 23 px.
+   `header: UTC label needs 32 px, slot has 23 -- not drawn`.
+2. **Its own link in the chain.** Room appeared, but the clock moved past the
+   refresh window. `header: UTC label would push the clock 4 px outside the
+   refresh window -- not drawn`. Reserving the link in `headerStatusRect()` is
+   what fixed that half: **a link the chain can take that the rect has not
+   reserved is a link that can never be taken.**
+3. It drew -- and on the panel it sat almost equidistant between the clock and
+   the GNSS glyph, so it read as labelling the glyph. Which is what both earlier
+   attempts had been building towards without anyone noticing, because **the
+   question was never how wide the gaps should be.** A separate element next to
+   two things has to be nearer one of them, and a gap ratio is an argument about
+   how much nearer. Making it part of the clock's string removes the argument:
+   the suffix cannot be nearer to anything than to the time it is inside.
+
+Two things carried the first two failures out of guesswork. The fit check
+**refused to draw** rather than overlapping the glyph or writing outside the
+refresh window, and it **logged why** -- so neither failure put a wrong pixel on
+the panel and neither was silent (`CLAUDE.md`, "Comments Answer WHY, Not WHAT":
+a comment telling the reader to avoid something needs a way for them to know
+they failed). The check survives on the suffix path too, since the reserve
+measures `" UTC"` alone while the draw measures one combined string and kerning
+is the difference.
+
+The third failure had no such check, and could not have: "reads as belonging to
+the wrong thing" is not a quantity. **That one needed the panel and a person
+looking at it** -- which is the standing rule about pixel decisions, arriving
+here as a worked example rather than as advice.
 
 The transfer icon is not an internet indicator in the literal sense -- this
 device has no radio that reaches the internet. It is about the thing the rider
 cares about: the phone is spending mobile data on their behalf right now. See
 `missing-tiles.md`, "Autosync".
+
+## The GNSS glyph, three states (2026-09-01)
+
+**Only on a build with `ENABLE_GNSS_CMD`** -- the LilyGo T5 S3 Pro today. The X4
+and the X4 Pro have no receiver, so the slot is not compiled in at all rather
+than drawn empty: an always-present icon that always says the same thing would
+eat a place name's width to report nothing.
+
+Three Lucide glyphs from one family, so the rider reads the *difference* between
+them rather than each one from scratch (`scripts/gen_map_header_icons.py`):
+
+| glyph | lucide | when |
+|---|---|---|
+| `icon_gnssOff` | `locate-off` | `mapGnssPosition == 0`, or the receiver is not running |
+| `icon_gnssSearching` | `locate` | running, no current solution |
+| `icon_gnssFixed` | `locate-fixed` | running, `quality` says the solution is current |
+
+**Drawn whenever the receiver is the session's source, and not otherwise**
+(corrected 2026-09-03 -- see "One radio per session" above). It used to be drawn
+always, with "off" as one of three states, so that a rider could tell "no
+receiver running" from "no icon yet". **That reasoning expired** when the map
+stopped running both radios: a BLE session now draws Bluetooth icons and no GNSS
+glyph, so there is no "no icon yet" case left to confuse it with.
+
+Off still has a glyph, and it now carries the one meaning worth telling: the
+rider asked for the receiver and it is not running -- `gnssStart()` failed, or
+`gnss.running()` went false.
+
+**The state comes from `quality`, never from `GnssFix::valid`.** `valid` latches
+true on the first solution and stays true (`Gnss.h`), so a receiver that has lost
+the sky would go on claiming a fix -- the one lie a *where am I* device must not
+tell. `quality == 6` is dead reckoning with no satellites behind it and counts as
+seeking here, the same way `MapActivity::pollGnssFix()` refuses to draw a
+position from it.
+
+**Repainted as structural, not rate-capped.** The state moves a handful of times
+a ride (start, first fix, sky lost) and each move is exactly the moment worth
+telling. That is the opposite of the bar count beside it, which flips on an RSSI
+threshold and is capped for that reason.
+
+Layout is one more link in the row's right-to-left chain, between the Bluetooth
+logo and the transfer icon, so the clock and the place name shift left by
+themselves rather than by a hardcoded x.
+
+**Verified on hardware 2026-09-01**: the receiver starts on map entry and stops
+on exit (`gnss: started` / `gnss: stopped` / `gnss: started` across two entries).
+**Not verified**: nobody has looked at the panel yet, and `locate-fixed` has
+never been shown, because no fix has landed indoors.
+
+## The GNSS bars, and the calibration that made them useless first
+
+**Same build gate as the glyph, drawn next to it.** Four slots, the BLE block's
+width and pitch reused so the two never disagree about geometry. **How many** are
+filled says how many satellites the antenna hears; **how tall** they all are says
+how strong the best of them is. Two questions, because a rider needs both:
+sixteen satellites all at 20 dB-Hz and two at 45 dB-Hz are both "no fix", and
+they need opposite things done about them.
+
+An empty block is a result, not a missing one. On 2026-09-04 the receiver saw
+nothing at all for fifteen minutes outdoors and the panel said only "searching",
+which is also what it says two seconds before a fix. Four baseline ticks say "it
+hears nothing", and that needs no cable to read.
+
+**The first calibration was worthless, and it is worth remembering why.** Until
+2026-09-10 the count was `min(tracked, 4)` -- `tracked` being every satellite
+reporting a non-zero C/N0 -- and the height stepped at a best C/N0 of 24 and 31
+dB-Hz. Both ladders started so low that both saturated: four junk satellites
+under a ceiling filled the block, and **one** satellite at 31 dB-Hz made every
+bar full height. Reported by the maintainer with the whole block full and no
+position at all. Nothing was broken. The block was doing exactly what it said,
+and it could not distinguish a car park from a cellar.
+
+`MapGnssBars` (`src/activities/map/MapGnssBars.h`) owns both ladders now, host
+tested in `test/map_gnss_bars/`, out of `MapActivity` for the same reason
+`MapGnssHeading` and `MapFixTrust` are: it is arithmetic, and a second client has
+to be able to reproduce it (`CLAUDE.md` in the parent repo, "The phone app must
+stay portable to iOS").
+
+### The numbers, and where they come from
+
+Maintainer's calibration, 2026-09-10. The count is not one bar per satellite:
+
+| bars | satellites tracked | what it claims |
+|---|---|---|
+| 0 | 0-3 | hears a ceiling, not a sky |
+| 1 | 4-7 | a solution is possible, and coarse |
+| 2 | 8-11 | it should normally have a position |
+| 3 | 12-15 | good |
+| 4 | 16+ | very precise |
+
+| height | best C/N0 | |
+|---|---|---|
+| 1 px tick | 0-25 dB-Hz | nothing worth drawing |
+| 4 px | 26-30 | |
+| 7 px | 31-35 | from 31 the receiver reads the ephemeris off the air itself (`Gnss::injectAidIni()`) |
+| 11 px | 36-39 | |
+| 14 px | 40+ | open sky |
+
+The readings behind them, every one off this L76K:
+
+| situation | tracked | best C/N0 | fix | draws |
+|---|---|---|---|---|
+| bench, indoors | 1 | 29 | no | no bars, 4 px if there were one |
+| indoors, no sky | 4 | 19 | no | one slot, no height -- ticks only |
+| desk, through a ceiling | 9 | 32 | yes, 8 used, HDOP 2.0 | 2 bars, half height |
+| on a ride | 11 | 38 | yes | 2 bars, three quarters |
+| open sky, 2026-09-09 | 16 | -- | -- | 4 bars |
+
+Plus the shape of a real ride: 2,269 logged fixes on 2026-09-08 carried
+`sats_used` 3 to 10, mean 7.5, median 8 -- so two bars is where a working ride
+sits, which is what the maintainer asked for. The log stays outside git
+([`../../docs/device-log-forensics.md`](../../docs/device-log-forensics.md) in
+the parent repo).
+
+`tracked` and not `satsUsed`: `satsUsed` comes off GGA and is 0 without a fix, so
+it says nothing in the one situation the block exists for -- a rider standing
+still with no position, deciding whether to wait or walk into the open. And not
+`satsInView`, which is the almanac's opinion and reads 19 from indoors.
+
+**Height rounds up.** Four steps on a 14 px row rounded down are 3, 7, 10, 14,
+and a 3 px bar reads as a thick baseline tick at arm's length. Rounded up they
+are 4, 7, 11, 14.
+
+### The hysteresis is about refresh cost, not about noise
+
+A satellite drops in and out every few seconds and C/N0 wanders a decibel or two
+on a parked device. Every change to the block is a windowed refresh -- ~1,081 ms
+on a T5 S3 Pro ([`refresh-modes.md`](refresh-modes.md), measured 2026-09-05). So
+a lit rung holds while the reading is at most 2 below the threshold that lit it,
+and goes out one further down. Rungs are 4 satellites apart, so a bar can never
+hold on into the territory of the bar below it.
+
+`resolve()` **does not write its state.** Two call sites need the answer -- the
+repaint decision asks whether it changed, the draw uses it and commits it -- and
+a resolve that mutated would apply the slack twice in one frame. `drawnGnssBlock_`
+is both what the panel shows and the hysteresis' memory, and it starts at -1
+rather than 0: "never drawn" must not compare equal to "empty", or the first
+header pass on a deaf receiver would decide it was already correct.
+
+The block is rate-capped with the BLE bars (30 s floor), not treated as
+structural like the glyph beside it.
+
+**The satellite wait screen reads the same two ladders**, at a bigger size and
+with no hysteresis: it is where a rider first meets this instrument, with
+minutes to study it, so scoring the same sky differently there would teach them
+to read this block wrongly ([`gnss-acquire.md`](gnss-acquire.md), "The signal
+ladder is the header's"). Its per-satellite marks use the C/N0 rungs too. So
+**moving a rung here moves it on two screens** -- `test/gnss_sky_view` asserts
+the agreement against these constants and fails if the two drift apart.
+
+**Not verified on hardware.** The numbers are calibrated against the five
+readings above and 2,269 logged fixes; nobody has looked at the panel with this
+code on it. What a hardware pass has to check: an indoor bench draws no bars and
+no height, a ride draws two, and the block does not flutter while the device sits
+still. And what is genuinely open: **no distribution of best C/N0 exists** --
+`gnss.csv` has no such column, so the height rungs rest on four point samples.
+Logging `tracked` and `bestsnr` into `gnss.csv` would settle them.
 
 ## Two rects, one source
 
@@ -343,7 +625,12 @@ stale position now looks current. Nothing else on the header carries fix age
 either, so today the rider has no on-screen signal that the dot is old. If that
 turns out to bite on a real ride, the fix is additive rather than a rewrite --
 the anchor already knows when the last packet landed, so a staleness marker
-beside the clock is a small change. Nobody has ridden with this yet.
+beside the clock is a small change.
+
+**Ridden 2026-09-02, and it bit.** The logged ride had gaps between accepted
+fixes of up to 21 s -- about 500 m at 85 km/h -- with nothing on the panel saying
+the dot was old ([`gnss.md`](gnss.md), "Fixes stop while the map renders"). The
+staleness marker is no longer a hypothetical cost.
 
 ### What is drawn
 

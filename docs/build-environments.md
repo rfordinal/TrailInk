@@ -17,6 +17,7 @@ is marked as such.
 | `gh_release_rc` | ESP32-C3 | X4 + X3 | **no** | on, `LOG_LEVEL=1` | release candidate, same gap |
 | `slim` | ESP32-C3 | X4 + X3 | **no** | off | size experiments |
 | `sticky` | ESP32-S3 | Seeed Sticky | **no** | on | a different MCU family, one binary per family |
+| `t5s3pro` | ESP32-S3 | LilyGo T5 S3 Pro | **yes** | on, `LOG_LEVEL=2` | bring-up on the non-Xteink validation board. Adds `CMD:LIGHT` and `CMD:GNSS`, neither of which is in any other env. See [`lilygo-t5s3-bringup.md`](lilygo-t5s3-bringup.md) and [`gnss.md`](gnss.md) |
 
 `TRAILINK_VERSION` is set explicitly in every env except `default`, where
 `scripts/git_branch.py` derives it from the branch and short SHA.
@@ -104,8 +105,13 @@ data) or `mapDebugInfo` (paints the rider's exact position on the panel), and
 the flip survives a reboot with nothing on screen to say who made it.
 
 It now has its own flag, `ENABLE_SETTING_CMD=1`, declared in `default`,
-`sticky` and `simulator` and in no release env. Same shape as
-`ENABLE_FRONTLIGHT_CMD` / `ENABLE_GNSS_CMD` on the T5 S3 Pro bring-up branch.
+`sticky`, `simulator` and `t5s3pro`, and in no release env. Same shape as
+`ENABLE_FRONTLIGHT_CMD` / `ENABLE_GNSS_CMD` here.
+
+`t5s3pro` exists only on this branch, so `develop` could not declare the flag
+in it. Merging `develop` here silently drops `CMD:SETTING` off the bench board
+until it is re-declared -- it happened on 2026-09-02 and the strings check below
+is what caught it. Check `t5s3pro` after every merge down from `develop`.
 
 **The gate is checkable without a device**, and the check can fail, which is
 why it is worth running. Build both, then look for the reply strings:
@@ -161,6 +167,31 @@ one stops it existing. Tracked in the parent repo's `docs/TODO.md` as T-240 (and
 The gate measurement above was taken with the include path lent to the release
 envs through a throwaway `platformio.local.ini`, nothing committed.
 
+## CrossPoint `develop` does not build here, with or without a patch
+
+`pio run -e default` on `upstream/develop` (`7db14a01`) fails after 14 minutes,
+before reaching a single source file:
+
+```text
+idf_tools.py installation failed (rc=1). Tail:
+    raise RuntimeError(f'at level {level}, expected 1 entry, got {contents}')
+RuntimeError: at level 0, expected 1 entry, got ['riscv32-esp-elf', 'picolibc',
+  'bin', 'package.json', 'include', 'share', 'lib', 'libexec']
+TypeError: expected str, bytes or os.PathLike object, not NoneType:
+  File "scripts/patch_pioarduino_cache.py", line 51
+```
+
+It is a toolchain-install problem in this environment against their pinned
+pioarduino 55.03.311, not a broken tree, and it happens with or without any
+patch applied. Measured 2026-09-06.
+
+**Consequence for upstream work:** a fix offered to CrossPoint cannot be
+compile-checked locally. Say so in the PR and lean on their CI rather than
+implying the branch was built. `crosspoint-reader/crosspoint-reader#3410` is
+written that way.
+
+Our own environments are unaffected -- they pin a different pioarduino.
+
 **Fixed 2026-09-08.** `HalPowerManager.cpp` now guards the include with
 `__has_include(<esp_bt.h>)` and skips the controller question when the header is
 absent -- where the BT component is not built no controller can exist, so the floor
@@ -203,6 +234,20 @@ cat .pio/libdeps/t5s3pro/NimBLE-Arduino/.piopm
 Reading the ini instead put a wrong version into a bug report before it was
 caught (`ble-deinit-crash.md`). The same applies to anything else pinned with
 `^` or `~`.
+
+## A fresh worktree cannot build `env:default` offline
+
+`lib_deps` pulls JPEGDEC from a git URL, so the first build in a new worktree
+needs network and fails behind a sandbox with
+`could not read Username for 'https://github.com'`. Copying
+`.pio/libdeps/default/JPEGDEC` from another checkout gets past that and then hits
+a second wall: `lib/hal/HalPowerManager.cpp` includes `<esp_bt.h>`, which the
+isolated core rebuild only ships when something enables the BT controller.
+
+So a board-specific change (say T5S3-only) cannot be regression-built against
+`env:default` in a new worktree without setting that up first. Say that, rather
+than reporting the env as broken by the change -- on 2026-09-02 a session nearly
+did.
 
 ## Flashing: three images, three offsets
 
@@ -267,6 +312,43 @@ parallel build in another worktree swapped it mid-compile. Seen 2026-09-06 on
 **Re-run the same build.** It succeeds. Do not "repair" the framework directory:
 deleting or hand-editing anything in it breaks every other build on the machine,
 and there was never anything wrong with it.
+
+## `undefined reference to ble_store_config_*` is the shared build cache
+
+A link that failed 2026-09-10 on `t5s3pro`, with every source file compiling
+clean:
+
+```
+ble_store_nvs.c.o: undefined reference to `ble_store_config_num_our_secs'
+ble_store_nvs.c.o: undefined reference to `ble_store_config_our_bond_count'
+collect2: error: ld returned 1 exit status
+```
+
+Nothing in the tree was wrong: the symbols live in `ble_store_config.c`, which
+the same log shows the build **retrieved from cache** rather than compiling. So
+the object in PlatformIO's build cache did not match the flags this environment
+builds NimBLE with. That cache (`~/.buildcache` by default) is per-machine and
+therefore **shared across every worktree and every session**, exactly like
+`framework-arduinoespressif32-libs/` two sections up.
+
+**The cause is isolated, not inferred.** The failing build had already had
+`.pio/build/t5s3pro` deleted, and the passing one differed from it in exactly one
+thing: `PLATFORMIO_BUILD_CACHE_DIR` pointing at a private directory. A clean
+environment directory on its own did not fix it.
+
+**The fix is a private cache for the run, not a global settings change:**
+
+```
+PLATFORMIO_BUILD_CACHE_DIR=<scratch>/piocache pio run -e t5s3pro
+```
+
+That is an environment variable for one process. `pio settings set` would change
+the cache for every build on the machine, which is the shared-config blast
+radius this repo has already been bitten by -- measure who a shared setting hits
+before moving it.
+
+The two shared-state failures read differently and both look like a broken
+checkout: this one names a symbol, the framework one names a header.
 
 ## `file format not recognized` from objdump is a corrupt object, not a broken tree
 

@@ -4,11 +4,11 @@ ExplorInk inherited CrossPoint's whole e-reader Settings screen. Most of it
 configures books. This file says which rows went, which stayed, why, and what a
 later pass still owes.
 
-Status: **built and seen in the simulator, not flashed.** `pio run -e default`
-(X4) and `-e simulator` both link clean, and a headless simulator run captured
-all four tabs at 480x800 (`qa-artifacts/settings-facade/tab0..3.png`,
-gitignored). Those are host renders on the X4 profile. Nothing here has been
-looked at on a device panel yet.
+Status on this branch (`release/lilygo-t5-s3-pro`): **flashed and read on a
+LilyGo T5 S3 Pro, 2026-09-07.** All four tabs were grabbed off the panel with
+`CMD:SCREENSHOT` at the board's own 540x960. The `develop` side is built only:
+`pio run -e default` (X4) and `-e simulator` link clean, and the simulator's
+480x800 captures are host renders on the X4 profile.
 
 ## The staged removal, and why nothing is deleted yet
 
@@ -21,7 +21,7 @@ That distinction matters because `getSettingsList()` does two jobs:
 
 - it builds the Settings screen (`SettingsActivity.cpp:52`), and
 - it drives `settings.json` serialisation, both ways
-  (`CrossPointSettings.cpp:66` writes, `:130` reads).
+  (`CrossPointSettings.cpp:66` writes, `:140` reads).
 
 Delete an entry and the field stops being saved, so every device carrying a
 stored value silently resets it on the next boot. So a hidden row keeps its
@@ -48,11 +48,31 @@ reachable from it:
 The status bar those 11 rows configure is the **reader's**. The map screen
 draws its own header row and reads none of them — it takes the time from the
 phone's BLE packet and ignores `SETTINGS.clockFormat` outright
-(`MapActivity.cpp:1930-1932`, and `map-header-status.md`).
+(`MapActivity.cpp:2151-2153`, and `map-header-status.md`).
 
 `TextSettingsActivity`, `StatusBarSettingsActivity`, `KOReaderSettingsActivity`
 and `OpdsServerListActivity` are all still compiled and still constructible.
 Only the rows that started them are gone.
+
+## Frontlight: a row added, on the boards that have one
+
+**Added 2026-09-07.** Display gained a **Frontlight** row, compiled in only where
+the board has one (`#if FREEINK_CAP_FRONTLIGHT` in `SettingsList.h`). It is a
+`SettingType::VALUE`, 10 to 100 % in tens, rendered with a `%` suffix (the
+`STR_FRONTLIGHT` case in `SettingsActivity.cpp`).
+
+Two things make it unusual and both are deliberate:
+
+- **It carries no JSON key.** `frontlightOn` and `frontlightBrightness` are
+  serialised by hand (`CrossPointSettings.cpp:109-110`, `:238-244`), so a list
+  entry with a key would write the same field a second time.
+- **Off is not one of its values.** Off is a state the buttons produce -- the
+  home key's hold toggles, the user button's hold walks the rungs -- and storing
+  it would lose the level the rider chose.
+
+`loop()` applies a change while the light is on and never turns it on: choosing a
+level is not a request for light. The gestures that share this number are in
+`docs/lilygo-t5s3-bringup.md`, "The remap, 2026-09-07".
 
 ## Rows hidden, and the consumer that proves them reader-only
 
@@ -93,38 +113,45 @@ do not. Offering it would rotate nothing the rider is looking at.
 Three mechanics behind `disabled` (`SettingsActivity.h:59`):
 
 - The row draws dimmed through `drawList()`'s `rowDimmed` callback
-  (`BaseTheme.h:284`), a checkerboard dither on the text
-  (`BaseTheme.cpp:499`).
-- **The dither is skipped on the selected row** (`BaseTheme.cpp:499`, `i !=
+  (`BaseTheme.h:316`), a checkerboard dither on the text
+  (`BaseTheme.cpp:532`).
+- **The dither is skipped on the selected row** (`BaseTheme.cpp:532`, `i !=
   selectedIndex`), so dimming alone tells a rider standing on the row nothing.
   The Confirm hint is therefore blanked for a disabled row.
 - **What an empty hint label draws is per theme, and the device does not run
   the plain one.** `BaseTheme::drawButtonHints()` skips an empty label and
-  draws nothing (`BaseTheme.cpp:259`). `LyraTheme` — the default — draws a
-  **short stub box** with no text instead (`LyraTheme.cpp:398-403`), so the
-  slot is not empty, it is visibly shorter than its neighbours. Seen on a
-  T5 S3 Pro panel 2026-09-07, on that board's release branch.
+  draws nothing (`BaseTheme.cpp:261`). `LyraTheme` — the default, and what the
+  T5 S3 Pro was running — draws a **short stub box** with no text instead
+  (`LyraTheme.cpp:399-404`), so the slot is not empty, it is visibly shorter
+  than its neighbours. Seen on the panel 2026-09-07.
 - **The stub is not tappable.** `rememberFrontLabels()` records only non-empty
-  labels (`BaseTheme.cpp:380-383`), `frontBoxActive()` gates the hit test on
-  that flag (`BaseTheme.cpp:390`), and `frontHintBox()` refuses a rect for an
-  inactive slot. So the stub is drawn and dead — the behaviour wanted, arrived
-  at by accident rather than designed. **Read, not measured.** The hardware
-  pass ran with Touch Screen on Buttons only, where no list row is tappable at
-  all, so the tap path was never exercised — only the Confirm button was.
-  Setting touch to Anywhere and tapping the row would settle it.
+  labels (`BaseTheme.cpp:384-387`), `frontBoxActive()` gates the hit test on
+  that flag (`BaseTheme.cpp:394`), and `frontHintBox()` refuses to return a
+  rect for an inactive slot. So in BUTTONS touch mode the stub is drawn and
+  dead, which is the behaviour wanted — but it was arrived at by accident, not
+  designed. **Read, not measured.** The hardware pass ran with Touch Screen on
+  Buttons only, where no list row is tappable at all, so the tap path was never
+  exercised — only the Confirm button was. Setting touch to Anywhere and
+  tapping the row would settle it.
 - `toggleCurrentSetting()` returns early, so both the button path and the
   touch-tap path are inert.
 
-**Read on hardware, on the T5 S3 Pro release branch, 2026-09-07.** The same
-change cherry-picked onto `release/lilygo-t5-s3-pro` was flashed and grabbed at
-540x960: four tabs cycling Display -> Map -> Controls -> System -> Display, the
-hidden rows gone, and Confirm pressed three times on the disabled row changing
-nothing. The maintainer's reading of the panel was "riadok je mrtvy". That
-branch's copy of this file carries the detail.
+**Confirmed on the panel, 2026-09-07.** Four tabs, cycling Display -> Map ->
+Controls -> System -> Display. Refresh Frequency gone from Display; KOReader
+Sync, OPDS Servers and Clear Reading Cache gone from System. Screen
+Orientation draws last in Display, dithered. With the cursor parked on it,
+Confirm pressed three times changed nothing and opened no popup, and the
+maintainer's reading of the panel was "riadok je mrtvy" — the row reads as
+dead. Two absences are not this change and were checked as such: Sunlight
+Fading Fix (dropped on any touch board) and Check for updates (OTA is gated on
+`!hasTouch`).
 
-**Still open: `settings.json` was not read back.** `CMD:SETTING` is a four-key
-allow-list (`main.cpp:771-780`) and none of the hidden keys is in it, so the
-claim that hidden rows keep being serialised is still read-off-the-code only.
+**Still open: `settings.json` was not read back.** The hidden rows keep being
+serialised in theory, and the visible settings did survive the flash with the
+rider's own values rather than defaults — but `CMD:SETTING` is a four-key
+allow-list (`main.cpp:1335-1352`) and none of the hidden keys is in it, so
+nothing was actually read off the device. Pulling the card or reaching it over
+WebDAV would settle it.
 
 **Only the label dims, not the value.** The simulator capture shows "Screen
 Orientation" in dither grey with "Portrait" beside it in solid black:

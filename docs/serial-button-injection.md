@@ -13,6 +13,11 @@ Second argument is the hold in milliseconds, 0 (a tap) to 10000.
 
 Host side: `tools/press.py` in the parent repo.
 
+On the T5 S3 Pro this is worth more than on the X4: that board has one user
+switch plus the capacitive home key, so `up`, `down`, `left` and `right` have
+no thumb at all there (`docs/lilygo-t5s3-bringup.md`, and the button map in the
+parent repo's `docs/devices/lilygo-t5-s3-pro.md`).
+
 ## Why
 
 Before this, a laptop could reach two screens and no more. `CMD:GOTO_MAP` and
@@ -59,6 +64,35 @@ talking through.
 The short power press *is* covered: `main.cpp`'s force-refresh path reads
 `mappedInputManager.wasReleased(Power)`.
 
+## A press into an unknown screen is a write to persisted state
+
+**Paid for 2026-09-10.** A release pass sent `CMD:BUTTON confirm` and a run of
+`down` presses without a screenshot between them, to walk from the wait screen to
+Settings. The presses did not land where the script assumed. Afterwards the board
+came up with its GNSS wait limit reading "no limit" on a fresh boot, and a map
+session running on BLE.
+
+**What caused which is not established, and the first version of this section
+said it was.** The BLE session is equally explained by a stray Confirm activating
+the wait screen's own "Take position from the phone" row, which changes nothing
+persisted; the wait limit reading zero has no such explanation and does point at
+a menu. Calling both "the injection flipped two settings" was a cause named from
+one observation.
+
+What would settle it: read those two rows on the panel before pressing anything,
+and again after.
+
+The cost was not the settings either way. It was that the next screenshot showed
+a map session on BLE and a wait screen with no countdown, and **both read as
+defects in code written the same hour**. Ten minutes went into looking for a bug
+that was a button press.
+
+So: **one press, one screenshot, or do not press.** A queue of presses is only
+safe on a screen whose layout is already on the glass in front of you. This is
+also why the injector is worth having at all -- it is the only way to reach
+Settings from a laptop -- and why it must be driven like a thumb rather than like
+a script.
+
 ## The timing model
 
 `src/DebugInput.cpp`. One press at a time, the rest queued (8 deep), each press
@@ -92,8 +126,8 @@ watches the device throttle and then sleep under it.
 
 ## Security
 
-Devel builds only: `ENABLE_BUTTON_CMD`, set in `default`, `sticky` and
-`simulator`, absent from `gh_release`, `gh_release_rc` and `slim`. The release
+Devel builds only: `ENABLE_BUTTON_CMD`, set in `default`, `sticky`, `t5s3pro`
+and `simulator`, absent from `gh_release`, `gh_release_rc` and `slim`. The release
 build has no injector compiled in at all -- `DebugInput.cpp` is empty there and
 the call sites inline to `false`.
 
@@ -131,24 +165,39 @@ altogether -- the fork's JSON socket (`docs/simulator.md`).
 - `test/debug_input` -- nine host tests over the frame shape: press and release
   edges, hold, two taps not merging, queue order, a full queue refused, a
   double pump in one frame, name parsing. `ctest` runs them with the rest.
-- **Verified on the LilyGo T5 S3 Pro, 2026-09-08**, but from the
-  `release/lilygo-t5-s3-pro` line, not from this one: the board is 200 commits
-  ahead of `develop` and a develop build would have dropped its bring-up. The
-  commit was cherry-picked there (`cmd-buttons-t5s3`, env `t5s3pro`) and the
-  whole run is written up in that branch's copy of this file. In short: a walk
-  from Home to the map and back, driven from the laptop with no thumb on the
-  board, all seven button names pressed, `--hold 1500 up` zooming in Look
-  around where a plain `up` pans, and the two logged runs showing the CPU coming
-  out of power saving on the press. The `power` press was a 0 ms tap, so
-  nothing about the long hold that the table above rules out has been measured
-  (T-286 in the parent repo).
-- **Run on a C3 on 2026-09-09, on an Xteink X3.** Env `default`, build
-  `92c949ae`: `CMD:BUTTON back`, `up` and `down` each answered `BUTTON_OK`, and
-  on the map screen `up` zoomed one rung, the scale bar going 500 m to 200 m. So
-  the injector is confirmed on both chip families and the board-agnostic claim
-  above is no longer an inference.
-- **Still not run on an X4 or an X4 Pro.**
-- **The device has to be awake first.** At 10 MHz it does not read the line at
-  all, so a press sent to an idle device is silently dropped -- the same trap
-  that swallows `CMD:GOTO_MAP` (`power-management.md`, "And starves RX
-  outright"). It cost six minutes on the X3 run above.
+- **Verified on the LilyGo T5 S3 Pro, 2026-09-08**, build `db651273`, env
+  `t5s3pro`, over `/dev/ttyACM0` with `tools/press.py`. A whole walk ran from
+  the laptop with no thumb on the board: `down` moved the Home selection from
+  Trips to Sync (the disabled Pins and Wallet rows skipped, as a thumb would),
+  `up confirm` opened Explore, `confirm` opened the map menu, `confirm` again
+  entered Look around, and `back back` came out to Home. Each step was read
+  back with `CMD:SCREENSHOT`.
+- **All seven names were pressed.** `left` and `right` pan the Look around view
+  east and west: `right` then `left` came back to the same frame, 16 differing
+  pixels out of 518,400, in two clusters on map linework (around x=325 y=362
+  and x=330 y=556, listed pixel by pixel and looked at zoomed), so the two
+  steps really are one step each and symmetric. The first write-up called those
+  pixels a label's bounding box; that was inferred from the box and never
+  looked at. A bounding box drawn around two clusters says nothing about what
+  is inside them.
+- **The hold works, and a tap is not a hold.** In Look around, `--hold 1500 up`
+  zoomed the map one rung (scale bar 500 m to 200 m) instead of panning, which
+  is the `getHeldTime() >= kObserveZoomHoldMs` path (600 ms,
+  `MapActivity.cpp`). A plain `up` on the same screen panned north with the
+  zoom unchanged. So the injected held time lands on both sides of a real
+  600 ms threshold.
+- **`power` was pressed, but not held.** The run sent a 0 ms tap, which no real
+  button would have slept either, so that check could not have failed. It left
+  the map on screen and the port up. The sleep path reads `HalGPIO` directly
+  and an injected press never reaches it -- read off `main.cpp`, and open until
+  a `--hold 5000 power` run says otherwise (T-286 in the parent repo).
+- **It counts as user input.** Both runs whose log was captured (`press.py -v`)
+  logged `[PWR] Restoring normal CPU frequency` on the press. That is the
+  `userInput` flag in `loop()`; the auto-sleep deadline reads the same flag one
+  line later, so the same press resets the sleep timer -- **read off
+  `main.cpp`**, not timed out on hardware. The map screen holds
+  `preventAutoSleep()` anyway, so timing it out needs the Home screen and a
+  full timeout of pressing (T-286).
+- **Not run on an X4 or X4 Pro** (C3). The injection point is board-agnostic
+  `src/` code, but the C3 envs (`default`, `sticky`) have not been flashed with
+  it.

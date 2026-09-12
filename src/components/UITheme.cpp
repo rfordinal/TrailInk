@@ -60,7 +60,9 @@ const ThemeMetrics& UITheme::getMetrics() const {
   // the touch mode can change from the Settings screen, so the cached copy is
   // refreshed when the answer differs instead of copying the struct per call.
   const bool hints = TouchPolicy::hintsVisible();
-  if (!metricsValid || hints != metricsForHints) {
+  const bool lock = !hints && TouchPolicy::lockIndicator();
+  const uint8_t chrome = hints ? 1 : (lock ? 2 : 0);
+  if (!metricsValid || chrome != metricsChrome) {
     adjustedMetrics = *currentMetrics;
     if (hints) {
       // Every theme's hint metrics are written against the X4's 480px-wide
@@ -71,14 +73,23 @@ const ThemeMetrics& UITheme::getMetrics() const {
       // dimension, the side boxes' width the wider one.
       adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetricY(adjustedMetrics.buttonHintsHeight);
       adjustedMetrics.sideButtonHintsWidth = HintGeometry::scaleMetric(adjustedMetrics.sideButtonHintsWidth);
+    } else if (lock) {
+      // The **same** band the boxes get, not a thinner strip. The padlock is
+      // drawn as one box the size of a hint box, so keeping the band identical
+      // means nothing on the screen above it moves when the panel locks -- and
+      // the map's chrome swap refreshes one rectangle that fits both modes.
+      adjustedMetrics.buttonHintsHeight = HintGeometry::scaleMetricY(adjustedMetrics.buttonHintsHeight);
+      adjustedMetrics.sideButtonHintsWidth = HintGeometry::scaleMetric(adjustedMetrics.sideButtonHintsWidth);
     } else {
       adjustedMetrics.buttonHintsHeight = 0;
     }
-    metricsForHints = hints;
+    metricsChrome = chrome;
     metricsValid = true;
   }
   return adjustedMetrics;
 }
+
+int UITheme::chromeBandHeight() const { return HintGeometry::scaleMetricY(currentMetrics->buttonHintsHeight); }
 
 int UITheme::getNumberOfItemsPerPage(const GfxRenderer& renderer, bool hasHeader, bool hasTabBar, bool hasButtonHints,
                                      bool hasSubtitle, int extraReservedHeight) {

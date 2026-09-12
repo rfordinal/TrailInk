@@ -62,6 +62,17 @@ class MappedInputManager {
 
   SwipeDir wasSwipe() const;
   bool wasHomeGesture() const;
+  // True on the frame the capacitive home key (boards that have one) completed a
+  // short tap. Reported as Confirm by wasPressed()/wasReleased(); exposed so a
+  // caller that needs to tell the two apart still can.
+  bool wasHomeKeyConfirm() const;
+  // True on the frame a double tap on the capacitive home key resolves. Only on
+  // a board where that gesture means something (TouchPolicy::homeKeyDoubleTapLocksTouch());
+  // elsewhere the key has no double tap and this is always false.
+  bool wasHomeKeyDoubleTap() const;
+  // The home key's hold, filtered. Not gpio.wasHomeKeyLongPressed() directly:
+  // that event can arrive from a press this layer has already resolved as a tap.
+  bool wasHomeKeyLongPress() const;
   bool wasMenuGesture() const;
   bool wasAnyPressed() const;
   bool wasAnyReleased() const;
@@ -101,6 +112,10 @@ class MappedInputManager {
   // the frame tick is a bare gpio.update() in loop() (main.cpp) that never passes
   // through this class -- hooking update() alone left the boxes drawn and dead.
   void ensureHintTouchPumped() const;
+  // Resolve this frame's home-key gesture. Runs from the same per-frame pump as
+  // the hint boxes, so the pending single tap is timed out by whatever query the
+  // activity makes rather than by a tick of its own.
+  void pumpHomeKey() const;
   void pumpHintTouch() const;
   bool hintBoxAt(int px, int py, uint8_t& hwButton) const;
   // Normalized touch to *portrait* logical coordinates. The renderer's own
@@ -121,6 +136,35 @@ class MappedInputManager {
   // Hint-box button edges for this frame: pressed and released last one frame,
   // down persists while the finger stays on the box.
   mutable uint32_t hintPumpedSeq = 0xFFFFFFFFu;
+  // When the finger landed on the box currently held. getHeldTime() reports the
+  // live duration from this, because HalGPIO's own answer describes the last
+  // HARDWARE press and nothing else -- with no button down it returns the length
+  // of the previous one, which is how a 600 ms frontlight hold left every later
+  // box tap looking like a half-second hold and firing ButtonNavigator's
+  // continuous step on top of its press step.
+  mutable unsigned long hintDownAtMs = 0;
+
+  // The home key's single tap cannot fire Confirm the moment it lands: a second
+  // tap inside the window means the rider asked for the touch lock instead, and
+  // selecting first would have activated whatever the cursor was on before
+  // locking the panel. So the tap is held, and resolves either way.
+  //
+  // Only on a board whose home key carries the double tap at all -- elsewhere
+  // the tap is Confirm the instant it arrives, with no window and no latency.
+  mutable unsigned long homeTapPendingSince = 0;  // 0 = no tap waiting
+  mutable bool homeConfirmResolved = false;       // this frame: the single tap won
+  mutable bool homeDoubleTapResolved = false;     // this frame: the second tap won
+  mutable bool homeLongResolved = false;          // this frame: a hold this layer believes in
+  // Ignore further taps until this time. Measured: one physical double tap
+  // produced a lock, a Select and a frontlight toggle. That extra tap events
+  // caused it is inferred, not observed -- see pumpHomeKey() and
+  // docs/input-gestures.md.
+  mutable unsigned long homeRefractoryUntil = 0;
+  // Whether a tap has already been made of the press the key is currently
+  // holding. The SDK fires its hold from a latched down-state that survives a
+  // missed release edge, so a hold can arrive seconds after the gesture it
+  // belongs to was already spent -- see pumpHomeKey().
+  mutable bool homeTapConsumedSinceDown = false;
   mutable uint8_t hintDownButton = kNoHintButton;
   mutable uint8_t hintPressedButton = kNoHintButton;
   mutable uint8_t hintReleasedButton = kNoHintButton;
