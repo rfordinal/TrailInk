@@ -12,6 +12,8 @@
 #include "MapDebugOverlay.h"
 #include "MapFixTrust.h"
 #include "MapFollow.h"
+#include "MapGnssBars.h"
+#include "MapGnssHeading.h"
 #include "MapMarkerMetrics.h"
 #include "MapModeMask.h"
 #include "MapPins.h"
@@ -26,6 +28,13 @@
 #include "MapViewport.h"
 #include "activities/Activity.h"
 #include "components/OptionPopup.h"
+
+#ifdef ENABLE_GNSS_CMD
+// A reference parameter needs no definition, and pulling GnssAccess.h in here
+// would put the driver's whole header into every translation unit that draws a
+// map screen. The definition arrives in MapActivity.cpp, which includes it.
+struct GnssFix;
+#endif
 
 // Draws real OSM map data from the SD card around the position received over
 // BLE or typed into a command console -- P4 of docs/prototype-plan.md, merged
@@ -149,8 +158,19 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // RouteSelectActivity passes what the rider picked; every other caller --
   // `CMD:GOTO_MAP` over serial, the OOM fallbacks -- passes nothing and gets the
   // map exactly as it was before routes existed.
+  // `adoptRunningGnss` says the receiver was started by the screen that opened
+  // this one (GnssAcquireActivity) and this session now owns it -- so onExit()
+  // drops the rail, which it must not do for a receiver a host `CMD:GNSS ON`
+  // owns. Without it the acquisition screen's handover would leak the rail: the
+  // map would see a running receiver, decline ownership, and leave it powered
+  // after the rider went home.
+  //
+  // `forcePhonePosition` runs this session on BLE even though the GNSS setting
+  // is on -- the rider pressed "phone position" rather than waiting for the sky
+  // (../../../docs/gnss-acquire.md). One position source per session either way
+  // (bleInUse_), so this only chooses which one.
   MapActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, const char* routePath = nullptr,
-              bool resumedFromSleep = false);
+              bool resumedFromSleep = false, bool adoptRunningGnss = false, bool forcePhonePosition = false);
 
   bool isMapActivity() const override { return true; }
 
@@ -205,6 +225,23 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // viewport reset. Every fix channel goes through here -- the decision must not
   // be duplicated per channel.
   void applyFix(int32_t latE7, int32_t lonE7, uint8_t headingStep, uint8_t seq);
+#ifdef ENABLE_GNSS_CMD
+  // Reads the on-device receiver and feeds applyFix() when it has a sample this
+  // activity has not seen. The third caller of applyFix(), next to the BLE
+  // packet and the command console -- see the comment on the definition for why
+  // that is the whole integration.
+  void pollGnssFix();
+#endif
+#ifdef ENABLE_GNSS_CMD
+  // What the header row's GNSS glyph says. Three states, one Lucide glyph each
+  // (locate-off, locate, locate-fixed).
+  enum class GnssHeaderState : uint8_t { Off, Seeking, Fixed };
+  GnssHeaderState gnssHeaderState() const;
+  // The 16-step heading to draw for a fix: the receiver's course while the
+  // rider is moving, the last one while they are not. Not const -- it carries
+  // the speed gate's hysteresis and the drawn step forward.
+  uint8_t gnssHeadingStep(const GnssFix& fix);
+#endif
   // Erases the marker from the frame on the panel (writing back the pixels
   // saved when it was drawn), redraws it at sx/sy, and refreshes only the
   // rectangles involved. Leaves the map, the compass, the readout and the
@@ -501,6 +538,9 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // The style for the fix currently on screen. One place, so the full redraw
   // and the partial move cannot disagree about what the marker is claiming.
   MapFixTrust::MarkerStyle markerStyle() const { return MapFixTrust::styleFor(trust_); }
+  // Opens the session on the position the card remembers, with a marker that
+  // says so -- see the comment on the definition.
+  void seedFromPersistedFix();
 
   // Buttons, and the two timers they arm.
   void handleButtons();
@@ -537,6 +577,25 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // ~26 KB it needs at the biggest dialog size is held only while the menu is
   // up; on OOM the capture simply fails and every close falls back to
   // renderCurrent(), the behaviour before this existed.
+  // A saved rectangle of the panel, so a change that only touches chrome can put
+  // the map back and refresh that rectangle instead of re-rendering the whole
+  // screen. The menu backdrop below does the same thing by hand; this pair is
+  // the reusable form of it.
+  struct RegionSnapshot {
+    std::unique_ptr<uint8_t[]> bits;
+    size_t size = 0;
+    Rect rect{0, 0, 0, 0};
+  };
+  // Overwrites whatever the snapshot held. False when there is no heap for it or
+  // the renderer refuses the read -- the caller then falls back to a full render.
+  bool captureRegion(RegionSnapshot& snap, Rect rect);
+  // Writes the snapshot back and KEEPS it: the bits are still a clean picture of
+  // the map under that rectangle, so the next chrome swap needs no new capture.
+  bool restoreRegion(const RegionSnapshot& snap) const;
+  // Swap the chrome for whatever the current touch mode wants -- the hint boxes,
+  // the padlock, or nothing -- using the snapshots rather than a re-render.
+  // False when it could not be done, and the caller re-renders.
+  bool swapChrome();
   bool captureMenuBackdrop();
   // Heap that must survive taking the backdrop. Everything that runs while the
   // menu is up -- BLE tile transfers, the console, a settings write -- draws
@@ -884,6 +943,10 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // nonzero for a slightly different reason and stops being nonzero at a different
   // moment.
   bool resumedFromSleep_ = false;
+  // Both set by the acquisition screen's handover, both constructor arguments --
+  // see the constructor's comment for what each one buys.
+  bool adoptRunningGnss_ = false;
+  bool forcePhonePosition_ = false;
   // True while the panel holds the route overview rather than a follow frame.
   // Fixes are still recorded in that state but do not redraw -- see
   // renderRouteOverview().
@@ -909,6 +972,62 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // step, so the release ending that hold does not also pan (handleButtons()).
   // One step per hold: this stays set until the button comes back up.
   bool observeHoldZoomed_ = false;
+
+  // Which source this map session takes its position from, decided once in
+  // onEnter() and constant for the life of the screen. True means the phone
+  // over BLE; false means the receiver on this board.
+  //
+  // **False stops the BLE radio coming up at all**, not merely the position
+  // path: BlePositionServer::begin() is one service with four characteristics
+  // (position, command, transfer, transfer status), so there is no way to have
+  // tiles without also advertising and running the controller. The rider who
+  // turned the receiver on asked for a map that needs no phone, so the map does
+  // not run a radio for one -- maintainer's call, 2026-09-03. What that costs
+  // while the map is open: no autosync of missing tiles, no freshness check, no
+  // BLE command channel. The clock comes from the receiver's own UTC instead
+  // (drawHeaderStatusStrip()), and the tile sync screen still uses BLE
+  // normally.
+  //
+  // Read it rather than SETTINGS.mapGnssPosition at each call site: a setting
+  // toggled from the host mid-screen would otherwise half-apply, with icons
+  // saying one thing and a running radio another.
+  //
+  // **Not starting the server changed callers that never mentioned it.**
+  // `BlePositionServer::isRunning()` was being used as a stand-in for "the map
+  // is live", and preventAutoSleep() was one of them -- so the first GNSS walk
+  // got a map that let the device deep-sleep, which cold-started the receiver on
+  // every wake (2026-09-04, fixed in preventAutoSleep()). `PowerLog::bleState()`
+  // was another: its 0 no longer means "not the map screen". Before adding a
+  // caller here, grep isRunning() and ask which question it is really asking.
+  bool bleInUse_ = true;
+
+  // True while the header clock carries its " UTC" suffix: a GNSS session whose
+  // clockUtcOffsetQ was never set, so the time really is UTC. Decided in
+  // drawHeaderStatusStrip() each time the row is laid out, and read by the same
+  // function a few lines later -- a member rather than a local because the
+  // layout chain settles it before the string that uses it is built.
+  bool clockShowsUtc_ = false;
+
+  // What the GNSS bar block last painted: how many bars were filled and how tall
+  // they were. Two fields because the block carries two numbers, and either one
+  // moving is a repaint (drawHeaderStatusStrip()).
+  // Consecutive GNSS fixes refused by pollGnssFix()'s sanity gates. Bounded so a
+  // receiver in a bad state cannot freeze the marker indefinitely.
+  uint8_t gnssRejectedRun_ = 0;
+  static constexpr uint8_t kGnssMaxRejectedRun = 5;
+  // The last fix pollGnssFix() actually accepted, for the self-consistency
+  // check. Separate from lastLatE7_/lastFixMs_, which the BLE path also writes
+  // and which Observe mode holds back -- this has to be the receiver's own
+  // previous point or the implied speed is measured against the wrong thing.
+  bool haveGnssAcceptedFix_ = false;
+  double lastAcceptedLat_ = 0.0;
+  double lastAcceptedLon_ = 0.0;
+  uint32_t lastAcceptedFixMs_ = 0;
+
+  // What the GNSS block last painted, and the memory its hysteresis is measured
+  // against. Starts at "nothing drawn yet" (MapGnssBars::State), which must not
+  // compare equal to an empty block or the first header pass would skip it.
+  MapGnssBars::State drawnGnssBlock_;
 
   // Set from BlePositionServer::begin()'s return in onEnter(). Without this,
   // a BLE stack that failed to come up (plausible: init costs ~75 KB heap,
@@ -936,6 +1055,36 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // where the rider was last seen" from "showing where they actually are
   // right now", so renderViewport() knows to keep the waiting banner up.
   bool showingPersistedFix_ = false;
+
+#ifdef ENABLE_GNSS_CMD
+  // True only when *this* activity powered the receiver's rail, so onExit()
+  // cannot switch off a session somebody else started -- CMD:GNSS ON from the
+  // host is the case that matters, since a bring-up run must survive a trip
+  // through the map screen.
+  bool gnssStartedHere_ = false;
+  // millis() at which the driver last changed its fix, derived as
+  // millis() - Gnss::fixAgeMs(). The driver has no "changed since you last
+  // asked" flag for a second reader -- Gnss::poll() returns that, and main.cpp
+  // is the one calling poll() -- so the change instant is what identifies a
+  // sample here. haveGnssFixMs_ separates "never seen one" from "seen one at
+  // millis() == 0".
+  uint32_t lastGnssFixMs_ = 0;
+  bool haveGnssFixMs_ = false;
+  // applyFix() wants the phone's rolling packet counter and the receiver has no
+  // such thing, so this stands in for it. It is only ever used for logging and
+  // for the BLE path's already-drawn test, and the two counters can collide on
+  // one value in 256 -- with both sources live that costs at most one skipped
+  // BLE packet, which is the same 5 s the phone's next packet arrives in.
+  uint8_t gnssSeq_ = 0;
+  // What the panel was last told, for the same reason transferIconShown_ exists
+  // next to it: the repaint decision compares against what is on the glass, not
+  // against what is true. Starts at Off so the first draw of a running receiver
+  // counts as a change.
+  GnssHeaderState drawnGnssState_ = GnssHeaderState::Off;
+  // The heading decision's state between fixes: the speed gate's hysteresis and
+  // the step on the panel. The arithmetic lives in MapGnssHeading.
+  MapGnssHeading::State gnssHeadingState_;
+#endif
 
   // ## Follow state: what the frame currently on the panel is
   //
@@ -977,11 +1126,17 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
 
   // How much the marker is allowed to claim about the newest fix, and the
   // hysteresis latch behind it. Set by whichever ingest path accepted the fix
-  // (BLE, or the console's `pos`), read only through markerStyle().
+  // (BLE, the console's `pos`, or the receiver), read only through
+  // markerStyle().
   //
   // Starts Unstated, which draws the marker exactly as it drew before any of
-  // this existed -- so a source that says nothing about quality, and a device
-  // that has not had a fix yet, both look like they always did.
+  // this existed -- the right default for a source that says nothing about
+  // quality.
+  //
+  // **A device that has not had a fix yet is NOT that case**, and treating it as
+  // one was a defect: a frame drawn from the card's persisted fix showed a whole
+  // ring and a sharp arrow for a position and heading from another session
+  // (seedFromPersistedFix(), which now sets Loose and Unknown).
   MapFixTrust::Trust trust_{};
   MapFixTrust::State trustState_{};
   // What the marker on the panel is actually claiming right now, recorded where
@@ -1155,6 +1310,18 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // -- so the transition into or out of "no clock" moves this value and
   // repaints, same as a minute rolling over does.
   int16_t drawnClockMinute_ = -1;
+  // The touch mode the chrome on screen was painted for. This screen has to
+  // poll it because it paints from its own loop() rather than through
+  // Activity::render(RenderLock&&), so the repaint the lock toggle asks for
+  // never reaches it -- see the check in loop(). 0xFF means "nothing painted
+  // yet", so the first frame after entering settles it without a redraw.
+  uint8_t drawnTouchMode_ = 0xFF;
+  // The map under the chrome, taken on every full frame before the chrome covers
+  // it. Two rectangles, never their union: the bottom band and the side boxes
+  // are far apart, and one rect spanning both would be most of the panel (540 x
+  // 546 on a T5 S3 Pro, ~37 kB) against ~4 kB for the pair.
+  RegionSnapshot chromeFront_;
+  RegionSnapshot chromeSide_;
   // Until when Observe's clock shows the exact minute. Set by any button press:
   // a rider who pressed something is looking at the screen, and the saving only
   // exists during the hours nobody is. 0 = never set, i.e. coarse.
@@ -1204,6 +1371,11 @@ class MapActivity final : public Activity, public IMapSkipObserver, public IMapS
   // Follow frames: the raw values driving the marker, and what the viewport
   // reset cost.
   uint8_t debugFixSlot_ = MapDebugOverlay::kInvalidSlot;
+  // Sits right under the fix row because it answers the question that row
+  // raises: where the position came from and whether the receiver can still
+  // produce one. Reserved even on a BLE session, and cleared there, so the
+  // slot order does not depend on which radio the map happened to start.
+  uint8_t debugGnssSlot_ = MapDebugOverlay::kInvalidSlot;
   uint8_t debugRenderSlot_ = MapDebugOverlay::kInvalidSlot;
   // Route overview frames: the route's name and how the ladder fitted it.
   // Their own slots rather than a reuse of the two above, so neither path has
