@@ -305,11 +305,23 @@ source alloc ... delta 12304`) and the merged build's boot was not captured the
 same way. One capture per build, from reset, comparing those brackets, names it.
 Tracked as T-2002 in the parent repo's `docs/TODO.md`.
 
-**Why it matters on this board and not the others.** The same promotion on an
-X4 Pro left 171,948 B free and on a T5 S3 Pro 187,556 B: both have PSRAM. The
-C3 does not, and 12.9 KB is now the floor it reaches during boot. Nothing
-crashed and nothing failed to render in this pass, but the margin that was
-there is not there any more.
+**Why it matters on this board and not the others.** The same promotion left
+171,948 B free on an X4 Pro and 173,520 B on a T5 S3 Pro, both read through the
+same command in the same state as the X3 numbers above. Both have PSRAM. The C3
+does not, and 12.9 KB is now the floor it reaches during boot. Nothing crashed
+and nothing failed to render in this pass, but the margin that was there is not
+there any more.
+
+(The 187,556 B this paragraph used to quote for the T5 was its `[MEM]` line at
+boot on the home screen, not the map state -- a number from a different screen
+at a different moment, put next to two that were not.)
+
+**Print the same fields on both sides.** The first pass at this comparison
+grepped `heap|tile_fmt` on one build and the full `info` on the other,
+concluded from the missing `mtu=` line that no phone was connected to the
+baseline, and nearly blamed the whole delta on a BLE connection. A narrowed
+grep manufactures a difference. Both readings here are the full `info` and
+`stats` output.
 
 ## What is still unmeasured
 
