@@ -6743,9 +6743,29 @@ void MapActivity::renderViewport(int32_t latE7, int32_t lonE7, uint8_t headingSt
   // NOT at the current mode's height: the boxes are taller than the padlock
   // strip, so a snapshot sized for the padlock would leave a sliver of stale box
   // pixels above it, and e-ink holds that indefinitely.
-  const int chromeBand = UITheme::getInstance().chromeBandHeight();
-  captureRegion(chromeFront_, Rect{0, renderer.getScreenHeight() - chromeBand, renderer.getScreenWidth(), chromeBand});
-  captureRegion(chromeSide_, GUI.sideButtonHintsRect(renderer));
+  //
+  // **Only on a board with a digitizer.** The swap exists for one event: the
+  // touch lock going on or off, which trades the hint boxes for the padlock.
+  // Both halves of that need a panel -- TouchPolicy::locked() and
+  // lockIndicator() are `panelPresent() && ...`, and hintsVisible() is
+  // unconditionally true without one -- so on an X3 or an X4 the chrome the
+  // snapshot protects cannot change, and swapChrome() would restore a picture
+  // identical to what is already on the glass.
+  //
+  // It is not a free convenience there. Measured on an X3 (ESP32-C3) 2026-09-12:
+  // these two buffers are 8,448 bytes, the front band 5 x 528 and the side band
+  // 11 x 528 after the 90-degree rotation, and they are held for as long as the
+  // map screen is up. With the two heap block headers that is the whole 8,456 B
+  // of free heap the device-branch promotion cost that board (T-2002,
+  // docs/map-memory.md). The C3 has no PSRAM and was down to a 12.9 kB boot
+  // floor; the S3 boards, which do have PSRAM and also have the touch this
+  // guards on, keep the optimisation.
+  if (TouchPolicy::panelPresent()) {
+    const int chromeBand = UITheme::getInstance().chromeBandHeight();
+    captureRegion(chromeFront_,
+                  Rect{0, renderer.getScreenHeight() - chromeBand, renderer.getScreenWidth(), chromeBand});
+    captureRegion(chromeSide_, GUI.sideButtonHintsRect(renderer));
+  }
 
   // Composited last, over the map's own bottom-edge pixels rather than into
   // reserved space -- same idea as the debug window at the top of the screen
