@@ -467,3 +467,33 @@ Three consequences:
 
 Enabling it is T-294 in the parent repo, and it is a decision rather than a
 chore: five workflows that have never executed will all fire at once.
+
+## Two pio runs at once destroy `managed_components/`
+
+`pio run -t upload` on a C3 env, started while a `pio run` for an S3 env was
+still compiling, decided to **reinstall the Arduino framework** mid-flight.
+Both S3 builds then failed, and not with anything that names the cause:
+
+```
+kconfiglib.core.KconfigError: .pio/build/x4pro/kconfigs_projbuild.in:7:
+  '.../managed_components/espressif__esp-sr/Kconfig.projbuild' not found
+FileNotFoundError: '.../sdkconfig.t5s3pro'
+```
+
+Measured 2026-09-13. Re-running the same six environments serially, with
+nothing else touching pio, gave 6/6 SUCCESS and no source change in between.
+
+The framework directory was already known to be shared mutable state, per chip.
+What is new is that an **upload** rewrites it too, and that the wreckage lands
+in `managed_components/` and the generated `sdkconfig.<env>` rather than in the
+framework directory the rule names. So: one pio process at a time in this tree,
+whatever it is doing, and a build failure naming a missing `managed_components`
+path is an environment race until proven otherwise.
+
+The flash itself has a path around this:
+
+```
+esptool.py --chip esp32c3 --port <port> write_flash 0x10000 <firmware.bin>
+```
+
+That writes the app partition and depends on no pio state at all.
