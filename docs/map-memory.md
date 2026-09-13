@@ -262,12 +262,13 @@ the app.
 | Lever | Size | Confidence | Cost |
 |---|---|---|---|
 | ~~Trim NimBLE + controller config~~ | **9,068 bytes, done** | measured | landed 2026-08-10 |
+| ~~Gate the chrome snapshots on a digitizer~~ | **8,448 bytes on a C3, done** | measured | landed 2026-09-13, below |
 | Cut BLE further: `BT_CTRL_BLE_MAX_ACT=1`, smaller ACL pool, MTU below 256 | unknown | open | each one risks a transfer stall; verify with a push every time |
 | Right-size `ActivityManagerRender` task stack (8,192, `ActivityManager.cpp:36`) | up to a few KB | open | measure `uxTaskGetStackHighWaterMark` on the map's deepest render |
 | `MapTileReader::streamBuffer_` 4,096 -> 2,048 | 2 KB | read | more SD reads per layer; gate on the reset time already logged |
 | Account for the 5,740 bytes `end()` does not hand back | up to 5.7 KB | open | sample the heap a second after `end()` |
 
-## Measured: promoting the device branches costs the C3 8.5 KB
+## Measured and settled: the chrome snapshots cost the C3 8.4 KB
 
 Taken 2026-09-12 on an **Xteink X3** (ESP32-C3), flashing two builds back to
 back and reading the same instrument in the same state: map screen up, a phone
@@ -298,12 +299,49 @@ arrived with this promotion and `platformio.ini` sizes its ring at 8,192 bytes
 matching number is a coincidence and a good reminder to check the guard rather
 than the arithmetic.
 
-**Open -- what does allocate it.** Settling this needs the `[MEM]` line from
-both builds' *boot*, not from a steady state: on `develop` the boot log brackets
-the two big allocations (`BLEPOS heap: ... delta 57392`, `MAP heap: ... before
-source alloc ... delta 12304`) and the merged build's boot was not captured the
-same way. One capture per build, from reset, comparing those brackets, names it.
-Tracked as T-2002 in the parent repo's `docs/TODO.md`.
+**It is the two chrome snapshots.** `MapActivity` keeps a framebuffer copy of
+the bottom chrome band and of the side hint band, taken at the end of every full
+render, so that a touch lock or unlock can put the map back with two windowed
+refreshes instead of re-reading tiles off the card. Neither existed before the
+promotion.
+
+The arithmetic names the byte, which is why no `[MEM]` diff was needed in the
+end. `getRegionByteSize()` maps the logical rect through the panel rotation and
+widens it to byte boundaries, and an X3 panel is 792x528 physical behind a
+528x792 logical screen:
+
+| snapshot | logical rect | bytes/row | rows | bytes |
+|---|---|---|---|---|
+| `chromeFront_` | `0,752 528x40` (`chromeBandHeight()` = 40) | 5 | 528 | 2,640 |
+| `chromeSide_` | `0,155 528x80` (`sideButtonHintsRect()`, X3 branch) | 11 | 528 | 5,808 |
+| | | | | **8,448** |
+
+Plus one 4-byte heap block header each: **8,456 B**, the whole measured delta.
+
+The side band is the expensive half because `BaseTheme::sideButtonHintsRect()`
+returns the **full screen width** on an X3 -- that board puts one box on the
+left edge and one on the right, so the rect spans the dead middle as well.
+
+**Why it is pure waste on a C3.** The swap has exactly one trigger: the touch
+lock going on or off, which trades the hint boxes for the padlock. Both halves
+of that are `panelPresent()`-gated (`TouchPolicy::locked()`,
+`TouchPolicy::lockIndicator()`) and `hintsVisible()` is unconditionally true
+without a digitizer. An X3 and an X4 have none, so the chrome the snapshots
+protect cannot change, and `swapChrome()` would restore a picture identical to
+what is already on the glass.
+
+Fixed by gating both captures on `TouchPolicy::panelPresent()`.
+`swapChrome()` already falls back to a full render when there is no snapshot, so
+nothing changes on those boards except the heap. The S3 boards have PSRAM and
+the touch this guards on, and keep the optimisation.
+
+**Verified on hardware 2026-09-13, X3, same instrument and same state:**
+
+| | merged `develop` | gated | delta |
+|---|---|---|---|
+| free heap | 25,188 B | 33,828 B | **+8,640** |
+| largest free block | 22,516 B | 29,684 B | +7,168 |
+| min free since boot | 12,936 B | 20,604 B | +7,668 |
 
 **Why it matters on this board and not the others.** The same promotion left
 171,948 B free on an X4 Pro and 173,520 B on a T5 S3 Pro, both read through the
@@ -322,6 +360,74 @@ concluded from the missing `mtu=` line that no phone was connected to the
 baseline, and nearly blamed the whole delta on a BLE connection. A narrowed
 grep manufactures a difference. Both readings here are the full `info` and
 `stats` output.
+
+## Measured: what the map screen actually costs on a C3, item by item
+
+Taken 2026-09-13 on an X3 with the chrome snapshots gated off. Struct sizes are
+read out of the build's own DWARF, not estimated:
+
+```
+riscv32-esp-elf-gdb -batch -ex "print sizeof(MapLabelScratch)" firmware.elf
+```
+
+| allocation | bytes | share |
+|---|---|---|
+| `BlePositionServer::begin()` -- the whole NimBLE host + controller | 57,384 | 83 % |
+| `MapTileSource` (holds `MapTileReader` 5,356, of which 4,096 is its stream buffer) | 6,992 | 10 % |
+| `MapLabelScratch` | 4,096 | 6 % |
+| `markerPatch_` (`kMarkerBoxSize` 64) | 720 | 1 % |
+| `HalFileSource` | 20 | |
+| `MapPointSource` + its file source, only when the points layer is on | 1,348 | |
+| `MapRouteSource` + its file source, only when a route was chosen | 1,780 | |
+
+The boot log's own bracket agrees: `MAP heap: 47320 before source alloc, 35064
+after, delta 12256` is `MapTileSource` + `MapLabelScratch` + `markerPatch_` +
+`HalFileSource` + their block headers.
+
+**NimBLE is 83 % of it, and everything else together is 13 KB.** Any further
+work on this board that is not about the radio is competing for the last sixth
+of the budget.
+
+## Measured: a coarse rung costs time and card reads, not heap
+
+The worry that rung 6 is memory-hungry does not survive the instrument. Taken
+2026-09-13 on an X3 over Prague, the densest data this project has rendered:
+
+| position | tiles | ways | bytes read | free heap | min free |
+|---|---|---|---|---|---|
+| 50.0640 14.4141 | 12 | 23,898 | 1,682,567 | 32,824 | 20,564 |
+| 50.0000 14.3500 | 12 | 23,673 | 1,738,096 | 32,776 | 20,564 |
+| 49.9600 14.4800 | 12 | 27,050 | 1,784,445 | 32,824 | 20,564 |
+
+Free heap moved by 48 bytes across the set and `min_heap` did not move at all.
+The render's own bracket says why: `MAP heap: 33408 before tile load, 33312
+after, delta 96` for a 23,898-way frame. **The renderer streams.** Its whole
+working set is the fixed `MapTileReader` buffers, which are allocated at map
+entry whatever rung is showing.
+
+What a coarse rung does cost is **time and card**: 7.6 s of render and 1.7 MB
+read for one frame, against 3.3 s in the card. That is a panel-latency and a
+battery question, not a heap one.
+
+The comparison point on the same card: Bratislava at rung 6 is 12 tiles,
+15,258 ways, 968 KB. **Two Prague z11 tiles carry more ways than twelve
+Bratislava ones.**
+
+## Measured: the floor is a BLE transfer, not a render
+
+The lowest the C3 gets is not the coarsest rung. From a clean boot, map up, no
+phone:
+
+| moment | free | min free since boot |
+|---|---|---|
+| map up, Prague rung 6, 12 tiles rendered | 33,312 | 33,096 |
+| after one 100 KB tile pushed in over BLE | 32,980 | **28,204** |
+| a phone connected at `mtu=256` and autosync serving | 32,396 | **20,100** |
+
+A single file push costs about 4.9 KB of transient heap; a live phone
+connection plus the autosync exchange takes the floor to 20.1 KB. **That is the
+number any future trim has to protect**, and it belongs to the radio and the
+transfer path rather than to the map.
 
 ## What is still unmeasured
 
