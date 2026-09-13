@@ -335,13 +335,24 @@ Fixed by gating both captures on `TouchPolicy::panelPresent()`.
 nothing changes on those boards except the heap. The S3 boards have PSRAM and
 the touch this guards on, and keep the optimisation.
 
-**Verified on hardware 2026-09-13, X3, same instrument and same state:**
+**Corroborated on hardware 2026-09-13, X3 -- but this is not the controlled
+A/B.** The baseline column is the 2026-09-12 reading on the merged build at
+`tiles_ok=0`; the gated column is a 2026-09-13 reading at `tiles_ok=4`, on a
+card that had gained eighteen tiles in between, and the two builds were never
+flashed back to back by the same hand. Read it as "the memory came back", not
+as a measurement of how much.
 
-| | merged `develop` | gated | delta |
+| | merged `develop`, 2026-09-12 | gated, 2026-09-13 | |
 |---|---|---|---|
-| free heap | 25,188 B | 33,828 B | **+8,640** |
+| free heap | 25,188 B | 33,828 B | +8,640 |
 | largest free block | 22,516 B | 29,684 B | +7,168 |
 | min free since boot | 12,936 B | 20,604 B | +7,668 |
+
+**The controlled evidence is the other two.** The 2026-09-12 pass flashed both
+builds back to back in one session and measured the delta at exactly 8,456 B,
+and the arithmetic above accounts for 8,448 of it plus one 4-byte block header
+each. A cross-session comparison measures everything that changed between the
+sessions; the arithmetic measures the thing.
 
 **Why it matters on this board and not the others.** The same promotion left
 171,948 B free on an X4 Pro and 173,520 B on a T5 S3 Pro, both read through the
@@ -410,8 +421,13 @@ read for one frame, against 3.3 s in the card. That is a panel-latency and a
 battery question, not a heap one.
 
 The comparison point on the same card: Bratislava at rung 6 is 12 tiles,
-15,258 ways, 968 KB. **Two Prague z11 tiles carry more ways than twelve
-Bratislava ones.**
+15,258 ways, 968 KB. The two Prague tiles that produced 16,501 ways on their
+own came from the **CDN**, and the CDN's z11 build does not carry the
+`pedestrian_keep=waymarked_or_named` filter a local build applies -- which
+keeps 6.0 % of 158,128 pedestrian ways in this area. So part of that gap is the
+rule set and not the city, and the honest claim is narrower: **a z11 tile built
+without the pedestrian filter carries roughly half again the ways of one built
+with it**, 157 KB against 104 KB for the same ground.
 
 ## Measured: the floor is a BLE transfer, not a render
 
@@ -422,12 +438,28 @@ phone:
 |---|---|---|
 | map up, Prague rung 6, 12 tiles rendered | 33,312 | 33,096 |
 | after one 100 KB tile pushed in over BLE | 32,980 | **28,204** |
-| a phone connected at `mtu=256` and autosync serving | 32,396 | **20,100** |
+| a phone connected at `mtu=256`, autosync running | 32,396 | **20,100** |
 
-A single file push costs about 4.9 KB of transient heap; a live phone
-connection plus the autosync exchange takes the floor to 20.1 KB. **That is the
-number any future trim has to protect**, and it belongs to the radio and the
-transfer path rather than to the map.
+A single file push costs about 4.9 KB of transient heap, and that one is
+isolated: clean boot, one 100 KB tile, nothing else running. **The 20,100 is
+not.** It was read with a phone connected and the autosync exchange running,
+but no transfer was confirmed in flight at that moment -- the tool's own log
+was buffered and showed nothing. Treat it as the lowest thing observed rather
+than as the cost of autosync. Settling it needs one push against a `min_heap`
+read on either side, the way the 28,204 was taken.
+
+Either way the floor belongs to the radio and the transfer path rather than to
+the map, and that is what any future trim has to protect.
+
+**What is on that X3's card, for whoever reads a stale-tile report from it.**
+The Prague measurements above needed tiles nobody had. Sixteen z11 tiles (cols
+1104-1107, rows 692-695) were built into a scratch directory on 2026-09-13 and
+pushed over BLE, and two more (`11/1106/693`, `11/1106/694`) came straight off
+the CDN. The scratch build is **not** in `mapbuilder/builds.json`, so nothing
+can replay it and those sixteen `content_id`s belong to a build that no longer
+exists anywhere. The two CDN ones carry different rules again. A freshness check
+against that board will call all eighteen stale the first time the real CDN
+serves the same ground, and that is correct rather than a bug.
 
 ## What is still unmeasured
 
